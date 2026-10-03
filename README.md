@@ -26,9 +26,10 @@ riparte in circa 30-60 secondi e le navi ricompaiono man mano che arrivano i seg
 
 ## Avvio in locale
 
-Richiede Node.js 22 o superiore, nessuna dipendenza.
+Richiede Node.js 22 o superiore.
 
 ```bash
+npm install
 node server.js
 ```
 

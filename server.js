@@ -1,11 +1,12 @@
 // BoatRadar: server locale. Riceve l'AIS di tutto il mondo da aisstream.io (WebSocket),
 // tiene in memoria l'ultima posizione di ogni nave e serve alla pagina quelle nell'area visibile.
-// Richiede Node 22+ (WebSocket integrato), nessuna dipendenza.
+// Richiede Node 22+ e il pacchetto ws (npm install).
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const WebSocket = require('ws');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -70,25 +71,35 @@ function connect() {
   status.hasKey = !!key;
   if (!key) { setTimeout(connect, 5000); return; } // riprova: la chiave può essere aggiunta a server avviato
 
-  const ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => {
+  const ws = new WebSocket(process.env.AISSTREAM_URL || 'wss://stream.aisstream.io/v0/stream');
+  let received = false;
+  ws.on('open', () => {
+    console.log('aisstream.io: connesso, invio sottoscrizione');
     status.connected = true;
     ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: BBOX, FilterMessageTypes: ['PositionReport',
       'StandardClassBPositionReport', 'ExtendedClassBPositionReport', 'ShipStaticData', 'StaticDataReport'] }));
-  };
-  ws.onmessage = e => {
+  });
+  ws.on('message', data => {
     try {
-      handle(JSON.parse(typeof e.data === 'string' ? e.data : Buffer.from(e.data).toString('utf8')));
+      const msg = JSON.parse(data.toString('utf8'));
+      handle(msg);
+      if (msg.error) console.error('aisstream.io rifiuta la richiesta:', msg.error);
+      else if (!received) { received = true; console.log('aisstream.io: arrivano i dati'); }
       retry = 1000;
     } catch (err) { console.error('messaggio non valido:', err.message); }
-  };
-  ws.onerror = () => { status.error = status.error || 'Connessione ad aisstream.io non riuscita'; };
-  ws.onclose = () => {
+  });
+  ws.on('error', err => {
+    console.error('aisstream.io errore:', err.message);
+    status.error = 'aisstream.io: ' + err.message;
+  });
+  ws.on('close', (code, reason) => {
+    reason = reason.toString();
+    console.log(`aisstream.io: connessione chiusa (codice ${code}${reason ? ', ' + reason : ''}), riprovo tra ${retry / 1000}s`);
+    if (!received && !status.error) status.error = `aisstream.io ha chiuso la connessione (codice ${code}${reason ? ': ' + reason : ''})`;
     status.connected = false;
     setTimeout(connect, retry);
     retry = Math.min(retry * 2, 60000);
-  };
+  });
 }
 
 setInterval(() => {
