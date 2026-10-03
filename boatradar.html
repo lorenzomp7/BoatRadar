@@ -239,22 +239,25 @@ function render(mmsi) {
     </table>
 
     <h3>Chi è il proprietario?</h3>
-    <p>Il segnale AIS non contiene il proprietario: trasmette solo gli identificativi qui sopra.
-       La proprietà si cerca nei registri pubblici usando <b>IMO</b>, <b>MMSI</b> o <b>nominativo</b>.</p>
-    <a class="link" target="_blank" rel="noopener" href="https://www.equasis.org/">Equasis
-      <small>${imo ? 'Cerca IMO ' + imo + ': ' : ''}armatore registrato, gestore, storico (registrazione gratuita)</small></a>
-    <a class="link" target="_blank" rel="noopener" href="https://www.itu.int/mmsapp/ShipStation/list">ITU MARS
-      <small>Titolare della licenza radio per MMSI / nominativo${v.callSign ? ' ' + esc(v.callSign) : ''}</small></a>
+    <p>Armatore, gestore e titolare della licenza radio sono nei registri qui sotto. Aprendo Equasis o ITU MARS
+       l'identificativo della nave viene copiato: incollalo nel campo di ricerca.</p>
+    <a class="link" target="_blank" rel="noopener" href="https://www.equasis.org/" data-copy="${imo || ''}">Equasis
+      <small>${imo ? 'IMO ' + imo + ' · ' : ''}armatore registrato, gestore, storico (accesso gratuito con registrazione)</small></a>
+    <a class="link" target="_blank" rel="noopener" href="https://www.itu.int/mmsapp/ShipStation/list" data-copy="${mmsi}">ITU MARS
+      <small>MMSI ${mmsi}${v.callSign ? ' · nominativo ' + esc(v.callSign) : ''} · proprietario e amministrazione</small></a>
     <a class="link" target="_blank" rel="noopener" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}">MarineTraffic
       <small>Scheda nave, foto, storico scali</small></a>
-    <a class="link" target="_blank" rel="noopener" href="https://www.vesselfinder.com/?mmsi=${mmsi}">VesselFinder
-      <small>Scheda nave alternativa</small></a>
-    <p>Per le navi commerciali (con numero IMO) armatore e gestore sono pubblici. Per le unità da diporto
-       il registro riporta spesso una società di comodo; i dati sui proprietari persone fisiche non sono pubblici
-       e sono tutelati dal GDPR.</p>`;
+    <a class="link" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">VesselFinder
+      <small>Scheda nave, foto, porto di partenza e arrivo</small></a>`;
 }
 
 $('close').onclick = () => { $('panel').style.display = 'none'; };
+
+// Aprendo un registro, copia IMO/MMSI negli appunti così basta incollarlo nella ricerca del sito
+$('content').addEventListener('click', e => {
+  const id = e.target.closest('[data-copy]')?.dataset.copy;
+  if (id) navigator.clipboard?.writeText(id).catch(() => {});
+});
 
 const found = new Map(); // mmsi -> [lat, lon] dei risultati di ricerca
 
