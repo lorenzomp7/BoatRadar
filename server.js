@@ -91,6 +91,11 @@ function connect() {
   ws.on('error', err => {
     console.error('aisstream.io errore:', err.message);
     status.error = 'aisstream.io: ' + err.message;
+    if (/\b429\b/.test(err.message)) {
+      // troppe connessioni con questa chiave: aisstream va lasciato in pace per un po'
+      retry = Math.max(retry, 60000);
+      status.error = `aisstream.io: troppe connessioni (429), riprovo tra ${Math.round(retry / 60000)} min`;
+    }
   });
   ws.on('close', (code, reason) => {
     reason = reason.toString();
@@ -98,7 +103,7 @@ function connect() {
     if (!received && !status.error) status.error = `aisstream.io ha chiuso la connessione (codice ${code}${reason ? ': ' + reason : ''})`;
     status.connected = false;
     setTimeout(connect, retry);
-    retry = Math.min(retry * 2, 60000);
+    retry = Math.min(retry * 2, 5 * 60000);
   });
 }
 
