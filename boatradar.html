@@ -53,7 +53,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-// Dati AIS live del Mediterraneo, raccolti da server.js tramite aisstream.io.
+// Dati AIS live di tutto il mondo, raccolti da server.js tramite aisstream.io (solo l'area visibile).
 // Dati AIS live del Baltico, aperti e senza chiave (Fintraffic / Digitraffic).
 const API = '/api';
 const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
@@ -86,28 +86,74 @@ const MID = {201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',2
   366:'USA',367:'USA',368:'USA',369:'USA',370:'Panama',371:'Panama',372:'Panama',373:'Panama',374:'Panama',375:'St. Vincent e Grenadine',
   376:'St. Vincent e Grenadine',377:'St. Vincent e Grenadine',378:'Isole Vergini Brit.',412:'Cina',413:'Cina',414:'Cina',431:'Giappone',
   432:'Giappone',440:'Corea del Sud',441:'Corea del Sud',477:'Hong Kong',518:'Isole Cook',538:'Isole Marshall',563:'Singapore',
-  564:'Singapore',565:'Singapore',566:'Singapore',636:'Liberia',637:'Liberia'};
+  564:'Singapore',565:'Singapore',566:'Singapore',636:'Liberia',637:'Liberia',
+  242:'Marocco',252:'Liechtenstein',254:'Monaco',262:'Montenegro',264:'Romania',267:'Slovacchia',270:'Rep. Ceca',274:'Macedonia del Nord',
+  278:'Slovenia',279:'Serbia',207:'Bulgaria',208:'Vaticano',203:'Austria',204:'Azzorre',206:'Bielorussia',213:'Georgia',214:'Moldavia',
+  216:'Armenia',243:'Ungheria',
+  312:'Belize',314:'Barbados',323:'Cuba',325:'Dominica',327:'Rep. Dominicana',330:'Grenada',332:'Guatemala',334:'Honduras',
+  336:'Haiti',339:'Giamaica',341:'St. Kitts e Nevis',343:'St. Lucia',345:'Messico',350:'Nicaragua',362:'Trinidad e Tobago',
+  401:'Afghanistan',403:'Arabia Saudita',405:'Bangladesh',408:'Bahrein',410:'Bhutan',416:'Taiwan',417:'Sri Lanka',419:'India',
+  422:'Iran',423:'Azerbaigian',425:'Iraq',428:'Israele',436:'Kazakistan',438:'Giordania',445:'Corea del Nord',447:'Kuwait',
+  450:'Libano',455:'Maldive',457:'Mongolia',459:'Nepal',461:'Oman',463:'Pakistan',466:'Qatar',468:'Siria',470:'Emirati Arabi',
+  471:'Emirati Arabi',472:'Tagikistan',473:'Yemen',475:'Yemen',503:'Australia',506:'Myanmar',508:'Brunei',510:'Micronesia',
+  511:'Palau',512:'Nuova Zelanda',514:'Cambogia',515:'Cambogia',520:'Figi',523:'Isole Cocos',525:'Indonesia',529:'Kiribati',
+  533:'Malesia',536:'Isole Marianne',544:'Nauru',546:'Polinesia Francese',548:'Filippine',553:'Papua Nuova Guinea',557:'Isole Salomone',
+  559:'Samoa Americane',561:'Samoa',567:'Thailandia',570:'Tonga',572:'Tuvalu',574:'Vietnam',576:'Vanuatu',577:'Vanuatu',
+  601:'Sudafrica',603:'Angola',605:'Algeria',609:'Burundi',610:'Benin',613:'Camerun',616:'Comore',618:'Crozet',619:'Costa d\'Avorio',
+  620:'Comore',621:'Gibuti',622:'Egitto',624:'Etiopia',625:'Eritrea',626:'Gabon',627:'Ghana',629:'Gambia',630:'Guinea-Bissau',
+  631:'Guinea Equatoriale',632:'Guinea',634:'Kenya',642:'Libia',644:'Lesotho',645:'Mauritius',647:'Madagascar',649:'Mali',
+  650:'Mozambico',654:'Mauritania',655:'Malawi',656:'Niger',657:'Nigeria',659:'Namibia',660:'Riunione',661:'Ruanda',662:'Sudan',
+  663:'Senegal',664:'Seychelles',666:'Somalia',667:'Sierra Leone',668:'São Tomé',669:'Eswatini',671:'Togo',672:'Tunisia',
+  674:'Tanzania',675:'Uganda',676:'Congo (RD)',677:'Tanzania',678:'Zambia',679:'Zimbabwe',
+  701:'Argentina',710:'Brasile',720:'Bolivia',725:'Cile',730:'Colombia',735:'Ecuador',740:'Falkland',745:'Guyana francese',
+  750:'Guyana',755:'Paraguay',760:'Perù',765:'Suriname',770:'Uruguay',775:'Venezuela'};
 
 const $ = id => document.getElementById(id);
-const map = L.map('map', { preferCanvas:true, zoomControl:true }).setView([49, 16], 4);
+const map = L.map('map', { preferCanvas:true, zoomControl:true, worldCopyJump:true }).setView([30, 10], 3);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 18, className: 'tiles', attribution: '© OpenStreetMap · AIS: aisstream.io, Fintraffic / digitraffic.fi (CC BY 4.0)'
 }).addTo(map);
 const renderer = L.canvas({ padding: 0.5 });
+
+// Nave in movimento: freccia orientata sulla rotta. Ferma o senza rotta: pallino.
+const ShipMarker = L.CircleMarker.extend({
+  setHeading(h) { this.options.heading = h; return this.redraw(); },
+  _updatePath() {
+    const r = this._renderer, h = this.options.heading;
+    if (h == null) return r._updateCircle(this);
+    if (!r._drawing || this._empty()) return;
+    const ctx = r._ctx, p = this._point, s = this.options.radius;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(h * Math.PI / 180);
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 2); ctx.lineTo(s * 1.1, s * 1.5); ctx.lineTo(0, s * 0.9); ctx.lineTo(-s * 1.1, s * 1.5); ctx.closePath();
+    ctx.restore();
+    r._fillStroke(ctx, this);
+  },
+});
+const heading = p => p.sog > 0.5 && p.sog < 102.3 && p.cog != null && p.cog < 360 ? p.cog : null;
 new ResizeObserver(() => map.invalidateSize()).observe($('map'));
 
 const meta = new Map();     // mmsi -> dati statici (nome, IMO, tipo…)
 const markers = new Map();  // mmsi -> { marker, props }
 let selected = null;
+let worldTotal = 0;
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 $('legend').innerHTML = TYPES.map(t => `<div><span style="background:${t.color}"></span>${t.label}</div>`).join('');
 
-async function loadMeta() {
-  const res = await fetch(`${API}/vessels`);
-  if (!res.ok) throw new Error('vessels ' + res.status);
-  for (const v of await res.json()) meta.set(v.mmsi, v);
+async function loadDetail(mmsi) {
+  const v = await fetch(`${API}/vessel?mmsi=${mmsi}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (v) meta.set(mmsi, { ...meta.get(mmsi), ...v });
+}
+
+function viewBox() {
+  const b = map.getBounds().pad(0.2);
+  if (b.getEast() - b.getWest() >= 360) return '-180,-90,180,90';
+  const lon = x => ((x + 180) % 360 + 360) % 360 - 180;
+  return [lon(b.getWest()), Math.max(b.getSouth(), -90), lon(b.getEast()), Math.min(b.getNorth(), 90)].map(x => x.toFixed(3)).join(',');
 }
 
 async function loadBalticMeta() {
@@ -119,38 +165,45 @@ async function loadBalticMeta() {
 async function features(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error('locations ' + res.status);
-  return (await res.json()).features;
+  const fc = await res.json();
+  if (fc.total != null) worldTotal = fc.total;
+  return fc.features;
 }
 
 async function loadLocations() {
   const [med, baltic] = await Promise.allSettled([
-    features(`${API}/locations`), features(`${BALTIC}/locations?from=${Date.now() - WINDOW_MS}`)]);
+    features(`${API}/locations?bbox=${viewBox()}`), features(`${BALTIC}/locations?from=${Date.now() - WINDOW_MS}`)]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
   const seen = new Set();
   for (const f of [...(baltic.value || []), ...(med.value || [])]) {
     const mmsi = f.mmsi ?? f.properties.mmsi;
     const [lon, lat] = f.geometry.coordinates;
     seen.add(mmsi);
+    const { name, shipType } = f.properties;
+    if (name || shipType != null) meta.set(mmsi, { ...meta.get(mmsi), ...(name && { name }), ...(shipType != null && { shipType }) });
     const color = typeOf(meta.get(mmsi)?.shipType).color;
     let m = markers.get(mmsi);
     if (!m) {
-      const marker = L.circleMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95 })
+      const marker = new ShipMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95,
+        heading: heading(f.properties) })
         .on('click', () => select(mmsi)).addTo(map);
       marker.bindTooltip(() => meta.get(mmsi)?.name || String(mmsi), { direction:'top' });
       m = { marker };
       markers.set(mmsi, m);
     } else {
       m.marker.setLatLng([lat, lon]);
+      m.marker.options.heading = heading(f.properties);
       m.marker.setStyle({ fillColor: color });
     }
     m.props = f.properties;
   }
   for (const [mmsi, m] of markers) if (!seen.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
   const st = await fetch(`${API}/status`).then(r => r.json());
-  const medNote = !st.hasKey ? ' · Mediterraneo: manca la chiave in aisstream-key.txt'
-    : st.error ? ' · Mediterraneo: ' + st.error
-    : !st.connected ? ' · Mediterraneo: connessione…' : '';
-  $('status').textContent = `${markers.size} imbarcazioni · agg. ${new Date().toLocaleTimeString('it-IT')}${medNote}`;
+  const note = !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
+    : st.error ? ' · Mondo: ' + st.error
+    : !st.connected ? ' · Mondo: connessione…'
+    : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '');
+  $('status').textContent = `${markers.size} in mappa · agg. ${new Date().toLocaleTimeString('it-IT')}${note}`;
   if (selected && markers.has(selected)) render(selected);
 }
 
@@ -161,6 +214,7 @@ function select(mmsi) {
   if (m) { m.marker.setStyle({ radius:8, color:'#ffc83d', weight:3 }).bringToFront(); }
   render(mmsi);
   $('panel').style.display = 'block';
+  if (!meta.get(mmsi)?.callSign) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
 }
 
 function render(mmsi) {
@@ -168,7 +222,7 @@ function render(mmsi) {
   const p = markers.get(mmsi)?.props || {};
   const flag = MID[String(mmsi).slice(0, 3)] || '—';
   const imo = v.imo && v.imo > 0 ? v.imo : null;
-  const row = (k, val) => `<tr><td>${k}</td><td>${esc(val ?? '—')}</td></tr>`;
+  const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? '—' : val)}</td></tr>`;
   $('content').innerHTML = `
     <h2>${esc(v.name || 'Senza nome')}</h2>
     <div class="sub">${esc(typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
@@ -202,16 +256,28 @@ function render(mmsi) {
 
 $('close').onclick = () => { $('panel').style.display = 'none'; };
 
-$('q').addEventListener('input', e => {
+const found = new Map(); // mmsi -> [lat, lon] dei risultati di ricerca
+
+$('q').addEventListener('input', async e => {
   const q = e.target.value.trim().toUpperCase();
   const box = $('results');
   if (q.length < 2) { box.style.display = 'none'; return; }
+  const remote = await fetch(`${API}/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => []);
+  if (q !== $('q').value.trim().toUpperCase()) return; // nel frattempo l'utente ha scritto altro
+  found.clear();
   const hits = [];
-  for (const mmsi of markers.keys()) {
+  for (const v of remote) {
+    meta.set(v.mmsi, { ...meta.get(v.mmsi), ...v });
+    found.set(v.mmsi, [v.lat, v.lon]);
+    hits.push({ mmsi: v.mmsi, v });
+  }
+  for (const [mmsi, m] of markers) {
+    if (hits.length >= 25) break;
     const v = meta.get(mmsi) || {};
+    if (found.has(mmsi)) continue;
     if ((v.name || '').toUpperCase().includes(q) || String(mmsi).startsWith(q) || String(v.imo || '').startsWith(q)) {
+      found.set(mmsi, m.marker.getLatLng());
       hits.push({ mmsi, v });
-      if (hits.length >= 25) break;
     }
   }
   box.innerHTML = hits.length
@@ -220,16 +286,17 @@ $('q').addEventListener('input', e => {
   box.style.display = 'block';
 });
 
-$('results').addEventListener('click', e => {
+$('results').addEventListener('click', async e => {
   const mmsi = Number(e.target.closest('[data-mmsi]')?.dataset.mmsi);
-  if (!mmsi) return;
+  if (!mmsi || !found.has(mmsi)) return;
   $('results').style.display = 'none';
-  map.setView(markers.get(mmsi).marker.getLatLng(), Math.max(map.getZoom(), 11));
+  map.setView(found.get(mmsi), Math.max(map.getZoom(), 11), { animate:false });
+  await tick();
   select(mmsi);
 });
 
 async function tick() {
-  try { await loadMeta(); await loadLocations(); }
+  try { await loadLocations(); }
   catch (err) { $('status').textContent = 'Errore dati AIS: ' + err.message; }
 }
 
@@ -237,6 +304,8 @@ async function tick() {
   await loadBalticMeta().catch(err => console.warn(err));
   await tick();
   setInterval(tick, REFRESH_MS);
+  let moveTimer;
+  map.on('moveend', () => { clearTimeout(moveTimer); moveTimer = setTimeout(tick, 300); });
   setInterval(() => loadBalticMeta().catch(() => {}), 10 * 60 * 1000);
 })();
 </script>
