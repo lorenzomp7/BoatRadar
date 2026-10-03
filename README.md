@@ -13,7 +13,18 @@ Le navi in movimento sono frecce orientate sulla rotta, quelle ferme sono pallin
 La copertura dipende dalle stazioni AIS a terra della rete aisstream.io: ottima lungo coste,
 porti e stretti, scarsa in mare aperto (lì servirebbe l'AIS satellitare, che è a pagamento).
 
-## Avvio
+## Online (Render, gratuito)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lorenzomp7/BoatRadar)
+
+1. Clicca il pulsante e accedi a Render con GitHub.
+2. Quando chiede `AISSTREAM_KEY`, incolla la chiave di aisstream.io e conferma.
+3. Dopo un paio di minuti l'app è su `https://boatradar-xxxx.onrender.com`; si aggiorna da sola a ogni push.
+
+Nel piano gratuito Render spegne il servizio dopo 15 minuti senza visite: alla visita successiva
+riparte in circa 30-60 secondi e le navi ricompaiono man mano che arrivano i segnali.
+
+## Avvio in locale
 
 Richiede Node.js 22 o superiore, nessuna dipendenza.
 

@@ -1,0 +1,7 @@
+{
+  "name": "boatradar",
+  "private": true,
+  "description": "Mappa live delle imbarcazioni (AIS)",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.js" }
+}

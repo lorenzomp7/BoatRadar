@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
-const PORT = 8765;
+const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
 const MAX_FEATURES = 6000; // oltre questo numero la pagina riceve un campione delle navi visibili
 const STALE_MS = 30 * 60 * 1000;
@@ -155,6 +155,6 @@ http.createServer((req, res) => {
   }
   res.writeHead(404); res.end('Not found');
 }).listen(PORT, () => {
-  console.log(`BoatRadar su http://localhost:${PORT}`);
+  console.log(`BoatRadar in ascolto sulla porta ${PORT}`);
   connect();
 });

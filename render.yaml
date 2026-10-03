@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: boatradar
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/status
+    envVars:
+      - key: AISSTREAM_KEY
+        sync: false
