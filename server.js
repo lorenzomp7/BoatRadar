@@ -66,20 +66,24 @@ function handle(msg) {
 }
 
 let retry = 1000;
+let current = null;   // connessione aperta con aisstream.io
+let lastMessage = 0;  // ora dell'ultimo messaggio ricevuto
 function connect() {
   const key = readKey();
   status.hasKey = !!key;
   if (!key) { setTimeout(connect, 5000); return; } // riprova: la chiave può essere aggiunta a server avviato
 
-  const ws = new WebSocket(process.env.AISSTREAM_URL || 'wss://stream.aisstream.io/v0/stream');
+  const ws = current = new WebSocket(process.env.AISSTREAM_URL || 'wss://stream.aisstream.io/v0/stream');
   let received = false;
   ws.on('open', () => {
+    lastMessage = Date.now();
     console.log('aisstream.io: connesso, invio sottoscrizione');
     status.connected = true;
     ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: BBOX, FilterMessageTypes: ['PositionReport',
       'StandardClassBPositionReport', 'ExtendedClassBPositionReport', 'ShipStaticData', 'StaticDataReport'] }));
   });
   ws.on('message', data => {
+    lastMessage = Date.now();
     try {
       const msg = JSON.parse(data.toString('utf8'));
       handle(msg);
@@ -105,6 +109,20 @@ function connect() {
     setTimeout(connect, retry);
     retry = Math.min(retry * 2, 5 * 60000);
   });
+}
+
+// aisstream.io a volte smette di inviare dati senza chiudere la connessione: in quel caso la riapro
+setInterval(() => {
+  if (current?.readyState === WebSocket.OPEN && Date.now() - lastMessage > 90000) {
+    console.log('aisstream.io: nessun dato da 90s, riapro la connessione');
+    current.terminate();
+  }
+}, 30000);
+
+// Render (piano gratuito) spegne il servizio dopo 15 minuti senza visite e le navi in memoria si perdono:
+// una visita ogni 10 minuti all'indirizzo pubblico lo tiene acceso
+if (process.env.RENDER_EXTERNAL_URL) {
+  setInterval(() => fetch(process.env.RENDER_EXTERNAL_URL + '/api/status').catch(() => {}), 10 * 60 * 1000);
 }
 
 setInterval(() => {
