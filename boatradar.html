@@ -29,15 +29,28 @@
   #panel td:first-child { color:var(--muted); width:42%; }
   #panel h3 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--accent); margin:18px 0 6px; }
   #panel p { font-size:12.5px; color:var(--muted); line-height:1.45; margin:6px 0; }
-  #panel a.link { display:block; padding:8px 10px; margin:6px 0; border:1px solid var(--line); border-radius:8px;
+  #panel .link { display:block; width:100%; text-align:left; background:none; cursor:pointer; font-family:inherit; padding:8px 10px; margin:6px 0; border:1px solid var(--line); border-radius:8px;
     color:var(--text); text-decoration:none; font-size:13px; }
-  #panel a.link:hover { border-color:var(--accent); }
-  #panel a.link small { display:block; color:var(--muted); }
+  #panel .link:hover { border-color:var(--accent); }
+  #panel .link small { display:block; color:var(--muted); }
   #close { position:absolute; top:10px; right:12px; background:none; border:0; color:var(--muted); font-size:20px; cursor:pointer; }
   #legend { position:absolute; left:12px; bottom:24px; z-index:1000; background:var(--panel); border:1px solid var(--line);
     border-radius:10px; padding:8px 10px; font-size:12px; }
   #legend span { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
   #legend div { margin:2px 0; }
+  #mode { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; white-space:nowrap; }
+  #mode:hover { border-color:var(--accent); }
+  #vf { position:absolute; inset:0; width:100%; height:100%; border:0; z-index:900; display:none; background:#0b1118; }
+  body.vf #vf { display:block; }
+  body.vf #legend, body.vf #panel, body.vf #status, body.vf #q, body.vf #results { display:none !important; }
+  #panel .owner { display:block; width:100%; padding:12px; margin:8px 0 4px; border:0; border-radius:8px; cursor:pointer;
+    background:var(--accent); color:#0f1720; font:600 14px system-ui, sans-serif; }
+  #panel .owner:hover { filter:brightness(1.08); }
+  #panel .owner small { display:block; font-weight:400; font-size:12px; margin-top:2px; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:2000; max-width:calc(100% - 32px);
+    background:var(--panel); border:1px solid var(--accent); border-radius:10px; padding:12px 16px; font-size:14px; display:none;
+    box-shadow:0 6px 24px rgba(0,0,0,.4); }
+  #toast b { color:var(--accent); font-size:18px; letter-spacing:.5px; user-select:all; }
 </style>
 </head>
 <body>
@@ -46,7 +59,10 @@
   <b>⚓ BoatRadar</b>
   <input id="q" placeholder="Cerca nome, MMSI o IMO…" autocomplete="off">
   <span id="status">Caricamento…</span>
+  <button id="mode" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
+<iframe id="vf" title="Mappa VesselFinder"></iframe>
+<div id="toast"></div>
 <div id="results"></div>
 <div id="legend"></div>
 <aside id="panel"><button id="close">×</button><div id="content"></div></aside>
@@ -239,25 +255,66 @@ function render(mmsi) {
     </table>
 
     <h3>Chi è il proprietario?</h3>
-    <p>Armatore, gestore e titolare della licenza radio sono nei registri qui sotto. Aprendo Equasis o ITU MARS
-       l'identificativo della nave viene copiato: incollalo nel campo di ricerca.</p>
-    <a class="link" target="_blank" rel="noopener" href="https://www.equasis.org/" data-copy="${imo || ''}">Equasis
-      <small>${imo ? 'IMO ' + imo + ' · ' : ''}armatore registrato, gestore, storico (accesso gratuito con registrazione)</small></a>
-    <a class="link" target="_blank" rel="noopener" href="https://www.itu.int/mmsapp/ShipStation/list" data-copy="${mmsi}">ITU MARS
-      <small>MMSI ${mmsi}${v.callSign ? ' · nominativo ' + esc(v.callSign) : ''} · proprietario e amministrazione</small></a>
-    <a class="link" target="_blank" rel="noopener" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}">MarineTraffic
-      <small>Scheda nave, foto, storico scali</small></a>
+    <button class="owner" data-registry="${imo ? 'equasis' : 'itu'}" data-id="${imo || mmsi}">🔎 Trova il proprietario
+      <small>${imo ? 'Apre Equasis con l\'IMO ' + imo + ' già copiato' : 'Apre ITU MARS con l\'MMSI ' + mmsi + ' già copiato'}</small></button>
+    ${imo ? `<button class="link" data-registry="itu" data-id="${mmsi}">ITU MARS
+      <small>Titolare della licenza radio · MMSI ${mmsi}${v.callSign ? ' · nominativo ' + esc(v.callSign) : ''}</small></button>` : ''}
+    <button class="link" data-show-vf="${mmsi}">Mostra sulla mappa VesselFinder
+      <small>Posizione e rotta secondo VesselFinder</small></button>
     <a class="link" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">VesselFinder
-      <small>Scheda nave, foto, porto di partenza e arrivo</small></a>`;
+      <small>Scheda nave, foto, porto di partenza e arrivo</small></a>
+    <a class="link" target="_blank" rel="noopener" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}">MarineTraffic
+      <small>Scheda nave, foto, storico scali</small></a>`;
 }
 
 $('close').onclick = () => { $('panel').style.display = 'none'; };
 
-// Aprendo un registro, copia IMO/MMSI negli appunti così basta incollarlo nella ricerca del sito
+// Proprietario: i registri non accettano ricerche da link, quindi copio IMO/MMSI, apro il registro
+// e mostro cosa incollare. Equasis chiede l'accesso (gratuito) solo la prima volta.
+const REGISTRY = {
+  equasis: { url: 'https://www.equasis.org/', label: 'IMO',
+    how: 'In Equasis accedi (la prima volta), poi incolla nel campo <i>IMO, Name, Company</i> in alto a destra e premi invio.' },
+  itu: { url: 'https://www.itu.int/mmsapp/ShipStation/list', label: 'MMSI',
+    how: 'In ITU MARS incolla nel campo <i>MMSI</i>, premi invio e apri la nave (icona dell\'occhio): il proprietario è alla voce <i>Owner</i>.' },
+};
+let toastTimer;
+function toast(html) {
+  $('toast').innerHTML = html;
+  $('toast').style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $('toast').style.display = 'none'; }, 15000);
+}
+$('toast').onclick = () => { $('toast').style.display = 'none'; };
+
 $('content').addEventListener('click', e => {
-  const id = e.target.closest('[data-copy]')?.dataset.copy;
-  if (id) navigator.clipboard?.writeText(id).catch(() => {});
+  const reg = e.target.closest('[data-registry]');
+  if (reg) {
+    const r = REGISTRY[reg.dataset.registry], id = reg.dataset.id;
+    window.open(r.url, '_blank', 'noopener');
+    const show = copied => toast(`${r.label} <b>${esc(id)}</b> ${copied ? 'copiato.' : '(selezionalo e copialo).'} ${r.how}`);
+    if (navigator.clipboard) navigator.clipboard.writeText(id).then(() => show(true), () => show(false));
+    else show(false);
+    return;
+  }
+  const vf = e.target.closest('[data-show-vf]');
+  if (vf) setMode(true, Number(vf.dataset.showVf));
 });
+
+// Seconda mappa: VesselFinder, centrata dove si trova la nostra (o sulla nave scelta)
+function setMode(vesselFinder, mmsi) {
+  document.body.classList.toggle('vf', vesselFinder);
+  $('mode').textContent = vesselFinder ? '⚓ Mappa BoatRadar' : '🌍 VesselFinder';
+  $('mode').title = vesselFinder ? 'Torna alla mappa di BoatRadar' : 'Passa alla mappa di VesselFinder';
+  if (!vesselFinder) return;
+  const pos = mmsi && markers.get(mmsi)?.marker.getLatLng();
+  const c = pos || map.getCenter();
+  const zoom = pos ? Math.max(map.getZoom(), 10) : map.getZoom();
+  const params = new URLSearchParams({ lat: c.lat.toFixed(4), lon: L.Util.wrapNum(c.lng, [-180, 180], true).toFixed(4),
+    zoom: Math.max(3, zoom) });
+  if (mmsi) params.set('mmsi', mmsi);
+  $('vf').src = '/vesselfinder.html?' + params;
+}
+$('mode').onclick = () => setMode(!document.body.classList.contains('vf'));
 
 const found = new Map(); // mmsi -> [lat, lon] dei risultati di ricerca
 

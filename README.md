@@ -40,6 +40,13 @@ Per vedere tutto il mondo crea `aisstream-key.txt` con la tua chiave aisstream.i
 
 ## Proprietario della nave
 
-Cliccando su una nave si apre una scheda con MMSI, IMO, nominativo e bandiera, e i link
-ai registri pubblici (Equasis, ITU MARS, MarineTraffic, VesselFinder) dove cercare
-armatore e gestore.
+Cliccando su una nave si apre una scheda con MMSI, IMO, nominativo e bandiera. Il pulsante
+**Trova il proprietario** copia l'IMO (o l'MMSI per le navi senza IMO) e apre Equasis
+(o ITU MARS), con l'indicazione di dove incollarlo. I registri non accettano ricerche
+automatiche, quindi l'ultimo passaggio, incolla e invio, resta manuale.
+
+## Mappa VesselFinder
+
+Il pulsante **🌍 VesselFinder** in alto passa alla mappa gratuita di VesselFinder
+(widget ufficiale, uso non commerciale), centrata sulla stessa zona. Dalla scheda di una nave,
+**Mostra sulla mappa VesselFinder** la segue con la sua rotta.

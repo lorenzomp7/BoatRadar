@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VesselFinder</title>
+<style>html, body { margin:0; height:100%; overflow:hidden; background:#0b1118; }</style>
+</head>
+<body>
+<!-- Mappa gratuita di VesselFinder (widget ufficiale aismap.js), parametri dall'indirizzo della pagina -->
+<script>
+  var q = new URLSearchParams(location.search);
+  var width = "100%";
+  var height = String(window.innerHeight);
+  var latitude = q.get('lat') || "40";
+  var longitude = q.get('lon') || "10";
+  var zoom = String(Math.min(18, Math.max(3, Number(q.get('zoom')) || 4)));
+  var names = false;
+  var imo = "";
+  var mmsi = q.get('mmsi') || "";   // se presente, la mappa segue questa nave
+  var show_track = !!mmsi;
+</script>
+<script src="https://www.vesselfinder.com/aismap.js"></script>
+</body>
+</html>

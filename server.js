@@ -183,9 +183,10 @@ http.createServer((req, res) => {
   if (url === '/api/vessel') return json(req, res, vessels.get(Number(query.get('mmsi'))) || null);
   if (url === '/api/search') return json(req, res, search(query.get('q') || ''));
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size });
-  if (url === '/' || url === '/boatradar.html') {
+  const page = { '/': 'boatradar.html', '/boatradar.html': 'boatradar.html', '/vesselfinder.html': 'vesselfinder.html' }[url];
+  if (page) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    return fs.createReadStream(path.join(__dirname, 'boatradar.html')).pipe(res);
+    return fs.createReadStream(path.join(__dirname, page)).pipe(res);
   }
   res.writeHead(404); res.end('Not found');
 }).listen(PORT, () => {
