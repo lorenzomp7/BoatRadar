@@ -11,13 +11,13 @@
   html, body { height:100%; margin:0; font-family:system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
   #map { position:absolute; inset:0; background:#0b1118; }
   .tiles { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9); }
-  header { position:absolute; top:12px; left:56px; z-index:1000; display:flex; gap:8px; align-items:center;
+  header { position:absolute; top:12px; left:56px; z-index:1100; display:flex; gap:8px; align-items:center;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
   header b { color:var(--accent); letter-spacing:.5px; }
   header input { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 8px; width:210px; }
   #status { font-size:12px; color:var(--muted); }
-  #results { position:absolute; top:58px; left:56px; z-index:1000; background:var(--panel); border:1px solid var(--line);
-    border-radius:10px; max-height:300px; overflow:auto; width:330px; display:none; }
+  #results { position:absolute; top:calc(100% + 6px); left:0; z-index:1100; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; max-height:300px; overflow:auto; width:330px; max-width:calc(100vw - 72px); display:none; }
   #results div { padding:7px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--line); }
   #results div:hover { background:#1f2c3b; }
   #panel { position:absolute; top:12px; right:12px; bottom:12px; width:340px; max-width:calc(100% - 24px); z-index:1000;
@@ -59,11 +59,24 @@
   #panel details { border-top:1px solid var(--line); padding:4px 0; }
   #panel summary { cursor:pointer; padding:8px 0; font-size:13px; }
   #panel summary:hover { color:var(--accent); }
+  #panel td.wait { color:var(--muted); font-size:12px; font-style:italic; width:auto; }
+  #panel .vfmore { border-color:#2c4a63; }
   #panel tr.owned td { color:var(--accent); font-weight:600; }
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:2000; max-width:calc(100% - 32px);
     background:var(--panel); border:1px solid var(--accent); border-radius:10px; padding:12px 16px; font-size:14px; display:none;
     box-shadow:0 6px 24px rgba(0,0,0,.4); }
   #toast b { color:var(--accent); font-size:18px; letter-spacing:.5px; user-select:all; }
+  @media (max-width: 640px) {
+    header { left:56px; right:8px; flex-wrap:wrap; padding:6px 8px; gap:6px; }
+    header b { font-size:15px; }
+    header input { flex:1 1 140px; min-width:0; width:auto; }
+    #status { flex-basis:100%; order:5; font-size:11px; }
+    .hbtn { padding:5px 8px; font-size:13px; }
+    #results { width:100%; max-width:none; }
+    #panel { top:auto; left:8px; right:8px; bottom:8px; width:auto; max-width:none; max-height:58vh; padding:14px; }
+    #legend { display:none; }
+    #toast { bottom:calc(58vh + 20px); }
+  }
 </style>
 </head>
 <body>
@@ -71,13 +84,13 @@
 <header>
   <b>⚓ BoatRadar</b>
   <input id="q" placeholder="Cerca nome, MMSI o IMO…" autocomplete="off">
+  <div id="results"></div>
   <span id="status">Caricamento…</span>
   <button id="registries" class="hbtn" title="Registri per trovare proprietari e armatori">📚 Registri</button>
   <button id="mode" class="hbtn" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
 <iframe id="vf" title="Mappa VesselFinder"></iframe>
 <div id="toast"></div>
-<div id="results"></div>
 <div id="legend"></div>
 <aside id="panel"><button id="close">×</button><div id="content"></div></aside>
 
@@ -100,6 +113,20 @@ const TYPES = [
   { key:'other',     label:'Altro / sconosciuto',  color:'#9aa7b6', test:() => true },
 ];
 const typeOf = t => TYPES.find(x => x.test(t ?? -1));
+
+// Nome preciso del tipo di nave (codici AIS)
+function typeName(t) {
+  const exact = { 30:'Peschereccio', 31:'Rimorchiatore', 32:'Rimorchiatore', 33:'Draga', 34:'Operazioni subacquee', 35:'Nave militare',
+    36:'Barca a vela', 37:'Imbarcazione da diporto', 50:'Pilotina', 51:'Ricerca e soccorso', 52:'Rimorchiatore', 53:'Servizio portuale',
+    54:'Antinquinamento', 55:'Forze dell\'ordine', 58:'Trasporto sanitario', 59:'Nave speciale' };
+  if (exact[t]) return exact[t];
+  if (t >= 20 && t <= 29) return 'Aliscafo / WIG';
+  if (t >= 40 && t <= 49) return 'Unità veloce';
+  if (t >= 60 && t <= 69) return 'Nave passeggeri';
+  if (t >= 70 && t <= 79) return 'Nave cargo';
+  if (t >= 80 && t <= 89) return 'Petroliera / cisterna';
+  return null;
+}
 
 const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
   'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
@@ -189,7 +216,13 @@ function viewBox() {
 async function loadBalticMeta() {
   const res = await fetch(`${BALTIC}/vessels`);
   if (!res.ok) throw new Error('vessels ' + res.status);
-  for (const v of await res.json()) meta.set(v.mmsi, { ...v, draught: v.draught / 10 });
+  for (const v of await res.json()) {
+    const length = (v.referencePointA || 0) + (v.referencePointB || 0), width = (v.referencePointC || 0) + (v.referencePointD || 0);
+    const e = v.eta, month = (e >> 16) & 15, day = (e >> 11) & 31, hour = (e >> 6) & 31, minute = e & 63;
+    meta.set(v.mmsi, { ...v, draught: v.draught / 10, length: length || null, width: width || null,
+      eta: month >= 1 && month <= 12 && day ? { month, day, hour: hour < 24 ? hour : null, minute: minute < 60 ? minute : null } : null,
+      staticTs: v.timestamp });
+  }
 }
 
 async function features(url) {
@@ -234,6 +267,8 @@ async function loadLocations() {
     : !st.connected ? ' · Mondo: connessione…'
     : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '');
   $('status').textContent = `${markers.size} in mappa · agg. ${new Date().toLocaleTimeString('it-IT')}${note}`;
+  // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
+  if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
   if (selected && markers.has(selected)) render(selected);
 }
 
@@ -244,7 +279,7 @@ function select(mmsi) {
   if (m) { m.marker.setStyle({ radius:8, color:'#ffc83d', weight:3 }).bringToFront(); }
   render(mmsi);
   $('panel').style.display = 'block';
-  if (!meta.get(mmsi)?.callSign) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
+  if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
 }
 
 // Proprietario annotato dall'utente, ricordato per ogni nave in questo browser
@@ -257,23 +292,38 @@ function facts(mmsi) {
   const v = meta.get(mmsi) || {};
   const p = markers.get(mmsi)?.props || {};
   const imo = v.imo && v.imo > 0 ? v.imo : null;
+  const two = n => String(n).padStart(2, '0');
+  const MONTHS = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
+  const eta = v.eta ? `${two(v.eta.day)} ${MONTHS[v.eta.month - 1]}` + (v.eta.hour != null ? `, ${two(v.eta.hour)}:${two(v.eta.minute ?? 0)} UTC` : '') : null;
+  const sog = p.sog != null && p.sog < 102.3 ? p.sog.toFixed(1) + ' kn' : null;
+  const cog = p.cog != null && p.cog < 360 ? p.cog.toFixed(1) + '°' : null;
   const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? '—' : val)}</td></tr>`;
+  const waiting = !v.staticTs && !imo && !v.callSign && v.shipType == null;
   return `
       ${savedOwner(mmsi) ? `<tr class="owned"><td>Proprietario</td><td>${esc(savedOwner(mmsi))}</td></tr>` : ''}
-      ${row('MMSI', mmsi)}
+      ${waiting ? '<tr><td colspan="2" class="wait">Tipo, IMO, dimensioni e porto di arrivo non sono ancora arrivati: le navi li trasmettono ogni 6 minuti, la scheda si completa da sola.</td></tr>' : ''}
+      ${row('Tipo', typeName(v.shipType) || typeOf(v.shipType).label)}
+      ${row('Bandiera', MID[String(mmsi).slice(0, 3)])}
       ${row('IMO', imo)}
+      ${row('MMSI', mmsi)}
       ${row('Nominativo', v.callSign)}
-      ${row('Destinazione', v.destination)}
-      ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
-      ${row('Velocità', p.sog != null && p.sog < 102.3 ? p.sog.toFixed(1) + ' kn' : null)}
-      ${row('Rotta', p.cog != null && p.cog < 360 ? p.cog.toFixed(0) + '°' : null)}
+      ${row('Prossimo porto', v.destination)}
+      ${row('ETA', eta)}
+      ${row('Velocità / Rotta', sog || cog ? `${sog || '—'} / ${cog || '—'}` : null)}
       ${row('Stato', NAV_STATUS[p.navStat])}
+      ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
+      ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
       ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}`;
 }
 
 function render(mmsi) {
   // Aggiornamento periodico della stessa nave: rinnovo solo i dati, senza toccare campo e sezioni aperte
-  if ($('content').dataset.mmsi === String(mmsi) && $('facts')) { $('facts').innerHTML = facts(mmsi); return; }
+  if ($('content').dataset.mmsi === String(mmsi) && $('facts')) {
+    const v = meta.get(mmsi) || {};
+    const known = v.imo > 0 ? 'imo' : '';
+    // se nel frattempo sono arrivati i dati statici (IMO, tipo) rifaccio la scheda, conservando il nome annotato
+    if ($('content').dataset.known === known) { $('facts').innerHTML = facts(mmsi); return; }
+  }
   const v = meta.get(mmsi) || {};
   const flag = MID[String(mmsi).slice(0, 3)] || '—';
   const imo = v.imo && v.imo > 0 ? v.imo : null;
@@ -283,10 +333,13 @@ function render(mmsi) {
   const group = (title, keys, open = false) => `<details${open ? ' open' : ''}><summary>${esc(title)}</summary>
       ${keys.map(k => registryButton(k, ids)).join('')}</details>`;
   $('content').dataset.mmsi = mmsi;
+  $('content').dataset.known = imo ? 'imo' : '';
   $('content').innerHTML = `
     <h2>${esc(v.name || 'Senza nome')}</h2>
-    <div class="sub">${esc(typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
+    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
     <table id="facts">${facts(mmsi)}</table>
+    <a class="link vfmore" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">📷 Foto, stazza, anno di costruzione e porti
+      <small>Dati che il segnale AIS non trasmette: scheda completa su VesselFinder</small></a>
 
     <h3>Chi è il proprietario?</h3>
     <div class="step"><span>1</span> Apri il registro: il numero viene copiato, tu lo incolli nella ricerca.</div>

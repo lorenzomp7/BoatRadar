@@ -25,6 +25,20 @@ function readKey() {
 
 const clean = s => (s || '').replace(/@/g, '').trim();
 
+// Dimensioni AIS: distanze dell'antenna da prua (A), poppa (B), sinistra (C) e dritta (D)
+function setDimensions(v, d) {
+  if (!d) return;
+  const length = (d.A || 0) + (d.B || 0), width = (d.C || 0) + (d.D || 0);
+  if (length > 0) v.length = length;
+  if (width > 0) v.width = width;
+}
+
+// ETA AIS: mese, giorno, ora e minuto in UTC, senza anno (0 / 24 / 60 = non disponibile)
+function setEta(v, e) {
+  if (!e || !(e.Month >= 1 && e.Month <= 12) || !(e.Day >= 1 && e.Day <= 31)) return;
+  v.eta = { month: e.Month, day: e.Day, hour: e.Hour < 24 ? e.Hour : null, minute: e.Minute < 60 ? e.Minute : null };
+}
+
 function vessel(mmsi) {
   let v = vessels.get(mmsi);
   if (!v) { v = { mmsi }; vessels.set(mmsi, v); }
@@ -46,7 +60,7 @@ function handle(msg) {
   if (pos) {
     positions.set(mmsi, { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
       navStat: pos.NavigationalStatus, ts: Date.now() });
-    if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; }
+    if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; setDimensions(v, pos.Dimension); }
   }
   const st = m.ShipStaticData;
   if (st) {
@@ -56,12 +70,17 @@ function handle(msg) {
     v.shipType = st.Type;
     v.destination = clean(st.Destination);
     v.draught = st.MaximumStaticDraught || null;
+    setDimensions(v, st.Dimension);
+    setEta(v, st.Eta);
+    v.staticTs = Date.now();
   }
   const sd = m.StaticDataReport;
   if (sd) {
     if (clean(sd.ReportA?.Name)) v.name = clean(sd.ReportA.Name);
     if (clean(sd.ReportB?.CallSign)) v.callSign = clean(sd.ReportB.CallSign);
     if (sd.ReportB?.ShipType) v.shipType = sd.ReportB.ShipType;
+    setDimensions(v, sd.ReportB?.Dimension);
+    v.staticTs = Date.now();
   }
 }
 
@@ -128,7 +147,9 @@ if (process.env.RENDER_EXTERNAL_URL) {
 setInterval(() => {
   const limit = Date.now() - STALE_MS;
   for (const [mmsi, p] of positions) if (p.ts < limit) positions.delete(mmsi);
-  for (const mmsi of vessels.keys()) if (!positions.has(mmsi)) vessels.delete(mmsi);
+  // i dati statici arrivano solo ogni 6 minuti: li conservo 48 ore, così una nave che riappare li ha subito
+  const staticLimit = Date.now() - 48 * 3600 * 1000;
+  for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) vessels.delete(mmsi);
 }, 60000);
 
 function json(req, res, body) {
