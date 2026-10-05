@@ -38,8 +38,8 @@
     border-radius:10px; padding:8px 10px; font-size:12px; }
   #legend span { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
   #legend div { margin:2px 0; }
-  #mode { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; white-space:nowrap; }
-  #mode:hover { border-color:var(--accent); }
+  .hbtn { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; white-space:nowrap; }
+  .hbtn:hover { border-color:var(--accent); }
   #vf { position:absolute; inset:0; width:100%; height:100%; border:0; z-index:900; display:none; background:#0b1118; }
   body.vf #vf { display:block; }
   body.vf #legend, body.vf #panel, body.vf #status, body.vf #q, body.vf #results { display:none !important; }
@@ -59,7 +59,8 @@
   <b>⚓ BoatRadar</b>
   <input id="q" placeholder="Cerca nome, MMSI o IMO…" autocomplete="off">
   <span id="status">Caricamento…</span>
-  <button id="mode" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
+  <button id="registries" class="hbtn" title="Registri per trovare proprietari e armatori">📚 Registri</button>
+  <button id="mode" class="hbtn" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
 <iframe id="vf" title="Mappa VesselFinder"></iframe>
 <div id="toast"></div>
@@ -257,14 +258,28 @@ function render(mmsi) {
     <h3>Chi è il proprietario?</h3>
     <button class="owner" data-registry="${imo ? 'equasis' : 'itu'}" data-id="${imo || mmsi}">🔎 Trova il proprietario
       <small>${imo ? 'Apre Equasis con l\'IMO ' + imo + ' già copiato' : 'Apre ITU MARS con l\'MMSI ' + mmsi + ' già copiato'}</small></button>
-    ${imo ? `<button class="link" data-registry="itu" data-id="${mmsi}">ITU MARS
-      <small>Titolare della licenza radio · MMSI ${mmsi}${v.callSign ? ' · nominativo ' + esc(v.callSign) : ''}</small></button>` : ''}
+    ${imo ? registryButton('itu', { MMSI: mmsi }) : ''}
     <button class="link" data-show-vf="${mmsi}">Mostra sulla mappa VesselFinder
       <small>Posizione e rotta secondo VesselFinder</small></button>
     <a class="link" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">VesselFinder
       <small>Scheda nave, foto, porto di partenza e arrivo</small></a>
     <a class="link" target="_blank" rel="noopener" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}">MarineTraffic
-      <small>Scheda nave, foto, storico scali</small></a>`;
+      <small>Scheda nave, foto, storico scali</small></a>
+    ${imo ? '<h3>Società di classificazione</h3><p>Su Equasis, alla voce <i>Classification</i>, vedi quale società segue la nave.</p>'
+      + ['lr', 'dnv', 'abs', 'classnk'].map(k => registryButton(k, { IMO: imo })).join('') : ''}
+    <h3>Risalire alla società</h3>
+    ${['opencorporates', 'companieshouse', 'mbr'].map(k => registryButton(k)).join('')}
+    ${String(mmsi).startsWith('247') ? '<h3>Barca italiana</h3>' + ['sted', 'guardiacostiera'].map(k => registryButton(k)).join('') : ''}`;
+}
+
+// Pagina con tutti i registri, apribile dal pulsante in alto anche senza aver scelto una nave
+function showRegistries() {
+  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle({ radius:4, color:'#0b1118', weight:1 });
+  selected = null;
+  $('content').innerHTML = `<h2>Registri</h2>
+    <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`
+    + registryList();
+  $('panel').style.display = 'block';
 }
 
 $('close').onclick = () => { $('panel').style.display = 'none'; };
@@ -272,11 +287,52 @@ $('close').onclick = () => { $('panel').style.display = 'none'; };
 // Proprietario: i registri non accettano ricerche da link, quindi copio IMO/MMSI, apro il registro
 // e mostro cosa incollare. Equasis chiede l'accesso (gratuito) solo la prima volta.
 const REGISTRY = {
-  equasis: { url: 'https://www.equasis.org/', label: 'IMO',
+  equasis: { group: 'ship', name: 'Equasis', copy: 'IMO', url: 'https://www.equasis.org/',
+    desc: 'Proprietario registrato, gestore tecnico e commerciale, storico. Gratuito con registrazione.',
     how: 'In Equasis accedi (la prima volta), poi incolla nel campo <i>IMO, Name, Company</i> in alto a destra e premi invio.' },
-  itu: { url: 'https://www.itu.int/mmsapp/ShipStation/list', label: 'MMSI',
+  itu: { group: 'ship', name: 'ITU MARS', copy: 'MMSI', url: 'https://www.itu.int/mmsapp/ShipStation/list',
+    desc: 'Titolare della licenza radio (voce Owner). Gratuito, senza registrazione.',
     how: 'In ITU MARS incolla nel campo <i>MMSI</i>, premi invio e apri la nave (icona dell\'occhio): il proprietario è alla voce <i>Owner</i>.' },
+  lr: { group: 'class', name: 'Lloyd\'s Register', copy: 'IMO', url: 'https://www.lr.org/en/lrofships/',
+    desc: 'Navi classificate LR: dati della nave, armatore e gestore.',
+    how: 'Nel registro di Lloyd\'s Register incolla nel campo di ricerca (IMO number) e avvia la ricerca.' },
+  dnv: { group: 'class', name: 'DNV Vessel Register', copy: 'IMO', url: 'https://www.dnv.com/maritime/vesselregister',
+    desc: 'Navi classificate DNV: armatori, gestori, notazioni di classe.',
+    how: 'Nel DNV Vessel Register incolla nel campo di ricerca (accetta l\'IMO) e avvia la ricerca.' },
+  abs: { group: 'class', name: 'ABS Record', copy: 'IMO', url: 'https://ww2.eagle.org/en/rules-and-resources/databases/abs-record.html',
+    desc: 'Navi classificate ABS: dati principali, cantiere, armatore.',
+    how: 'Apri ABS Record dalla pagina, poi incolla l\'IMO nella ricerca.' },
+  classnk: { group: 'class', name: 'ClassNK', copy: 'IMO', url: 'https://www.classnk.or.jp/register/regships/regships.aspx',
+    desc: 'Navi classificate ClassNK (Giappone).',
+    how: 'Nel registro ClassNK incolla nel campo IMO e avvia la ricerca.' },
+  opencorporates: { group: 'company', name: 'OpenCorporates', url: 'https://opencorporates.com/',
+    desc: 'Società di tutto il mondo: cerca il nome dell\'armatore trovato su Equasis o nei registri di classe.' },
+  companieshouse: { group: 'company', name: 'Companies House (Regno Unito)', url: 'https://find-and-update.company-information.service.gov.uk/',
+    desc: 'Società britanniche: amministratori e soci, gratuito.' },
+  mbr: { group: 'company', name: 'Malta Business Registry', url: 'https://registry.mbr.mt/ROC/',
+    desc: 'Società maltesi (molti yacht sono intestati qui): ricerca gratuita, documenti a pagamento.' },
+  sted: { group: 'italy', name: 'Visura unità da diporto (STED)', url: 'https://www.mit.gov.it/node/11225',
+    desc: 'Barche da diporto italiane iscritte: visura presso uno Sportello Telematico del Diportista (Capitanerie, Motorizzazione, agenzie nautiche). Serve la sigla di iscrizione.' },
+  guardiacostiera: { group: 'italy', name: 'Guardia Costiera / Capitanerie di porto', url: 'https://www.guardiacostiera.gov.it/',
+    desc: 'Per incidenti, danni o barche abbandonate: identificano il proprietario anche quando i dati non sono pubblici.' },
 };
+const REGISTRY_GROUPS = { ship: 'Registri della nave', class: 'Società di classificazione (navi con IMO)',
+  company: 'Registri delle società (per risalire a chi c\'è dietro l\'armatore)', italy: 'Barche da diporto in Italia' };
+
+// Pulsante di un registro: se c'è un identificativo da copiare lo copia aprendo il sito
+function registryButton(key, ids = {}) {
+  const r = REGISTRY[key], id = r.copy ? ids[r.copy] : '';
+  return `<button class="link" data-registry="${key}" data-id="${esc(id || '')}">${esc(r.name)}
+    <small>${id ? r.copy + ' ' + esc(id) + ' · ' : ''}${esc(r.desc)}</small></button>`;
+}
+
+function registryList(ids = {}) {
+  return Object.entries(REGISTRY_GROUPS).map(([group, title]) => {
+    const keys = Object.keys(REGISTRY).filter(k => REGISTRY[k].group === group);
+    return `<h3>${esc(title)}</h3>` + keys.map(k => registryButton(k, ids)).join('');
+  }).join('');
+}
+
 let toastTimer;
 function toast(html) {
   $('toast').innerHTML = html;
@@ -291,7 +347,8 @@ $('content').addEventListener('click', e => {
   if (reg) {
     const r = REGISTRY[reg.dataset.registry], id = reg.dataset.id;
     window.open(r.url, '_blank', 'noopener');
-    const show = copied => toast(`${r.label} <b>${esc(id)}</b> ${copied ? 'copiato.' : '(selezionalo e copialo).'} ${r.how}`);
+    if (!id) return;
+    const show = copied => toast(`${r.copy} <b>${esc(id)}</b> ${copied ? 'copiato.' : '(selezionalo e copialo).'} ${r.how}`);
     if (navigator.clipboard) navigator.clipboard.writeText(id).then(() => show(true), () => show(false));
     else show(false);
     return;
@@ -315,6 +372,7 @@ function setMode(vesselFinder, mmsi) {
   $('vf').src = '/vesselfinder.html?' + params;
 }
 $('mode').onclick = () => setMode(!document.body.classList.contains('vf'));
+$('registries').onclick = () => { setMode(false); showRegistries(); };
 
 const found = new Map(); // mmsi -> [lat, lon] dei risultati di ricerca
 

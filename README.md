@@ -45,6 +45,14 @@ Cliccando su una nave si apre una scheda con MMSI, IMO, nominativo e bandiera. I
 (o ITU MARS), con l'indicazione di dove incollarlo. I registri non accettano ricerche
 automatiche, quindi l'ultimo passaggio, incolla e invio, resta manuale.
 
+## Registri
+
+Il pulsante **📚 Registri** in alto apre l'elenco delle fonti per risalire ai proprietari:
+Equasis e ITU MARS, i registri delle società di classificazione (Lloyd's Register, DNV, ABS,
+ClassNK), i registri delle imprese (OpenCorporates, Companies House, Malta Business Registry)
+e, per le barche da diporto italiane, la visura tramite STED e la Guardia Costiera.
+Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.
+
 ## Mappa VesselFinder
 
 Il pulsante **🌍 VesselFinder** in alto passa alla mappa gratuita di VesselFinder
