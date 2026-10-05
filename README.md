@@ -40,18 +40,18 @@ Per vedere tutto il mondo crea `aisstream-key.txt` con la tua chiave aisstream.i
 
 ## Proprietario della nave
 
-Cliccando su una nave si apre una scheda con MMSI, IMO, nominativo e bandiera. Il pulsante
-**Trova il proprietario** copia l'IMO (o l'MMSI per le navi senza IMO) e apre Equasis
-(o ITU MARS), con l'indicazione di dove incollarlo. I registri non accettano ricerche
-automatiche, quindi l'ultimo passaggio, incolla e invio, resta manuale.
+La scheda di ogni nave guida in tre passi:
 
-## Registri
+1. **Trova il proprietario**: copia l'IMO (o l'MMSI) e apre Equasis (o ITU MARS).
+2. Incolli il nome del proprietario nel campo della scheda: resta salvato su quella nave
+   (nel browser) e compare in cima ai dati.
+3. Un clic cerca quel nome su OpenCorporates, Companies House, registro di Malta, altre navi
+   in Equasis, web e notizie.
 
-Il pulsante **📚 Registri** in alto apre l'elenco delle fonti per risalire ai proprietari:
-Equasis e ITU MARS, i registri delle società di classificazione (Lloyd's Register, DNV, ABS,
-ClassNK), i registri delle imprese (OpenCorporates, Companies House, Malta Business Registry)
-e, per le barche da diporto italiane, la visura tramite STED e la Guardia Costiera.
-Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.
+Sotto, a seconda della nave: siti sugli yacht (ricerca già fatta sul nome), visura e Guardia
+Costiera per le barche italiane, società di classificazione (Lloyd's Register, DNV, ABS,
+ClassNK, Bureau Veritas, RINA), VesselFinder e MarineTraffic, servizi a pagamento.
+Il pulsante **📚 Registri** in alto elenca tutte le fonti anche senza scegliere una nave.
 
 ## Mappa VesselFinder
 

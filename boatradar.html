@@ -47,6 +47,19 @@
     background:var(--accent); color:#0f1720; font:600 14px system-ui, sans-serif; }
   #panel .owner:hover { filter:brightness(1.08); }
   #panel .owner small { display:block; font-weight:400; font-size:12px; margin-top:2px; }
+  #panel .step { display:flex; gap:8px; align-items:flex-start; font-size:12.5px; color:var(--muted); margin:14px 0 6px; line-height:1.4; }
+  #panel .step span { flex:none; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#0f1720;
+    font-weight:700; font-size:12px; display:grid; place-items:center; }
+  #company { width:100%; background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 10px; font-size:14px; }
+  #company:focus { outline:none; border-color:var(--accent); }
+  #panel .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  #panel .chip { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:999px; padding:6px 11px;
+    font-size:12.5px; cursor:pointer; }
+  #panel .chip:hover { border-color:var(--accent); }
+  #panel details { border-top:1px solid var(--line); padding:4px 0; }
+  #panel summary { cursor:pointer; padding:8px 0; font-size:13px; }
+  #panel summary:hover { color:var(--accent); }
+  #panel tr.owned td { color:var(--accent); font-weight:600; }
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:2000; max-width:calc(100% - 32px);
     background:var(--panel); border:1px solid var(--accent); border-radius:10px; padding:12px 16px; font-size:14px; display:none;
     box-shadow:0 6px 24px rgba(0,0,0,.4); }
@@ -234,16 +247,19 @@ function select(mmsi) {
   if (!meta.get(mmsi)?.callSign) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
 }
 
-function render(mmsi) {
+// Proprietario annotato dall'utente, ricordato per ogni nave in questo browser
+function savedOwner(mmsi) { try { return localStorage.getItem('owner:' + mmsi) || ''; } catch { return ''; } }
+function saveOwner(mmsi, name) {
+  try { name ? localStorage.setItem('owner:' + mmsi, name) : localStorage.removeItem('owner:' + mmsi); } catch {}
+}
+
+function facts(mmsi) {
   const v = meta.get(mmsi) || {};
   const p = markers.get(mmsi)?.props || {};
-  const flag = MID[String(mmsi).slice(0, 3)] || '—';
   const imo = v.imo && v.imo > 0 ? v.imo : null;
   const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? '—' : val)}</td></tr>`;
-  $('content').innerHTML = `
-    <h2>${esc(v.name || 'Senza nome')}</h2>
-    <div class="sub">${esc(typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
-    <table>
+  return `
+      ${savedOwner(mmsi) ? `<tr class="owned"><td>Proprietario</td><td>${esc(savedOwner(mmsi))}</td></tr>` : ''}
       ${row('MMSI', mmsi)}
       ${row('IMO', imo)}
       ${row('Nominativo', v.callSign)}
@@ -252,30 +268,58 @@ function render(mmsi) {
       ${row('Velocità', p.sog != null && p.sog < 102.3 ? p.sog.toFixed(1) + ' kn' : null)}
       ${row('Rotta', p.cog != null && p.cog < 360 ? p.cog.toFixed(0) + '°' : null)}
       ${row('Stato', NAV_STATUS[p.navStat])}
-      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}
-    </table>
+      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}`;
+}
+
+function render(mmsi) {
+  // Aggiornamento periodico della stessa nave: rinnovo solo i dati, senza toccare campo e sezioni aperte
+  if ($('content').dataset.mmsi === String(mmsi) && $('facts')) { $('facts').innerHTML = facts(mmsi); return; }
+  const v = meta.get(mmsi) || {};
+  const flag = MID[String(mmsi).slice(0, 3)] || '—';
+  const imo = v.imo && v.imo > 0 ? v.imo : null;
+  const ids = { IMO: imo, MMSI: mmsi, Nome: v.name };
+  const yacht = v.shipType === 36 || v.shipType === 37 || !imo;
+  const italian = String(mmsi).startsWith('247');
+  const group = (title, keys, open = false) => `<details${open ? ' open' : ''}><summary>${esc(title)}</summary>
+      ${keys.map(k => registryButton(k, ids)).join('')}</details>`;
+  $('content').dataset.mmsi = mmsi;
+  $('content').innerHTML = `
+    <h2>${esc(v.name || 'Senza nome')}</h2>
+    <div class="sub">${esc(typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
+    <table id="facts">${facts(mmsi)}</table>
 
     <h3>Chi è il proprietario?</h3>
+    <div class="step"><span>1</span> Apri il registro: il numero viene copiato, tu lo incolli nella ricerca.</div>
     <button class="owner" data-registry="${imo ? 'equasis' : 'itu'}" data-id="${imo || mmsi}">🔎 Trova il proprietario
-      <small>${imo ? 'Apre Equasis con l\'IMO ' + imo + ' già copiato' : 'Apre ITU MARS con l\'MMSI ' + mmsi + ' già copiato'}</small></button>
-    ${imo ? registryButton('itu', { MMSI: mmsi }) : ''}
-    <button class="link" data-show-vf="${mmsi}">Mostra sulla mappa VesselFinder
-      <small>Posizione e rotta secondo VesselFinder</small></button>
-    <a class="link" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">VesselFinder
-      <small>Scheda nave, foto, porto di partenza e arrivo</small></a>
-    <a class="link" target="_blank" rel="noopener" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}">MarineTraffic
-      <small>Scheda nave, foto, storico scali</small></a>
-    ${imo ? '<h3>Società di classificazione</h3><p>Su Equasis, alla voce <i>Classification</i>, vedi quale società segue la nave.</p>'
-      + ['lr', 'dnv', 'abs', 'classnk'].map(k => registryButton(k, { IMO: imo })).join('') : ''}
-    <h3>Risalire alla società</h3>
-    ${['opencorporates', 'companieshouse', 'mbr'].map(k => registryButton(k)).join('')}
-    ${String(mmsi).startsWith('247') ? '<h3>Barca italiana</h3>' + ['sted', 'guardiacostiera'].map(k => registryButton(k)).join('') : ''}`;
+      <small>${imo ? 'Equasis con l\'IMO ' + imo + ' già copiato' : 'ITU MARS con l\'MMSI ' + mmsi + ' già copiato'}</small></button>
+    ${imo ? registryButton('itu', ids) : ''}
+
+    <div class="step"><span>2</span> Incolla qui il nome del proprietario: resta salvato su questa nave.</div>
+    <input id="company" placeholder="Es. HUNDORP SHIPPING INC" value="${esc(savedOwner(mmsi))}" autocomplete="off">
+
+    <div class="step"><span>3</span> Scopri chi c'è dietro la società, con un clic:</div>
+    <div class="chips">${Object.keys(COMPANY_SEARCH).map(k => `<button class="chip" data-company="${k}">${esc(COMPANY_SEARCH[k].name)}</button>`).join('')}</div>
+
+    <h3>Altre fonti</h3>
+    ${yacht ? group('Yacht e barche da diporto', ['superyachtfan', 'superyachttimes', 'googleyacht'], true) : ''}
+    ${italian ? group('Barca italiana', ['sted', 'guardiacostiera'], yacht) : ''}
+    ${imo ? group('Società di classificazione', ['lr', 'dnv', 'abs', 'classnk', 'bv', 'rina']) : ''}
+    <details><summary>Mappe e schede nave</summary>
+      <button class="link" data-show-vf="${mmsi}">Mostra sulla mappa VesselFinder
+        <small>Posizione e rotta secondo VesselFinder</small></button>
+      <a class="link" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">VesselFinder
+        <small>Scheda nave, foto, porto di partenza e arrivo</small></a>
+      <a class="link" target="_blank" rel="noopener" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}">MarineTraffic
+        <small>Scheda nave, foto, storico scali</small></a></details>
+    ${group('Servizi a pagamento (armatore e gruppo già pronti)', ['seaweb', 'clarksons', 'kpler', 'vfpro', 'datalastic'])}
+    ${!italian ? group('Barche da diporto in Italia', ['sted', 'guardiacostiera']) : ''}`;
 }
 
 // Pagina con tutti i registri, apribile dal pulsante in alto anche senza aver scelto una nave
 function showRegistries() {
   if (selected && markers.has(selected)) markers.get(selected).marker.setStyle({ radius:4, color:'#0b1118', weight:1 });
   selected = null;
+  $('content').dataset.mmsi = '';
   $('content').innerHTML = `<h2>Registri</h2>
     <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`
     + registryList();
@@ -305,6 +349,29 @@ const REGISTRY = {
   classnk: { group: 'class', name: 'ClassNK', copy: 'IMO', url: 'https://www.classnk.or.jp/register/regships/regships.aspx',
     desc: 'Navi classificate ClassNK (Giappone).',
     how: 'Nel registro ClassNK incolla nel campo IMO e avvia la ricerca.' },
+  bv: { group: 'class', name: 'Bureau Veritas', url: 'https://marine-offshore.bureauveritas.com/',
+    desc: 'Nessuna ricerca pubblica: i dati delle navi BV sono riservati ai clienti (VeriSTAR Info), si chiedono a BV.' },
+  rina: { group: 'class', name: 'RINA', url: 'https://www.rina.org/',
+    desc: 'Nessuna ricerca pubblica: i dati delle navi RINA si chiedono a RINA.' },
+  superyachtfan: { group: 'yacht', name: 'SuperYachtFan', copy: 'Nome',
+    search: n => 'https://www.google.com/search?q=' + encodeURIComponent(`site:superyachtfan.com "${n}"`),
+    url: 'https://www.superyachtfan.com/', desc: 'Schede degli yacht e dei loro proprietari noti.' },
+  superyachttimes: { group: 'yacht', name: 'SuperYacht Times', copy: 'Nome',
+    search: n => 'https://www.google.com/search?q=' + encodeURIComponent(`site:superyachttimes.com "${n}"`),
+    url: 'https://www.superyachttimes.com/', desc: 'Database degli yacht: cantiere, dimensioni, a volte il proprietario.' },
+  googleyacht: { group: 'yacht', name: 'Ricerca sul web', copy: 'Nome',
+    search: n => 'https://www.google.com/search?q=' + encodeURIComponent(`"${n}" yacht owner`),
+    url: 'https://www.google.com/', desc: 'Articoli e notizie sul proprietario dello yacht.' },
+  seaweb: { group: 'paid', name: 'S&P Global Sea-web', url: 'https://www.spglobal.com/market-intelligence/en/solutions/sea-web-maritime-reference',
+    desc: 'Fino a 7 livelli di proprietà per oltre 200.000 navi. Abbonamento.' },
+  clarksons: { group: 'paid', name: 'Clarksons World Fleet Register', url: 'https://www.clarksons.com/',
+    desc: 'Flotta mondiale con armatori e contatti. Abbonamento.' },
+  kpler: { group: 'paid', name: 'Kpler / MarineTraffic', url: 'https://www.marinetraffic.com/',
+    desc: 'Piani a pagamento con dati di proprietà e API.' },
+  vfpro: { group: 'paid', name: 'VesselFinder', url: 'https://www.vesselfinder.com/',
+    desc: 'Piani a pagamento con dati di proprietà e API.' },
+  datalastic: { group: 'paid', name: 'Datalastic', url: 'https://datalastic.com/',
+    desc: 'API dati navi, utilizzabile per mostrare l\'armatore direttamente in BoatRadar.' },
   opencorporates: { group: 'company', name: 'OpenCorporates', url: 'https://opencorporates.com/',
     desc: 'Società di tutto il mondo: cerca il nome dell\'armatore trovato su Equasis o nei registri di classe.' },
   companieshouse: { group: 'company', name: 'Companies House (Regno Unito)', url: 'https://find-and-update.company-information.service.gov.uk/',
@@ -316,13 +383,26 @@ const REGISTRY = {
   guardiacostiera: { group: 'italy', name: 'Guardia Costiera / Capitanerie di porto', url: 'https://www.guardiacostiera.gov.it/',
     desc: 'Per incidenti, danni o barche abbandonate: identificano il proprietario anche quando i dati non sono pubblici.' },
 };
-const REGISTRY_GROUPS = { ship: 'Registri della nave', class: 'Società di classificazione (navi con IMO)',
-  company: 'Registri delle società (per risalire a chi c\'è dietro l\'armatore)', italy: 'Barche da diporto in Italia' };
+// Ricerche per nome della società: questi siti accettano la ricerca direttamente nell'indirizzo
+const COMPANY_SEARCH = {
+  opencorporates: { name: 'OpenCorporates', url: n => 'https://opencorporates.com/companies?q=' + encodeURIComponent(n) },
+  companieshouse: { name: 'Companies House UK', url: n => 'https://find-and-update.company-information.service.gov.uk/search/companies?q=' + encodeURIComponent(n) },
+  mbr: { name: 'Registro Malta', copy: true, url: () => 'https://registry.mbr.mt/ROC/' },
+  equasis: { name: 'Altre navi (Equasis)', copy: true, url: () => 'https://www.equasis.org/' },
+  web: { name: 'Ricerca sul web', url: n => 'https://www.google.com/search?q=' + encodeURIComponent(`"${n}"`) },
+  news: { name: 'Notizie', url: n => 'https://www.google.com/search?tbm=nws&q=' + encodeURIComponent(`"${n}"`) },
+};
+
+const REGISTRY_GROUPS = { ship: 'Registri della nave', company: 'Registri delle società (per risalire a chi c\'è dietro l\'armatore)',
+  yacht: 'Yacht e barche da diporto', italy: 'Barche da diporto in Italia', class: 'Società di classificazione (navi con IMO)',
+  paid: 'Servizi a pagamento (armatore e gruppo già pronti)' };
 
 // Pulsante di un registro: se c'è un identificativo da copiare lo copia aprendo il sito
 function registryButton(key, ids = {}) {
   const r = REGISTRY[key], id = r.copy ? ids[r.copy] : '';
-  return `<button class="link" data-registry="${key}" data-id="${esc(id || '')}">${esc(r.name)}
+  if (r.search && id) return `<a class="link" target="_blank" rel="noopener" href="${esc(r.search(id))}">${esc(r.name)}
+    <small>Cerca «${esc(id)}» · ${esc(r.desc)}</small></a>`;
+  return `<button class="link" data-registry="${key}" data-id="${esc(r.search ? '' : id || '')}">${esc(r.name)}
     <small>${id ? r.copy + ' ' + esc(id) + ' · ' : ''}${esc(r.desc)}</small></button>`;
 }
 
@@ -332,6 +412,19 @@ function registryList(ids = {}) {
     return `<h3>${esc(title)}</h3>` + keys.map(k => registryButton(k, ids)).join('');
   }).join('');
 }
+
+function copyAndTell(label, id, how = '') {
+  const show = copied => toast(`${esc(label)} <b>${esc(id)}</b> ${copied ? 'copiato.' : '(selezionalo e copialo).'} ${how}`);
+  if (navigator.clipboard) navigator.clipboard.writeText(String(id)).then(() => show(true), () => show(false));
+  else show(false);
+}
+
+// Il nome del proprietario si salva mentre lo scrivi e compare in cima alla scheda
+$('content').addEventListener('input', e => {
+  if (e.target.id !== 'company' || !selected) return;
+  saveOwner(selected, e.target.value.trim());
+  $('facts').innerHTML = facts(selected);
+});
 
 let toastTimer;
 function toast(html) {
@@ -347,10 +440,19 @@ $('content').addEventListener('click', e => {
   if (reg) {
     const r = REGISTRY[reg.dataset.registry], id = reg.dataset.id;
     window.open(r.url, '_blank', 'noopener');
-    if (!id) return;
-    const show = copied => toast(`${r.copy} <b>${esc(id)}</b> ${copied ? 'copiato.' : '(selezionalo e copialo).'} ${r.how}`);
-    if (navigator.clipboard) navigator.clipboard.writeText(id).then(() => show(true), () => show(false));
-    else show(false);
+    if (id) copyAndTell(r.copy, id, r.how);
+    return;
+  }
+  const chip = e.target.closest('[data-company]');
+  if (chip) {
+    const name = $('company').value.trim();
+    if (!name) {
+      $('company').focus();
+      return toast('Prima incolla nel campo <b>2</b> il nome del proprietario trovato nel registro.');
+    }
+    const c = COMPANY_SEARCH[chip.dataset.company];
+    window.open(c.url(name), '_blank', 'noopener');
+    if (c.copy) copyAndTell('Nome', name, 'Incollalo nel campo di ricerca del sito.');
     return;
   }
   const vf = e.target.closest('[data-show-vf]');
