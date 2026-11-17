@@ -13,6 +13,8 @@ Le navi in movimento sono frecce orientate sulla rotta, quelle ferme sono pallin
 La copertura dipende dalle stazioni AIS a terra della rete aisstream.io: ottima lungo coste,
 porti e stretti, scarsa in mare aperto (lì servirebbe l'AIS satellitare, che è a pagamento).
 
+Tocca un’imbarcazione per vedere la scheda AIS. Quando trasmessi, mostra anche destinazione, pescaggio e dimensioni. Su telefono la scheda è adattata allo spazio disponibile.
+
 ## Online (Render, gratuito)
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lorenzomp7/BoatRadar)
