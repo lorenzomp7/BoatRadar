@@ -1,0 +1,6 @@
+node_modules
+.git
+.claude
+test
+deploy
+aisstream-key.txt

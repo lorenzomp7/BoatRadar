@@ -95,10 +95,12 @@
 <aside id="panel"><button id="close">×</button><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="config.js"></script>
 <script>
 // Dati AIS live di tutto il mondo, raccolti da server.js tramite aisstream.io (solo l'area visibile).
 // Dati AIS live del Baltico, aperti e senza chiave (Fintraffic / Digitraffic).
-const API = '/api';
+// Su GitHub Pages config.js imposta l'indirizzo del server (window.BOATRADAR_API); da server.js è lo stesso host.
+const API = (window.BOATRADAR_API || '/api').replace(/\/$/, '');
 const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
 const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
@@ -261,8 +263,9 @@ async function loadLocations() {
     m.props = f.properties;
   }
   for (const [mmsi, m] of markers) if (!seen.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
-  const st = await fetch(`${API}/status`).then(r => r.json());
-  const note = !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
+  const st = await fetch(`${API}/status`).then(r => r.json()).catch(() => null);
+  const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
+    : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
     : st.error ? ' · Mondo: ' + st.error
     : !st.connected ? ' · Mondo: connessione…'
     : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '');
@@ -524,7 +527,7 @@ function setMode(vesselFinder, mmsi) {
   const params = new URLSearchParams({ lat: c.lat.toFixed(4), lon: L.Util.wrapNum(c.lng, [-180, 180], true).toFixed(4),
     zoom: Math.max(3, zoom) });
   if (mmsi) params.set('mmsi', mmsi);
-  $('vf').src = '/vesselfinder.html?' + params;
+  $('vf').src = 'vesselfinder.html?' + params;
 }
 $('mode').onclick = () => setMode(!document.body.classList.contains('vf'));
 $('registries').onclick = () => { setMode(false); showRegistries(); };

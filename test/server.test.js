@@ -63,7 +63,7 @@ before(async () => {
   server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: { ...process.env, PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
-      AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}`, RENDER_EXTERNAL_URL: '' },
+      AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await waitFor(() => get('/api/status').then(() => true, () => false), 'server in ascolto');
@@ -168,4 +168,13 @@ test('serve le pagine e risponde 404 al resto', async () => {
   assert.equal((await get('/vesselfinder.html')).status, 200);
   assert.equal((await get('/server.js')).status, 404, 'il codice del server non è esposto');
   assert.equal((await getJson('/api/vessel?mmsi=1')), null);
+});
+
+test('le API si possono leggere da GitHub Pages (CORS) e config.js esiste anche in locale', async () => {
+  const res = await get('/api/status', { Origin: 'https://lorenzomp7.github.io' });
+  assert.equal(res.headers['access-control-allow-origin'], '*', 'senza CORS_ORIGIN qualunque origine');
+  const cfg = await get('/config.js');
+  assert.equal(cfg.status, 200);
+  assert.match(cfg.headers['content-type'], /javascript/);
+  assert.doesNotMatch(cfg.body.toString(), /BOATRADAR_API/, 'in locale la pagina usa /api dello stesso server');
 });
