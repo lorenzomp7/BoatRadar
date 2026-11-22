@@ -1,2 +1,6 @@
 aisstream-key.txt
 node_modules/
+
+# Claude Code: impostazioni personali e stato degli hook (non versionati)
+.claude/settings.local.json
+.claude/hooks/.state/

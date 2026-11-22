@@ -1,0 +1,22 @@
+{
+  "watch": [
+    "*.js",
+    "*.html",
+    "package*.json"
+  ],
+  "steps": [
+    {
+      "name": "node --test",
+      "requires": [
+        "node_modules/ws"
+      ],
+      "run": [
+        "npm",
+        "test",
+        "--silent"
+      ],
+      "timeout": 120,
+      "setup": "npm install"
+    }
+  ]
+}
