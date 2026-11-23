@@ -27,7 +27,8 @@ AGENTS.md (importato sopra) vale per tutti gli agenti; qui solo ciò che riguard
 ### Skill
 
 - Di progetto: `ais-api-change`, da usare per ogni modifica a dati AIS, endpoint o loro visualizzazione.
-- Generali, da `addyosmani/agent-skills` (versione fissata, fonte in `.claude/references/README.md`): pianificazione (`planning-and-task-breakdown`), piccoli passi (`incremental-implementation`), test prima del codice (`test-driven-development`), revisione (`code-review-and-quality`), debug (`debugging-and-error-recovery`), sicurezza (`security-and-hardening`), prestazioni (`performance-optimization`).
+- Generali, da `addyosmani/agent-skills` (versione fissata, fonte in `.claude/references/README.md`): pianificazione (`planning-and-task-breakdown`), piccoli passi (`incremental-implementation`), test prima del codice (`test-driven-development`), revisione (`code-review-and-quality`), debug (`debugging-and-error-recovery`), sicurezza (`security-and-hardening`), prestazioni (`performance-optimization`), osservabilità (`observability-and-instrumentation`), interfaccia (`frontend-ui-engineering`).
+- Quando usarle nel Piano: `observability-and-instrumentation` per la salute del flusso aisstream (punto 34: log, contatori in `/api/status`, avvisi), dato che sulla VM non ci sono i log e gli avvisi di una piattaforma; `frontend-ui-engineering` per la pagina mappa (punti 15, 16, 18, 30: sagome, simboli per zoom, legenda, etichette), insieme alla checklist `.claude/references/accessibility-checklist.md`.
 
 ### Subagenti
 
