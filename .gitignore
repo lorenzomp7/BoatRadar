@@ -9,3 +9,4 @@ node_modules/
 diagnosi/
 *.proxelar.json
 *.har
+*.apk

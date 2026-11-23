@@ -96,3 +96,10 @@ Prima di ottimizzare `server.js` misura con `tools/carico.js` (stesse navi a ogn
 sapere dove vanno CPU e memoria, con [flameox](https://github.com/morluto/flameox) (MIT, v0.2.9).
 Comandi, interpretazione e tabella dei risultati in `docs/prestazioni.md`: aggiungi una riga con
 `--registra` prima e dopo ogni modifica che tocca `/api/locations` o lo stato in memoria.
+
+## App di riferimento (REA)
+
+Per studiare le app di tracciamento navi del Piano dall'APK usa
+[REA](https://github.com/morluto/rea) (MIT, v6.10.1) con `bash tools/analizza-apk.sh`.
+Procedura, strumenti e app da analizzare in `docs/app-analizzate/README.md`. Gli APK restano
+fuori dalla repo (`diagnosi/apk/`); si committa solo la scheda `docs/app-analizzate/<pacchetto>.md`.
