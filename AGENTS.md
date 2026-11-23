@@ -26,7 +26,8 @@ Lavora su `main_claude` salvo indicazione diversa.
 
 Esegui la verifica standard prima di dichiarare finito un cambio a `server.js`.
 Per modifiche a `boatradar.html` verifica la pagina nel browser, anche su
-larghezza da telefono, e dillo esplicitamente se non hai potuto farlo.
+larghezza da telefono (`bash tools/smoke-browser.sh`, sezione «Verifica nel browser»),
+e dillo esplicitamente se non hai potuto farlo.
 
 ## Regole del progetto
 
@@ -71,3 +72,20 @@ Attenzione:
   più basso di quello del server collegato diretto, aisstream sta scartando messaggi.
 - Una sola connessione per chiave: ferma ogni altro `server.js` con la stessa chiave (anche quello in cloud)
   durante la registrazione, oppure usa una chiave separata.
+
+## Verifica nel browser (agent-browser)
+
+Per le verifiche nel browser usa [agent-browser](https://github.com/vercel-labs/agent-browser)
+(Apache-2.0, v0.44.0): prima del primo uso esegui `agent-browser skills get core` e seguilo.
+Funziona anche nelle sessioni cloud e in GitHub Actions.
+
+- Installazione: `npm install -g agent-browser@0.44.0 && agent-browser install`
+  (su Linux `--with-deps`). Se c'è già un Chrome, `AGENT_BROWSER_EXECUTABLE_PATH=/percorso/chrome`.
+- Verifica completa: `bash tools/smoke-browser.sh` (su Windows da Git Bash o WSL). Avvia
+  `server.js` con la fixture di esempio (`tools/smoke-server.js`, senza chiave), apre la pagina
+  a 1280×800 e 390×844, controlla navi in mappa, apertura della scheda con un clic vero del mouse
+  e assenza di errori JavaScript. Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
+- Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
+- Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
+  registro npm. Senza tile la mappa resta scura: è normale.
+- In CI il workflow `Browser` la esegue quando cambiano pagina, server, fixture o la verifica.
