@@ -1,0 +1,74 @@
+# Crea la VM Oracle Cloud Always Free riprovando ogni 10 minuti finché Oracle non ha posto
+# (a Milano le macchine ARM gratuite sono spesso esaurite). Appena la VM esiste:
+# apre una issue con l'IP pubblico e si disattiva da solo.
+# Serve: secret OCI_CONFIG (anteprima del file di configurazione dell'API key Oracle),
+# OCI_API_KEY (chiave privata .pem dell'API key) e VM_SSH_KEY (chiave privata SSH della VM).
+name: Crea VM Oracle
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+concurrency:
+  group: crea-vm-oracle
+  cancel-in-progress: false
+
+jobs:
+  crea:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OCI_CLI_CONFIG_FILE: ${{ github.workspace }}/../oci/config
+      OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+      SSH_PUBLIC_KEY_FILE: ${{ github.workspace }}/../oci/vm.pub
+    steps:
+      - uses: actions/checkout@v4
+      - name: Credenziali
+        env:
+          OCI_CONFIG: ${{ secrets.OCI_CONFIG }}
+          OCI_API_KEY: ${{ secrets.OCI_API_KEY }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          for s in OCI_CONFIG OCI_API_KEY VM_SSH_KEY; do
+            [ -n "${!s}" ] || { echo "::error::Manca il secret $s (Settings → Secrets and variables → Actions)"; exit 1; }
+          done
+          dir="$(dirname "$OCI_CLI_CONFIG_FILE")"
+          install -m 700 -d "$dir"
+          umask 077
+          printf '%s\n' "$OCI_API_KEY" > "$dir/api.pem"
+          printf '%s\n' "$OCI_CONFIG" | grep -v '^key_file' > "$OCI_CLI_CONFIG_FILE"
+          echo "key_file=$dir/api.pem" >> "$OCI_CLI_CONFIG_FILE"
+          grep -q '^\[' "$OCI_CLI_CONFIG_FILE" || sed -i '1i [DEFAULT]' "$OCI_CLI_CONFIG_FILE"
+          printf '%s\n' "$VM_SSH_KEY" > "$dir/vm.key"
+          ssh-keygen -y -f "$dir/vm.key" > "$SSH_PUBLIC_KEY_FILE" \
+            || { echo "::error::VM_SSH_KEY non è una chiave privata SSH valida"; exit 1; }
+          rm "$dir/vm.key"
+      - name: Installa OCI CLI
+        run: pip install --quiet oci-cli && oci --version
+      - name: Crea la VM
+        id: vm
+        run: bash .github/scripts/crea-vm-oracle.sh
+      - name: Avvisa e fermati
+        if: steps.vm.outputs.vm_ip != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VM_IP: ${{ steps.vm.outputs.vm_ip }}
+          VM_SIZE: ${{ steps.vm.outputs.vm_size }}
+        run: |
+          body="La VM Oracle è attiva${VM_SIZE:+ ($VM_SIZE)}.
+
+          **IP pubblico: \`$VM_IP\`**
+
+          Prossimo passo: in ogni repo (BoatRadar, DressIt, QuantTradingSystem) aggiungi in
+          Settings → Secrets and variables → Actions → Variables la variabile \`VM_HOST\` = \`$VM_IP\`.
+
+          Il workflow *Crea VM Oracle* si è disattivato da solo."
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+          gh issue create --title "VM Oracle creata: $VM_IP" --body "$body"
+          gh workflow disable crea-vm-oracle.yml
