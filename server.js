@@ -3,6 +3,7 @@
 // Richiede Node 22+ e il pacchetto ws (npm install).
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
@@ -92,11 +93,16 @@ function connect() {
   status.hasKey = !!key;
   if (!key) { setTimeout(connect, 5000); return; } // riprova: la chiave può essere aggiunta a server avviato
 
-  const ws = current = new WebSocket(process.env.AISSTREAM_URL || 'wss://stream.aisstream.io/v0/stream');
+  const url = process.env.AISSTREAM_URL || 'wss://stream.aisstream.io/v0/stream';
+  // Diagnosi con un proxy come Proxelar (AGENTS.md): con NODE_USE_ENV_PROXY=1 Node legge HTTPS_PROXY/HTTP_PROXY,
+  // ma ws apre la connessione da sé e il proxy va passato esplicitamente come agent
+  const options = process.env.NODE_USE_ENV_PROXY === '1'
+    ? { agent: url.startsWith('wss:') ? https.globalAgent : http.globalAgent } : {};
+  const ws = current = new WebSocket(url, options);
   let received = false;
   ws.on('open', () => {
     lastMessage = Date.now();
-    console.log('aisstream.io: connesso, invio sottoscrizione');
+    console.log(`aisstream.io: connesso (compressione: ${/permessage-deflate/.test(ws.extensions) ? 'sì' : 'no'}), invio sottoscrizione`);
     status.connected = true;
     ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: BBOX, FilterMessageTypes: ['PositionReport',
       'StandardClassBPositionReport', 'ExtendedClassBPositionReport', 'ShipStaticData', 'StaticDataReport'] }));

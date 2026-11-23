@@ -38,3 +38,36 @@ larghezza da telefono, e dillo esplicitamente se non hai potuto farlo.
 - Non salvare né committare mai la chiave aisstream.
 - Le fonti sui proprietari sono link a registri pubblici consultati dall'utente:
   non aggiungere scraping automatico di dati personali.
+
+## Diagnosi del flusso aisstream (Proxelar)
+
+[Proxelar](https://github.com/emanuele-em/proxelar) (MIT, v0.7.0) è un proxy locale che mostra
+i frame WebSocket fra `server.js` e aisstream: serve a misurare peso e frequenza dei messaggi e a
+registrare messaggi veri per i test. Si usa solo in locale, mai sul server in cloud.
+
+1. Installa Proxelar (`brew install proxelar`, `cargo install proxelar` o l'immagine Docker
+   `ghcr.io/emanuele-em/proxelar`) e avvialo in modo forward salvando la sessione:
+   `mkdir -p diagnosi && proxelar -i terminal --save-session diagnosi/aisstream.proxelar.json`
+   (porta 8080; al primo avvio crea la CA in `~/.proxelar/proxelar-ca.pem`).
+2. In un altro terminale avvia il server attraverso il proxy:
+   `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:8080 NODE_EXTRA_CA_CERTS=~/.proxelar/proxelar-ca.pem node server.js`
+   (Windows PowerShell: imposta le stesse variabili con `$env:NOME="valore"`). Senza
+   `NODE_USE_ENV_PROXY=1` il server ignora il proxy e si collega diretto.
+3. Lascia arrivare i dati per 2-5 minuti, poi `Ctrl+C` su Proxelar (scrive la sessione) e sul server.
+4. Estrai misure e fixture: `node tools/estrai-fixture.js diagnosi/aisstream.proxelar.json --out test/fixtures/aisstream-<zona>.json`.
+   Stampa messaggi al secondo, KB/s, peso medio, tipi e posizioni anomale; la fixture contiene
+   fino a 100 messaggi (`--max`), con tutte le posizioni anomale, senza chiave.
+5. `npm test`: `test/fixtures.test.js` rimanda al server ogni `test/fixtures/aisstream-*.json`.
+
+Attenzione:
+
+- La sessione `.proxelar.json` **non è redatta** e contiene la chiave: resta in `diagnosi/`
+  (ignorata da git) e va cancellata dopo l'estrazione. Committa solo la fixture.
+- Proxelar toglie l'offerta `permessage-deflate` verso aisstream: via proxy la connessione è
+  sempre non compressa, quindi le misure sono sul peso non compresso e la compressione reale non
+  si vede da lì. La dice il log di `server.js` collegato diretto:
+  `aisstream.io: connesso (compressione: sì|no)`. Poiché aisstream limita la banda delle
+  connessioni non compresse, tieni brevi le registrazioni: se il conteggio al secondo è molto
+  più basso di quello del server collegato diretto, aisstream sta scartando messaggi.
+- Una sola connessione per chiave: ferma ogni altro `server.js` con la stessa chiave (anche quello in cloud)
+  durante la registrazione, oppure usa una chiave separata.
