@@ -65,7 +65,7 @@ jobs:
 
           **IP pubblico: \`$VM_IP\`**
 
-          Prossimo passo: in ogni repo (BoatRadar, DressIt, QuantTradingSystem, OpenVitals.io) aggiungi in
+          Prossimo passo: in ogni repo (BoatRadar, DressIt, QuantTradingSystem) aggiungi in
           Settings → Secrets and variables → Actions → Variables la variabile \`VM_HOST\` = \`$VM_IP\`.
 
           Il workflow *Crea VM Oracle* si è disattivato da solo."
