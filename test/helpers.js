@@ -45,21 +45,32 @@ async function startServer(env = {}, aisOptions = {}) {
   child.stdout.on('data', d => { log += d; });
   child.stderr.on('data', d => { log += d; });
 
+  // agent: false = connessione diretta anche se l'ambiente del test ha NODE_USE_ENV_PROXY e un proxy
   const get = pathname => new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path: pathname }, res => {
+    http.get({ host: '127.0.0.1', port, path: pathname, agent: false }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
     }).on('error', reject);
   });
   const getJson = async p => JSON.parse((await get(p)).body.toString('utf8'));
-
-  await waitFor(() => get('/api/status').then(() => true, () => false), 'server in ascolto');
-  const { socket, subscription } = await connected;
-  return {
-    fakeAis, socket, subscription, get, getJson, log: () => log,
-    stop() { child.kill(); fakeAis.close(); },
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; }
+    await new Promise(resolve => fakeAis.close(() => resolve()));
   };
+
+  // se l'avvio fallisce, chiudo figlio e finto aisstream: altrimenti npm test resterebbe appeso
+  try {
+    await waitFor(() => get('/api/status').then(() => true, () => false), 'server in ascolto');
+    const timeout = new Promise((_, reject) => setTimeout(() =>
+      reject(new Error('timeout in attesa di: sottoscrizione al finto aisstream\n' + log)), 5000).unref());
+    const { socket, subscription } = await Promise.race([connected, timeout]);
+    return { fakeAis, socket, subscription, get, getJson, log: () => log, stop };
+  } catch (err) {
+    await stop();
+    throw err;
+  }
 }
 
 module.exports = { freePort, waitFor, startServer };

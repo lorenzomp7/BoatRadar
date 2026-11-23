@@ -29,9 +29,11 @@ Firma dell'APK e riconoscimento di Flutter funzionano anche senza JADX e Apktool
 
 1. Telefono collegato: `rea list-adb-devices` per il seriale, poi
    `rea list-adb-packages <seriale> --scope third_party --json` per il nome del pacchetto.
-2. `bash tools/analizza-apk.sh --adb <seriale> <pacchetto>` (oppure `bash tools/analizza-apk.sh app.apk`).
-   Lo script salva le uscite in `diagnosi/apk/<pacchetto>/`, cerca le librerie di mappa, avvisi e
-   rete e crea la scheda con versione, data, sha256 e librerie trovate.
+2. `bash tools/analizza-apk.sh --adb <seriale> <pacchetto>` (oppure, con un APK già scaricato,
+   `bash tools/analizza-apk.sh app.apk <pacchetto>`). Lo script salva le uscite in
+   `diagnosi/apk/<pacchetto>/`, cerca le librerie di mappa, avvisi e rete e crea la scheda con
+   versione, data, sha256 e librerie trovate (con il numero di classi). Se manca JADX non crea
+   la scheda ed esce con 1: firma e Flutter restano comunque in `diagnosi/apk/`.
 3. Completa la scheda leggendo `pacchetto.json` (permessi, servizi, ricevitori) e `risorse.json`
    (categorie di nave, testi degli avvisi): ogni scoperta rimanda a un punto del Piano.
 4. Cancella gli APK quando hai finito: `rm -r diagnosi/apk/<pacchetto>`.

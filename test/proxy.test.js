@@ -36,7 +36,7 @@ test('con NODE_USE_ENV_PROXY=1 la connessione ad aisstream passa dal proxy', asy
     s.socket.send(JSON.stringify({ MetaData: { MMSI: 247000001 },
       Message: { PositionReport: { Latitude: 45.43, Longitude: 12.33, Sog: 3, Cog: 10, NavigationalStatus: 0 } } }));
     await waitFor(async () => (await s.getJson('/api/status')).vessels === 1, 'nave ricevuta via proxy');
-  } finally { s.stop(); p.proxy.close(); }
+  } finally { await s.stop(); p.proxy.close(); }
 });
 
 test('senza NODE_USE_ENV_PROXY il proxy non viene usato', async () => {
@@ -45,7 +45,7 @@ test('senza NODE_USE_ENV_PROXY il proxy non viene usato', async () => {
   try {
     assert.equal(p.seen.length, 0);
     assert.equal(s.subscription.APIKey, 'chiave-di-test');
-  } finally { s.stop(); p.proxy.close(); }
+  } finally { await s.stop(); p.proxy.close(); }
 });
 
 test('il log dice se la compressione permessage-deflate è attiva', async () => {
@@ -53,7 +53,7 @@ test('il log dice se la compressione permessage-deflate è attiva', async () => 
   try {
     await waitFor(() => /compressione: (sì|no)/.test(s.log()), 'riga di log sulla compressione');
     assert.match(s.log(), /connesso \(compressione: no\)/);
-  } finally { s.stop(); }
+  } finally { await s.stop(); }
 });
 
 test('il log riporta «compressione: sì» quando aisstream la accetta', async () => {
@@ -61,5 +61,5 @@ test('il log riporta «compressione: sì» quando aisstream la accetta', async (
   try {
     await waitFor(() => /compressione: (sì|no)/.test(s.log()), 'riga di log sulla compressione');
     assert.match(s.log(), /connesso \(compressione: sì\)/);
-  } finally { s.stop(); }
+  } finally { await s.stop(); }
 });

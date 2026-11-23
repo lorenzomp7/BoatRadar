@@ -46,6 +46,6 @@ for (const file of files) {
       for (const f of geo.features) assert.equal(f.geometry.coordinates.length, 2);
       // il server risponde ancora a tutte le API
       assert.equal((await s.get('/api/search?q=' + encodeURIComponent('LA'))).status, 200);
-    } finally { s.stop(); }
+    } finally { await s.stop(); }
   });
 }

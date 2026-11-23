@@ -13,6 +13,13 @@ const path = require('node:path');
 
 const POSITION_TYPES = ['PositionReport', 'StandardClassBPositionReport', 'ExtendedClassBPositionReport'];
 
+// Minimo e massimo con un ciclo: Math.min(...xs) va in errore oltre circa 100.000 valori.
+function range(xs) {
+  let min = Infinity, max = -Infinity;
+  for (const x of xs) if (Number.isFinite(x)) { if (x < min) min = x; if (x > max) max = x; }
+  return min <= max ? { min, max } : null;
+}
+
 // Proxelar serializza il contenuto dei frame come array di byte; per prudenza accetta anche testo o base64.
 function payloadText(payload) {
   if (Array.isArray(payload)) return Buffer.from(payload).toString('utf8');
@@ -90,8 +97,8 @@ function measure(connections) {
       if (isAnomalous(msg)) anomalous++;
     } catch { invalid++; }
   }
-  const times = frames.map(f => f.time).filter(Number.isFinite);
-  const seconds = times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 1000 : 0;
+  const span = range(frames.map(f => f.time));
+  const seconds = span ? (span.max - span.min) / 1000 : 0;
   return {
     connections: connections.length,
     messages: frames.length,
@@ -106,7 +113,7 @@ function measure(connections) {
   };
 }
 
-// Sceglie fino a max messaggi: tutte le posizioni anomale, i tipi rari e il resto in proporzione,
+// Sceglie fino a max messaggi: prima le posizioni anomale (fino a max), poi i tipi rari e il resto in proporzione,
 // mantenendo l'ordine di arrivo (i test li rimandano nello stesso ordine).
 function pick(connections, max = 100) {
   const parsed = [];
@@ -154,24 +161,39 @@ function main(argv) {
   const args = [...argv];
   const opt = name => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : undefined; };
   const out = opt('--out');
-  const max = Number(opt('--max')) || 100;
+  const maxArg = opt('--max');
+  const max = maxArg === undefined ? 100 : Number(maxArg);
+  const overwrite = args.includes('--sovrascrivi');
+  if (overwrite) args.splice(args.indexOf('--sovrascrivi'), 1);
   const file = args[0];
+  if (!Number.isInteger(max) || max < 1) {
+    console.error('--max deve essere un numero intero positivo');
+    return 2;
+  }
   if (!file) {
-    console.error('uso: node tools/estrai-fixture.js <sessione.proxelar.json> [--out test/fixtures/aisstream-<nome>.json] [--max 100]');
+    console.error('uso: node tools/estrai-fixture.js <sessione.proxelar.json> [--out test/fixtures/aisstream-<nome>.json] [--max 100] [--sovrascrivi]');
     return 2;
   }
   const connections = readSession(JSON.parse(fs.readFileSync(file, 'utf8')));
   const m = measure(connections);
   console.log(report(file, m));
   const messages = pick(connections, max);
+  if (!messages.length) {
+    console.error('nessun messaggio di aisstream nella sessione: non salvo una fixture vuota');
+    return 1;
+  }
   const dest = out || path.join(__dirname, '..', 'test', 'fixtures', `aisstream-${new Date().toISOString().slice(0, 10)}.json`);
   if (!/(^|[\\/])aisstream-[^\\/]+\.json$/.test(dest)) {
     console.error('il file di uscita deve chiamarsi aisstream-<nome>.json, così il test delle fixture lo trova');
     return 2;
   }
+  if (fs.existsSync(dest) && !overwrite) {
+    console.error(`${dest} esiste già: scegli un altro --out o aggiungi --sovrascrivi`);
+    return 2;
+  }
   const text = JSON.stringify({
     fonte: 'aisstream.io registrato con Proxelar (tools/estrai-fixture.js)',
-    registrato: new Date(Math.min(...connections.flatMap(c => c.frames.map(f => f.time)).filter(Number.isFinite), Date.now())).toISOString(),
+    registrato: new Date(range(connections.flatMap(c => c.frames.map(f => f.time)))?.min ?? Date.now()).toISOString(),
     misure: m,
     messaggi: messages,
   }, null, 1) + '\n';
@@ -190,4 +212,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { payloadText, headerValue, redact, messageType, isAnomalous, readSession, measure, pick, report, main };
+module.exports = { range, payloadText, headerValue, redact, messageType, isAnomalous, readSession, measure, pick, report, main };

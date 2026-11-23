@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
+const { isAnomalous } = require('./estrai-fixture');
 
 const ROOT = path.join(__dirname, '..');
 const port = Number(process.argv[2]) || 8799;
@@ -40,22 +41,21 @@ fakeAis.on('listening', () => {
   waitReady();
 });
 
-// pronto quando /api/status conta tutte le navi della fixture che hanno una posizione
-const expected = new Set(messaggi.filter(m => /PositionReport$/.test(Object.keys(m.Message || {})[0] || ''))
+// pronto quando /api/status conta le navi della fixture con una posizione valida (quelle anomale
+// possono essere scartate dal server, punto 1 del Piano); al massimo 15 s in tutto
+const expected = new Set(messaggi.filter(m => /PositionReport$/.test(Object.keys(m.Message || {})[0] || '') && !isAnomalous(m))
   .map(m => m.MetaData?.MMSI)).size;
 function waitReady() {
   const started = Date.now();
   (function poll() {
-    http.get(`http://127.0.0.1:${port}/api/status`, res => {
+    if (Date.now() - started > 15000) { console.error(`server.js non ha ricevuto le ${expected} navi della fixture in 15 s`); stop(1); }
+    http.get({ host: '127.0.0.1', port, path: '/api/status', agent: false }, res => {
       let body = '';
       res.on('data', c => { body += c; });
       res.on('end', () => {
         try { if (JSON.parse(body).vessels >= expected) return console.log(`pronto http://127.0.0.1:${port}`); } catch { /* riprova */ }
         setTimeout(poll, 100);
       });
-    }).on('error', () => {
-      if (Date.now() - started > 15000) { console.error('server.js non risponde'); stop(1); }
-      setTimeout(poll, 100);
-    });
+    }).on('error', () => setTimeout(poll, 100));
   })();
 }

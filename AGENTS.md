@@ -52,18 +52,24 @@ registrare messaggi veri per i test. Si usa solo in locale, mai sul server in cl
    (porta 8080; al primo avvio crea la CA in `~/.proxelar/proxelar-ca.pem`).
 2. In un altro terminale avvia il server attraverso il proxy:
    `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:8080 NODE_EXTRA_CA_CERTS=~/.proxelar/proxelar-ca.pem node server.js`
-   (Windows PowerShell: imposta le stesse variabili con `$env:NOME="valore"`). Senza
-   `NODE_USE_ENV_PROXY=1` il server ignora il proxy e si collega diretto.
-3. Lascia arrivare i dati per 2-5 minuti, poi `Ctrl+C` su Proxelar (scrive la sessione) e sul server.
+   (Windows PowerShell: imposta le stesse variabili con `$env:NOME="valore"` e toglile con
+   `Remove-Item Env:NOME` quando hai finito). Senza `NODE_USE_ENV_PROXY=1` il server ignora il
+   proxy e si collega diretto. Provato con Node 22.23; con versioni di Node che non conoscono
+   `NODE_USE_ENV_PROXY` il server va diretto e Proxelar non mostra connessioni.
+3. Lascia arrivare i dati per 2-5 minuti, poi `Ctrl+C` prima sul server e poi su Proxelar
+   (che alla chiusura scrive la sessione).
 4. Estrai misure e fixture: `node tools/estrai-fixture.js diagnosi/aisstream.proxelar.json --out test/fixtures/aisstream-<zona>.json`.
    Stampa messaggi al secondo, KB/s, peso medio, tipi e posizioni anomale; la fixture contiene
-   fino a 100 messaggi (`--max`), con tutte le posizioni anomale, senza chiave.
+   fino a 100 messaggi (`--max`), prima le posizioni anomale e poi un po' di ogni tipo, senza
+   chiave. Non sovrascrive una fixture esistente se non aggiungi `--sovrascrivi`.
 5. `npm test`: `test/fixtures.test.js` rimanda al server ogni `test/fixtures/aisstream-*.json`.
 
 Attenzione:
 
 - La sessione `.proxelar.json` **non è redatta** e contiene la chiave: resta in `diagnosi/`
-  (ignorata da git) e va cancellata dopo l'estrazione. Committa solo la fixture.
+  (ignorata da git) e va cancellata dopo l'estrazione. Committa solo la fixture. Anche
+  l'interfaccia di Proxelar mostra a schermo il messaggio di sottoscrizione con la chiave: non
+  registrare né condividere lo schermo durante la diagnosi.
 - Proxelar toglie l'offerta `permessage-deflate` verso aisstream: via proxy la connessione è
   sempre non compressa, quindi le misure sono sul peso non compresso e la compressione reale non
   si vede da lì. La dice il log di `server.js` collegato diretto:

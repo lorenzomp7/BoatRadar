@@ -79,7 +79,8 @@ const freePort = () => new Promise((resolve, reject) => {
 function request(port, pathname, gzip) {
   return new Promise((resolve, reject) => {
     const t0 = process.hrtime.bigint();
-    http.get({ host: '127.0.0.1', port, path: pathname, headers: gzip ? { 'Accept-Encoding': 'gzip' } : {} }, res => {
+    // agent: false = connessione diretta, anche con NODE_USE_ENV_PROXY e un proxy nell'ambiente
+    http.get({ host: '127.0.0.1', port, path: pathname, agent: false, headers: gzip ? { 'Accept-Encoding': 'gzip' } : {} }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ ms: Number(process.hrtime.bigint() - t0) / 1e6, body: Buffer.concat(chunks) }));

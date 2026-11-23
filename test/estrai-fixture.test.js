@@ -103,3 +103,35 @@ test('la riga di comando salva una fixture senza chiave che il test delle fixtur
   try { assert.equal(ex.main([input, '--out', path.join(dir, 'altro.json')]), 2); } finally { console.error = err; }
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('una registrazione lunga (150.000 frame) non manda in errore le misure', () => {
+  const frames = [];
+  const payload = bytes(pos(1, 45, 12));
+  for (let i = 0; i < 150000; i++) frames.push({ direction: 'ServerToClient', opcode: 'Binary', time: i * 2, truncated: false, payload });
+  const m = ex.measure([{ frames, offered: null, accepted: null }]);
+  assert.equal(m.messages, 150000);
+  assert.equal(m.seconds, 300);
+  assert.deepEqual(ex.range([3, -1, NaN, 7]), { min: -1, max: 7 });
+  assert.equal(ex.range([]), null);
+});
+
+test('la riga di comando rifiuta fixture vuote, sovrascritture e --max non validi', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-'));
+  const input = path.join(dir, 's.proxelar.json');
+  const out = path.join(dir, 'aisstream-prova.json');
+  const quiet = fn => { const l = console.log, e = console.error; console.log = console.error = () => {};
+    try { return fn(); } finally { console.log = l; console.error = e; } };
+  try {
+    const empty = session(); empty.websockets[1].frames = empty.websockets[1].frames.slice(0, 1); // solo il frame del client
+    fs.writeFileSync(input, JSON.stringify(empty));
+    assert.equal(quiet(() => ex.main([input, '--out', out])), 1);
+    assert.equal(fs.existsSync(out), false);
+
+    fs.writeFileSync(input, JSON.stringify(session()));
+    assert.equal(quiet(() => ex.main([input, '--out', out, '--max', '0'])), 2);
+    assert.equal(quiet(() => ex.main([input, '--out', out, '--max', 'tanti'])), 2);
+    assert.equal(quiet(() => ex.main([input, '--out', out])), 0);
+    assert.equal(quiet(() => ex.main([input, '--out', out])), 2);            // esiste già
+    assert.equal(quiet(() => ex.main([input, '--out', out, '--sovrascrivi'])), 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
