@@ -89,3 +89,10 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
 - Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
   registro npm. Senza tile la mappa resta scura: è normale.
 - In CI il workflow `Browser` la esegue quando cambiano pagina, server, fixture o la verifica.
+
+## Prestazioni (flameox)
+
+Prima di ottimizzare `server.js` misura con `tools/carico.js` (stesse navi a ogni misura) e, per
+sapere dove vanno CPU e memoria, con [flameox](https://github.com/morluto/flameox) (MIT, v0.2.9).
+Comandi, interpretazione e tabella dei risultati in `docs/prestazioni.md`: aggiungi una riga con
+`--registra` prima e dopo ogni modifica che tocca `/api/locations` o lo stato in memoria.
