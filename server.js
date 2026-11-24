@@ -144,12 +144,6 @@ setInterval(() => {
   }
 }, 30000);
 
-// Render (piano gratuito) spegne il servizio dopo 15 minuti senza visite e le navi in memoria si perdono:
-// una visita ogni 10 minuti all'indirizzo pubblico lo tiene acceso
-if (process.env.RENDER_EXTERNAL_URL) {
-  setInterval(() => fetch(process.env.RENDER_EXTERNAL_URL + '/api/status').catch(() => {}), 10 * 60 * 1000);
-}
-
 setInterval(() => {
   const limit = Date.now() - STALE_MS;
   for (const [mmsi, p] of positions) if (p.ts < limit) positions.delete(mmsi);
@@ -158,8 +152,13 @@ setInterval(() => {
   for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) vessels.delete(mmsi);
 }, 60000);
 
+// La pagina può stare su un altro dominio (GitHub Pages): le API sono pubbliche e in sola lettura,
+// quindi di base le può leggere qualunque origine; CORS_ORIGIN la restringe (es. https://lorenzomp7.github.io)
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+
 function json(req, res, body) {
-  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': CORS_ORIGIN, ...(CORS_ORIGIN === '*' ? {} : { Vary: 'Origin' }) };
   let data = Buffer.from(JSON.stringify(body));
   if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) { data = zlib.gzipSync(data); headers['Content-Encoding'] = 'gzip'; }
   res.writeHead(200, headers);
@@ -210,6 +209,11 @@ http.createServer((req, res) => {
   if (url === '/api/vessel') return json(req, res, vessels.get(Number(query.get('mmsi'))) || null);
   if (url === '/api/search') return json(req, res, search(query.get('q') || ''));
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size });
+  if (url === '/config.js') {
+    // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
+    res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end('// API sullo stesso server della pagina\n');
+  }
   const page = { '/': 'boatradar.html', '/boatradar.html': 'boatradar.html', '/vesselfinder.html': 'vesselfinder.html' }[url];
   if (page) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

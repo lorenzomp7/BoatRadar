@@ -15,16 +15,20 @@ porti e stretti, scarsa in mare aperto (lì servirebbe l'AIS satellitare, che è
 
 Tocca un’imbarcazione per vedere la scheda AIS. Quando trasmessi, mostra anche destinazione, pescaggio e dimensioni. Su telefono la scheda è adattata allo spazio disponibile.
 
-## Online (Render, gratuito)
+## Online (gratuito)
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lorenzomp7/BoatRadar)
+- **Pagina**: GitHub Pages, <https://lorenzomp7.github.io/BoatRadar/>. Si aggiorna da sola a ogni push su `main`
+  (workflow `.github/workflows/pages.yml`).
+- **Server** (`server.js`, raccoglie l'AIS di tutto il mondo): VM Oracle Cloud *Always Free*, 0 €/mese,
+  sempre accesa, quindi le navi non spariscono più dopo 15 minuti senza visite. Si aggiorna da solo a ogni
+  push su `main` (workflow `.github/workflows/deploy-backend.yml`).
 
-1. Clicca il pulsante e accedi a Render con GitHub.
-2. Quando chiede `AISSTREAM_KEY`, incolla la chiave di aisstream.io e conferma.
-3. Dopo un paio di minuti l'app è su `https://boatradar-xxxx.onrender.com`; si aggiorna da sola a ogni push.
+Configurazione, una volta sola: segui [deploy/README.md](deploy/README.md) per la VM, poi in
+**Settings → Secrets and variables → Actions** aggiungi la variabile `VM_HOST`, i secret `VM_SSH_KEY` e
+`AISSTREAM_KEY` (la chiave di aisstream.io), e in **Settings → Pages** scegli *GitHub Actions* come sorgente.
+Il server risponde su `https://boatradar.<IP con i trattini>.sslip.io` e la pagina lo usa in automatico.
 
-Nel piano gratuito Render spegne il servizio dopo 15 minuti senza visite: alla visita successiva
-riparte in circa 30-60 secondi e le navi ricompaiono man mano che arrivano i segnali.
+Finché il server non è configurato la pagina su Pages mostra solo il Baltico (dati aperti di Digitraffic).
 
 ## Avvio in locale
 

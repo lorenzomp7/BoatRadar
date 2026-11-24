@@ -1,0 +1,15 @@
+# Backend BoatRadar sulla VM Oracle. Caddy (deploy/bootstrap.sh) lo espone in HTTPS
+# raggiungendo il container "boatradar" sulla rete Docker condivisa "web".
+services:
+  boatradar:
+    build: ..
+    container_name: boatradar
+    restart: unless-stopped
+    environment:
+      AISSTREAM_KEY: ${AISSTREAM_KEY:?manca il secret AISSTREAM_KEY}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    mem_limit: 1g
+    networks: [web]
+networks:
+  web:
+    external: true

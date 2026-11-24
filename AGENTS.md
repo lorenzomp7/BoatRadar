@@ -2,7 +2,8 @@
 
 Mappa live delle imbarcazioni (AIS). Un server Node senza framework riceve i
 dati da aisstream.io via WebSocket, tiene in memoria l'ultima posizione di ogni
-nave e li serve alla pagina. Deploy su Render (piano gratuito).
+nave e li serve alla pagina. La pagina è su GitHub Pages, il server su una VM Oracle
+Cloud Always Free con Docker e Caddy (`deploy/`, workflow in `.github/workflows/`).
 Lavora su `main_claude` salvo indicazione diversa.
 
 ## Struttura
@@ -12,6 +13,9 @@ Lavora su `main_claude` salvo indicazione diversa.
   `/api/vessel`, `/api/search`, `/api/status`.
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
+- `config.js` (solo su Pages, generato dal workflow): indirizzo del server in
+  `window.BOATRADAR_API`; servito vuoto da `server.js` in locale.
+- `Dockerfile`, `deploy/`: immagine e avvio sulla VM; `deploy/README.md` spiega la configurazione.
 - `test/server.test.js`: avvia il vero `server.js` contro un finto aisstream
   locale (`AISSTREAM_URL`), senza rete esterna.
 
