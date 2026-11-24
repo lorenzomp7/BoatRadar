@@ -16,12 +16,17 @@ Regole:
 
 ## Strumenti (una volta)
 
+Dalla chat non serve fare nulla: in ogni sessione Claude Code su questa repo c'è il server MCP
+`rea` (`.mcp.json`), e Claude installa da solo JADX e Apktool (skill `rea`). Basta mandare gli APK
+in chat, o collegare il telefono, e chiedere l'analisi.
+
 | Strumento | Serve per | Installazione |
 |---|---|---|
-| REA | tutti i comandi | `npm install -g rea-agents@6.10.1` (oppure `npx rea-agents setup` per usarlo come MCP da Claude Code) |
-| JDK 17+ e JADX headless 0.8.0 | manifest, classi, librerie | JAR e controllo SHA-256 nella [guida Android di REA](https://github.com/morluto/rea/blob/main/docs/guides/android/android-analysis.md); poi `REA_JADX_MCP_JAR=/percorso/jadx-headless-mcp-0.8.0-all.jar` |
-| Apktool | stringhe e risorse | `REA_APKTOOL_COMMAND=/percorso/apktool` |
+| REA 6.10.1 | tutti i comandi | `node .claude/rea/rea.mjs <comando>` (versione fissata, senza installazione globale); nel cloud c'è anche `rea` nel PATH |
+| JDK 17+, JADX headless 0.7.1 e Apktool 3.0.2 | manifest, classi, librerie, stringhe, risorse | `bash .claude/rea/installa.sh` (Linux/macOS; nel cloud parte all'avvio della sessione) oppure `.claude\rea\installa-windows.ps1` (Windows): scarica i JAR con controllo SHA-256 in `~/.cache/rea-tools` (Windows `%LOCALAPPDATA%\rea`) |
 | adb | scaricare gli APK dal telefono | Android SDK Platform Tools; debug USB attivo sul telefono; `REA_ADB_PATH` se non è nel `PATH` |
+
+Controllo: `node .claude/rea/check.mjs [file.apk]`.
 
 Firma dell'APK e riconoscimento di Flutter funzionano anche senza JADX e Apktool.
 

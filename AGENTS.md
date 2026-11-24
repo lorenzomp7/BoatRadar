@@ -109,3 +109,4 @@ Per studiare le app di tracciamento navi del Piano dall'APK usa
 [REA](https://github.com/morluto/rea) (MIT, v6.10.1) con `bash tools/analizza-apk.sh`.
 Procedura, strumenti e app da analizzare in `docs/app-analizzate/README.md`. Gli APK restano
 fuori dalla repo (`diagnosi/apk/`); si committa solo la scheda `docs/app-analizzate/<pacchetto>.md`.
+Dalla chat: server MCP `rea` in `.mcp.json` e skill `rea` (Claude installa JADX e Apktool da solo).
