@@ -27,7 +27,8 @@ AGENTS.md (importato sopra) vale per tutti gli agenti; qui solo ciò che riguard
 ### Skill
 
 - Di progetto: `ais-api-change`, da usare per ogni modifica a dati AIS, endpoint o loro visualizzazione.
-- Generali, da `addyosmani/agent-skills` (versione fissata, fonte in `.claude/references/README.md`): pianificazione (`planning-and-task-breakdown`), piccoli passi (`incremental-implementation`), test prima del codice (`test-driven-development`), revisione (`code-review-and-quality`), debug (`debugging-and-error-recovery`), sicurezza (`security-and-hardening`), prestazioni (`performance-optimization`).
+- Generali, da `addyosmani/agent-skills` (versione fissata, fonte in `.claude/references/README.md`): pianificazione (`planning-and-task-breakdown`), piccoli passi (`incremental-implementation`), test prima del codice (`test-driven-development`), revisione (`code-review-and-quality`), debug (`debugging-and-error-recovery`), sicurezza (`security-and-hardening`), prestazioni (`performance-optimization`), osservabilità (`observability-and-instrumentation`), interfaccia (`frontend-ui-engineering`).
+- Quando usarle nel Piano: `observability-and-instrumentation` per la salute del flusso aisstream (punto 34: log, contatori in `/api/status`, avvisi), dato che sulla VM non ci sono i log e gli avvisi di una piattaforma; `frontend-ui-engineering` per la pagina mappa (punti 15, 16, 18, 30: sagome, simboli per zoom, legenda, etichette), insieme alla checklist `.claude/references/accessibility-checklist.md`.
 
 ### Subagenti
 
@@ -35,4 +36,12 @@ AGENTS.md (importato sopra) vale per tutti gli agenti; qui solo ciò che riguard
 
 ### Server MCP
 
-- Nessun server MCP di progetto: per questa repo non ne serve nessuno nel cloud (GitHub è già disponibile tramite `gh`).
+- `rea` ([REA](https://github.com/morluto/rea) di morluto, MIT, 6.10.1) è dichiarato in `.mcp.json`
+  (`node .claude/rea/rea.mjs`, uguale su Linux, macOS e Windows) e attivo in `.claude/settings.json`:
+  in ogni sessione Claude Code su questa repo, nel cloud e sul PC, ci sono i suoi 61 strumenti per gli
+  APK (famiglie `android,apktool,artifact,adb,flutter`: manifest, firma, risorse, classi, Flutter, adb).
+  JADX e Apktool li installa `.claude/rea/installa.sh` (nel cloud parte da solo all'avvio della
+  sessione; prima della prima analisi `bash .claude/rea/installa.sh --attendi`) o, sul PC Windows,
+  `.claude\rea\installa-windows.ps1`, che registra REA anche in Claude Desktop. Come usarlo: skill
+  `rea`. Controllo: `node .claude/rea/check.mjs [file.apk]`.
+- GitHub è già disponibile tramite `gh`.

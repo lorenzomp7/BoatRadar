@@ -1,0 +1,38 @@
+name: Browser
+
+# Verifica della pagina nel browser con agent-browser (tools/smoke-browser.sh).
+# Parte solo quando cambia la pagina o la verifica stessa, oppure a mano da «Actions».
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: [boatradar.html, server.js, package.json, package-lock.json, tools/smoke-*, tools/estrai-fixture.js, test/fixtures/**, .github/workflows/browser.yml]
+  push:
+    branches: [main, main_claude]
+    paths: [boatradar.html, server.js, package.json, package-lock.json, tools/smoke-*, tools/estrai-fixture.js, test/fixtures/**, .github/workflows/browser.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: agent-browser e Chrome for Testing
+        run: |
+          npm install -g agent-browser@0.44.0
+          agent-browser install --with-deps
+      - run: bash tools/smoke-browser.sh
+      - name: Screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot
+          path: diagnosi/smoke/
+          if-no-files-found: ignore

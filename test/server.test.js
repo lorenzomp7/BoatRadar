@@ -22,7 +22,7 @@ function freePort() {
 
 function get(pathname, headers = {}) {
   return new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path: pathname, headers }, res => {
+    http.get({ host: '127.0.0.1', port, path: pathname, headers, agent: false }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
@@ -62,7 +62,9 @@ before(async () => {
   port = await freePort();
   server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
+    // senza variabili di proxy: con NODE_USE_ENV_PROXY=1 server.js passerebbe dal proxy (Diagnosi)
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(https?|no|all)_proxy$|^NODE_USE_ENV_PROXY$/i.test(k))),
+      PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
       AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}`, RENDER_EXTERNAL_URL: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
