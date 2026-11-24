@@ -10,8 +10,8 @@ set -euo pipefail
 
 SHAPE="VM.Standard.A1.Flex"
 NAME="vm-progetti"
-ATTEMPTS="${ATTEMPTS:-5}"
-PAUSE="${PAUSE:-60}"
+ATTEMPTS="${ATTEMPTS:-3}"
+PAUSE="${PAUSE:-30}"
 # Prima la VM grande (tutti i progetti), poi la piccola, che trova posto più facilmente.
 SIZES=("2 12" "1 6")
 
@@ -78,7 +78,9 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   for size in "${SIZES[@]}"; do
     read -r ocpus mem <<< "$size"
     echo "Tentativo $attempt/$ATTEMPTS: $ocpus OCPU, $mem GB…"
-    if result="$(oci compute instance launch -c "$TENANCY" --availability-domain "$AD" --shape "$SHAPE" \
+    # --no-retry: senza, la CLI riprova da sola l'errore 500 "Out of host capacity" per ~10 minuti
+    # a tentativo e il job finisce nel timeout prima di aver fatto i suoi giri.
+    if result="$(timeout 1080 oci --no-retry compute instance launch -c "$TENANCY" --availability-domain "$AD" --shape "$SHAPE" \
         --shape-config "{\"ocpus\":$ocpus,\"memoryInGBs\":$mem}" --image-id "$IMAGE" --subnet-id "$SUBNET" \
         --assign-public-ip true --display-name "$NAME" --ssh-authorized-keys-file "$SSH_PUBLIC_KEY_FILE" \
         --wait-for-state RUNNING --max-wait-seconds 900 --query 'data.id' --raw-output 2>/tmp/oci-err)"; then
