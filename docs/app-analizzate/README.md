@@ -47,12 +47,16 @@ Firma dell'APK e riconoscimento di Flutter funzionano anche senza JADX e Apktool
 
 | App | Pacchetto | Punti del Piano che la citano | Scheda |
 |---|---|---|---|
-| MarineTraffic | da `list-adb-packages` | 4, 9, 15, 16, 18, 30 | — |
-| VesselFinder | da `list-adb-packages` | 7, 12, 23, 37 | — |
-| MyShipTracking | `com.nativity.myshiptracking` | 10, 17, 18, 31, 39, 41 | — |
-| ShipXplorer | da `list-adb-packages` | 8, 9 | — |
-| Boat Watch | `com.electricpocket.boatwatch` | 3, 20, 24, 26, 28, 29, 40 | — |
-| ShipAtlas | `com.maritimeoptima.production` | 9, 18, 37, 38 | — |
+| MarineTraffic | `com.marinetraffic.android` | 4, 9, 15, 16, 18, 30 | [scheda](com.marinetraffic.android.md) (fonti pubbliche) |
+| VesselFinder | da `list-adb-packages` | 7, 12, 23, 37 | [scheda](vesselfinder.md) (fonti pubbliche) |
+| MyShipTracking | `com.nativity.myshiptracking` | 10, 17, 18, 31, 39, 41 | [scheda](com.nativity.myshiptracking.md) (fonti pubbliche) |
+| ShipXplorer | da `list-adb-packages` | 8, 9 | [scheda](shipxplorer.md) (fonti pubbliche) |
+| Boat Watch | `com.electricpocket.boatwatch` | 3, 20, 24, 26, 28, 29, 40 | [scheda](com.electricpocket.boatwatch.md) (fonti pubbliche) |
+| ShipAtlas | `com.maritimeoptima.production` | 9, 18, 37, 38 | [scheda](com.maritimeoptima.production.md) (fonti pubbliche) |
 
 I pacchetti indicati vengono dai link Play Store del foglio «Confronti»; per le altre tre il
-Piano ha solo il sito web. Quando una scheda è pronta, sostituisci «—» con il link.
+Piano ha solo il sito web.
+
+Le sei schede sono compilate da **fonti pubbliche** (store, pagine di supporto, siti degli
+editori), con le fonti citate riga per riga. Quando arriva un APK, `bash tools/analizza-apk.sh`
+aggiunge librerie, permessi e servizi alla scheda della stessa app (righe «da APK»).
