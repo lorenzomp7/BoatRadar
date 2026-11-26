@@ -47,10 +47,17 @@ Lavora su `main_claude` salvo indicazione diversa.
   avvicina la mappa» (zoom + 2), altezza sullo spazio fra header e scheda (`pickMaxHeight`, almeno ~3 righe).
 - Filtri nella pagina (punto 9 b): legenda «Legenda e filtri» con un pulsante per tipo (`aria-pressed`; spento = anello
   vuoto e testo barrato) e pannello «Filtri» (movimento, velocità da/a, «ricevute negli ultimi», stato di navigazione,
-  «Mostra tutte»), salvati in `localStorage['boatradar:filtri']` come `filterKey` (nessun tipo acceso = `types=` davanti).
+  «Mostra tutte»), salvati in `localStorage['boatradar:filtri']` come `filterKey` (nessun tipo acceso = `types=` davanti,
+  nessuno stato di navigazione acceso = `status=` davanti; velocità e «ricevute negli ultimi» fuori dalle liste delle tendine
+  portate al valore più vicino).
   Il filtro vale sempre nella pagina (`passesFilter` su tutte le fonti unite, anche il Baltico, anche su una risposta chiesta
   col filtro di prima) e, se attivo, va nella vista e nella prova della VM (`viewQuery`); la nave selezionata non si filtra
-  mai; nessun tipo acceso = niente vista né Baltico (`include=` sì). Test in `test/pagina-filtri.test.js`.
+  mai; nessun tipo o nessuno stato acceso = niente vista né Baltico (`include=` sì; da un server di riserva la prova della VM
+  è solo `/status`). Mappa vuota per i filtri: « · nessuna nave con questi filtri» e il pulsante «Mostra tutte» accanto alla
+  riga di stato; dopo una ricarica con filtri del pannello `#filters` parte aperto. Esc con il focus nella legenda chiude
+  prima «Filtri», poi la legenda (dopo gli Esc del popup e della ricerca); su telefono il titolo resta fisso in cima.
+  Un cambio di filtro chiude il popup «N navi qui». I giri sono numerati (`roundSeq`): uno più vecchio dell'ultimo avviato
+  non tocca marker né riga di stato. Test in `test/pagina-filtri.test.js`.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`

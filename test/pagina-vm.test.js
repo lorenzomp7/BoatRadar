@@ -42,6 +42,7 @@ function startPage({ skewMs = 0, routes }) {
   const el = id => {
     if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
       isConnected: true, addEventListener() {}, focus() { document.activeElement = this; },
+      contains(x) { return x === this; },   // Esc nella legenda (punto 9): il focus è dentro #legend?
       setAttribute(k, v) { (this.attributes ||= {})[k] = String(v); },   // aria-pressed dei tipi in legenda (punto 9)
       getClientRects() { return this.style.display === 'none' ? [] : [{}]; } });
     return elements.get(id);

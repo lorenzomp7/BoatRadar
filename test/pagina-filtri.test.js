@@ -1,8 +1,9 @@
 // Punto 9 (b): filtri nella pagina (boatradar.html), senza browser (test/pagina-helpers.js). Legenda con un pulsante per
 // tipo (aria-pressed), pannello «Filtri» (movimento, velocità, «ricevute negli ultimi», stato di navigazione, «Mostra
 // tutte»), scelte in localStorage['boatradar:filtri'] come filterKey. Il filtro vale in pagina su tutte le fonti unite
-// (anche il Baltico) e va al server solo se attivo; la nave selezionata resta sempre; nessun tipo acceso → niente vista
-// né Baltico. La verifica nel browser vero è il passo «filtri» di tools/smoke-browser.sh.
+// (anche il Baltico) e va al server solo se attivo; la nave selezionata resta sempre; nessun tipo o nessuno stato acceso →
+// niente vista né Baltico. Correzioni da revisione: Esc nella legenda, mappa vuota con «Mostra tutte», valori salvati fuori
+// elenco, popup chiuso al cambio, giri sovrapposti numerati. La verifica nel browser vero è il passo «filtri» di tools/smoke-browser.sh.
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { startPage: start, until, sleep } = require('./pagina-helpers');
@@ -158,13 +159,35 @@ test('pagina: pannello Filtri → velocità, movimento, ricevute negli ultimi e 
   assert.equal(page.el('f-seen').value, '');
 });
 
-test('pagina: stato di navigazione, l\'ultima casella accesa non si spegne (non si resta senza navi per sbaglio)', async () => {
-  const page = startPage({ routes, local: { [KEY]: 'status=moored' } });
-  await until(() => has(page, 247000002), 'la petroliera ormeggiata');
-  const last = { name: 'f-status', value: 'moored', checked: false };
-  change(page, last);
-  assert.equal(last.checked, true, 'casella riaccesa');
+test('pagina: stato di navigazione, si spegne anche l\'ultima casella → come senza tipi (niente vista né Baltico), salvato status=', async () => {
+  const page = startPage({ routes });
+  await until(() => page.markers().size === 5, 'cinque navi');
+  page.get('select(247000002); document.getElementById("panel").style.display = "block"');
+  for (const g of ['underway', 'anchor', 'moored', 'fishing', 'limited', 'other']) change(page, { name: 'f-status', value: g, checked: false });
+  assert.equal(page.local.get(KEY), 'status=');
+  assert.equal(page.el('fs-moored').checked, false, 'caselle spente');
+  assert.equal(page.el('filter-count').textContent, ' · 1 attivo');
+  assert.deepEqual([...page.markers().keys()], [247000002], 'resta solo la selezionata');
+  await sleep(60);
+  const v = views(page).length, b = balticReqs(page).length, inc = page.requests.filter(r => r.url.includes('include=')).length;
+  await page.tick();
+  assert.equal(views(page).length, v, 'nessuna vista');
+  assert.equal(balticReqs(page).length, b, 'nessun Baltico');
+  assert.ok(page.requests.filter(r => r.url.includes('include=')).length > inc, 'include= della nave selezionata');
+  assert.match(page.status(), /nessuno stato di navigazione selezionato nei filtri/);
+  // una casella riaccesa: di nuovo vista, con quello stato solo
+  change(page, { name: 'f-status', value: 'moored', checked: true });
   assert.equal(page.local.get(KEY), 'status=moored');
+  // ricaricando senza stati (anche con un tipo spento davanti): resta così, due criteri attivi
+  const again = startPage({ routes, local: { [KEY]: 'types=&status=' } });
+  await again.waitStatus(/nessun tipo di nave selezionato/);
+  const third = startPage({ routes, local: { [KEY]: 'status=&minSog=5' } });
+  await third.waitStatus(/nessuno stato di navigazione selezionato/);
+  assert.equal(views(again).length + views(third).length, 0);
+  assert.equal(balticReqs(again).length + balticReqs(third).length, 0);
+  assert.equal(again.el('filter-count').textContent, ' · 2 attivi');
+  assert.equal(third.el('fs-underway').checked, false);
+  assert.equal(third.el('f-min').value, '5');
 });
 
 test('pagina: localStorage che lancia o con valori non validi → nessun filtro, la pagina funziona', async () => {
@@ -189,4 +212,139 @@ test('pagina: prova della VM da un server di riserva con la stessa vista filtrat
   await until(() => page.requests.some(r => r.url.startsWith(VM.url + '/locations?bbox=')), 'prova della VM');
   const probe = page.requests.find(r => r.url.startsWith(VM.url + '/locations?bbox='));
   assert.match(probe.url, /&types=tanker$/, 'la prova chiede la vista con il filtro');
+});
+
+test('pagina: nessun tipo acceso su un server di riserva → la prova della VM chiede solo /status, nessuna vista', async () => {
+  const VM = { url: 'https://vm.example/api', name: 'VM Oracle' }, RENDER = { url: 'https://render.example/api', name: 'Render', sleeps: true };
+  const page = startPage({ config: { BOATRADAR_APIS: [VM, RENDER] }, session: { 'boatradar:api': RENDER.url },
+    local: { [KEY]: 'types=' },
+    routes: (url, now) => {
+      for (const b of [VM, RENDER]) if (url.startsWith(b.url)) return routes('/api' + url.slice(b.url.length), now);
+      return routes(url, now);
+    } });
+  await until(() => page.requests.some(r => r.url === VM.url + '/status'), 'prova della VM su /status');
+  await sleep(60);
+  await page.tick();
+  assert.deepEqual(page.requests.filter(r => r.url.includes('/locations')).map(r => r.url), [], 'nessuna vista, a nessun server');
+  await page.waitStatus(/nessun tipo di nave selezionato/);
+  assert.equal(page.get('backends.current().url'), VM.url, 'VM pronta (/status) → si torna alla VM');
+});
+
+test('pagina: filtro salvato con valori fuori elenco → portati al più vicino delle tendine (anche nella vista)', async () => {
+  const page = startPage({ routes, local: { [KEY]: 'minSog=4.2&maxSog=12&seen=50' } });
+  await until(() => views(page).length > 0, 'vista');
+  assert.equal(page.el('f-min').value, '5');
+  assert.equal(page.el('f-max').value, '10');
+  assert.equal(page.el('f-seen').value, '60');
+  assert.match(views(page).at(-1).url, /&minSog=5&maxSog=10&seen=60$/);
+  // parità: il minimo scende, il massimo sale (si vede di più, non di meno)
+  const tie = startPage({ routes, local: { [KEY]: 'minSog=2&maxSog=25' } });
+  await until(() => views(tie).length > 0, 'vista');
+  assert.equal(tie.el('f-min').value, '1');
+  assert.equal(tie.el('f-max').value, '30');
+});
+
+test('pagina: filtro che svuota la mappa → «nessuna nave con questi filtri» e «Mostra tutte» nella riga di stato; #filters aperto dopo una ricarica', async () => {
+  const page = startPage({ routes, local: { [KEY]: 'minSog=30' } });
+  await page.waitStatus(/^0 in mappa · nessuna nave con questi filtri · agg\./);
+  assert.equal(page.el('status-reset').hidden, false, 'pulsante «Mostra tutte» visibile');
+  assert.equal(page.el('filters').open, true, 'filtri diversi dai tipi → pannello aperto');
+  page.fireEl('status-reset', 'click');
+  assert.equal(page.local.has(KEY), false);
+  assert.equal(page.el('status-reset').hidden, true);
+  await until(() => page.markers().size === 5, 'di nuovo cinque navi');
+  assert.doesNotMatch(page.status(), /nessuna nave con questi filtri|filtri attivi/);
+  // solo i tipi: pannello chiuso; navi in mappa: niente pulsante
+  const types = startPage({ routes, local: { [KEY]: 'types=tanker' } });
+  await types.waitStatus(/^2 in mappa · filtri attivi/);
+  assert.equal(types.el('filters').open, false);
+  assert.equal(types.el('status-reset').hidden, true);
+  // cambio nella pagina che svuota la mappa: la riga lo dice subito
+  change(types, { id: 'f-min', value: '20' });
+  assert.match(types.status(), /^0 in mappa · nessuna nave con questi filtri/);
+  assert.equal(types.el('status-reset').hidden, false);
+});
+
+test('pagina: Esc con il focus nella legenda chiude prima «Filtri», poi la legenda (focus sul titolo), senza chiudere la scheda', async () => {
+  const page = startPage({ routes });
+  await until(() => page.markers().size === 5, 'cinque navi');
+  page.get('select(247000001)');
+  const legend = page.el('legend'), filters = page.el('filters'), inside = page.el('f-min');
+  legend.contains = x => [legend, filters, inside, page.el('legend-sum'), page.el('filters-sum')].includes(x);
+  filters.contains = x => [filters, inside, page.el('filters-sum')].includes(x);
+  legend.open = true; filters.open = true;
+  inside.focus();
+  let e = page.keydown('Escape');
+  assert.equal(e.defaultPrevented, true);
+  assert.equal(filters.open, false, 'prima il pannello Filtri');
+  assert.equal(legend.open, true);
+  assert.equal(page.document.activeElement, page.el('filters-sum'), 'focus sul titolo di «Filtri»');
+  assert.equal(page.el('panel').style.display, 'block', 'la scheda resta aperta');
+  e = page.keydown('Escape');
+  assert.equal(legend.open, false, 'poi la legenda');
+  assert.equal(page.document.activeElement, page.el('legend-sum'), 'focus sul titolo della legenda');
+  assert.equal(page.el('panel').style.display, 'block', 'la scheda resta aperta');
+  // legenda chiusa: Esc torna a chiudere la scheda
+  page.keydown('Escape');
+  assert.equal(page.el('panel').style.display, 'none');
+});
+
+test('pagina: cambio di filtro con il popup «N navi qui» aperto → popup chiuso; nave scelta senza marker → subito un giro', async () => {
+  const page = startPage({ routes });
+  await until(() => page.markers().size === 5, 'cinque navi');
+  page.get('openPick({ x: 500, y: 400 }, [247000001, 247000002])');
+  assert.ok(page.map._popup, 'popup aperto');
+  change(page, { id: 'f-min', value: '5' });
+  assert.equal(page.map._popup, null, 'popup chiuso dal cambio di filtro');
+  assert.equal(has(page, 247000002), false);
+  await sleep(60);
+  const n = page.requests.length;
+  page.get('select(247000002)');   // la petroliera ferma, nascosta dal filtro: scelta (es. dalla ricerca) torna in mappa
+  await until(() => has(page, 247000002), 'la nave scelta ricompare senza aspettare il giro periodico');
+  assert.ok(page.requests.slice(n).some(r => r.url.includes('include=247000002')));
+});
+
+test('pagina: marker in mappa che al giro dopo non passa più il filtro (da 12 a 0 kn con minSog=5) → tolto', async () => {
+  let sog = 12;
+  const page = startPage({ routes: (url, now) => {
+    if (url.startsWith('/api/locations?bbox=')) return { body: () => ({ type: 'FeatureCollection', total: 3,
+      features: world(now).map(f => (f.mmsi === 247000001 ? ship(247000001, 44.1, 11.1, { ...f.properties, sog, navStat: sog ? 0 : 5 }) : f)) }) };
+    return routes(url, now);
+  }, local: { [KEY]: 'minSog=5' } });
+  await until(() => has(page, 247000001), 'cargo a 12 kn');
+  sog = 0;
+  await sleep(20);
+  await page.tick();
+  assert.equal(has(page, 247000001), false, 'a 0 kn non passa più minSog=5');
+});
+
+test('pagina: giri sovrapposti → un giro più vecchio dell\'ultimo avviato non tocca i marker', async () => {
+  let calls = 0;
+  const page = startPage({ routes: (url, now) => {
+    if (url.startsWith('/api/locations?bbox=')) {
+      calls++;
+      // la seconda vista (il giro più vecchio dei due del test) arriva dopo la terza e porta solo una nave nuova
+      if (calls === 2) return { delay: 300, body: () => ({ type: 'FeatureCollection', total: 1,
+        features: [ship(247000009, 44.4, 11.4, { name: 'VECCHIA', shipType: 70, sog: 5, timestampExternal: now() - 500 })] }) };
+    }
+    return routes(url, now);
+  } });
+  await until(() => page.markers().size === 5, 'cinque navi');
+  const older = page.tick(), newer = page.tick();
+  await newer;
+  assert.equal(page.markers().size, 5);
+  await older;
+  assert.equal(has(page, 247000009), false, 'il giro vecchio non aggiunge');
+  assert.equal(page.markers().size, 5, 'il giro vecchio non toglie');
+});
+
+test('pagina: velocità in un fieldset con legend «Velocità» (da / fino a), stati in un gruppo con nome, titolo fisso su telefono', () => {
+  const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'boatradar.html'), 'utf8');
+  assert.match(html, /<fieldset[^>]*><legend>Velocità<\/legend>\s*<label for="f-min">da<\/label><select id="f-min"><\/select>\s*<label for="f-max">fino a<\/label><select id="f-max"><\/select>/);
+  assert.match(html, /<div id="f-status" role="group" aria-label="Stato di navigazione">/);
+  assert.match(html, /<summary id="legend-sum">Legenda e filtri/);
+  assert.match(html, /<summary id="filters-sum">Filtri<\/summary>/);
+  const phone = html.slice(html.indexOf('@media (max-width: 640px)'));
+  assert.match(phone, /#legend > summary \{[^}]*position:sticky; top:0;[^}]*background:var\(--panel\)/);
+  assert.match(html, /<button type="button" id="status-reset"[^>]*hidden>Mostra tutte<\/button>/);
 });
