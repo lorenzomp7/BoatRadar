@@ -67,6 +67,7 @@ function startPage({ skewMs = 0, routes }) {
     getCenter: () => ({ lat: 44, lng: 11 }),
     getBounds: () => ({ pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }) };
   const L = { map: () => map, tileLayer: () => ({ addTo() {} }), canvas: () => ({}), Util: { wrapNum: x => x },
+    control: { zoom: () => ({ addTo() { return this; } }) },
     CircleMarker: { extend(proto) { class M extends FakeMarker {} Object.assign(M.prototype, proto); return M; } } };
   const fetch = url => {
     requests.push({ url, at: Date.now(), phoneAt: Date.now() + skewMs });

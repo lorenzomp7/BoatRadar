@@ -28,19 +28,37 @@ async function until(fn, what, ms = 5000) {
 // veri. Ogni richiesta registrata ha url, at (ora della pagina alla partenza), outcome e end (ora della pagina alla fine).
 // timeScale: quante volte l'ora e i timer della pagina corrono più veloci di quelli veri (TIME_SCALE; di più per i test
 // che devono far passare minuti, come il ritorno al server principale dopo 5 min).
-function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }) {
+// media: risposte di matchMedia per query (es. { '(pointer: coarse)': true }); size e project: dimensioni e proiezione
+// della mappa finta (punto 10, scelta tra navi sovrapposte).
+function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, media = {},
+  size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }) }) {
   const realStart = Date.now();
   const pageNow = () => realStart + (Date.now() - realStart) * timeScale;
   const elements = new Map();
   const listeners = new Map();   // eventi di document (per visibilitychange)
   const winListeners = new Map();   // eventi di window (per online)
-  const document = { activeElement: null, hidden: false, getElementById: id => el(id),
+  // listener di document (keydown di Esc): docListeners in ordine di registrazione, con capture
+  const docListeners = [];
+  const document = { activeElement: null, hidden: false, getElementById: id => el(id), querySelector: sel => el(sel),
     body: { classList: { add() {}, remove() {}, contains: () => false, toggle() {} } },
-    addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); } };
+    addEventListener(type, fn, opts) {
+      if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn);
+      docListeners.push({ type, fn, capture: opts === true || !!opts?.capture });
+    } };
   const el = id => {
     if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
-      isConnected: true, addEventListener() {}, focus() { document.activeElement = this; }, getClientRects: () => [{}] });
+      isConnected: true, addEventListener() {}, focus() { document.activeElement = this; }, getClientRects: () => [{}],
+      contains(x) { return x === this; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }) });
     return elements.get(id);
+  };
+  // tasto premuto con il focus su target (default document.activeElement): prima i listener con capture, poi gli altri,
+  // fermandosi a stopPropagation; restituisce l'evento (defaultPrevented)
+  const keydown = (key, target = document.activeElement) => {
+    const e = { key, target, defaultPrevented: false, stopped: false,
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } };
+    for (const capture of [true, false]) for (const l of docListeners) if (l.type === 'keydown' && l.capture === capture && !e.stopped) l.fn(e);
+    return e;
   };
   const requests = [];
   class PageDate extends Date {
@@ -50,13 +68,61 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }
   class FakeMarker {
     constructor(latlng, options) { this.latlng = latlng; this.options = { ...options }; }
     on() { return this; } addTo() { return this; } bringToFront() { return this; } redraw() { return this; }
-    bindTooltip() { return this; } setLatLng(ll) { this.latlng = ll; return this; } setStyle(s) { Object.assign(this.options, s); return this; }
+    bindTooltip() { return this; } closeTooltip() { return this; } setLatLng(ll) { this.latlng = ll; return this; } setStyle(s) { Object.assign(this.options, s); return this; }
     getLatLng() { return { lat: this.latlng[0], lng: this.latlng[1] }; } remove() {}
   }
-  const map = { setView() { return this; }, on() { return this; }, invalidateSize() {}, getZoom: () => 6,
+  // Mappa finta: eventi registrati (fire), dimensioni size e proiezione project(latlng) → punto del contenitore;
+  // popup: uno aperto alla volta, popupopen e popupclose come Leaflet
+  const mapHandlers = new Map();
+  // views: argomenti di ogni setView (il primo è la vista iniziale della pagina)
+  const views = [];
+  const map = { views, setView(...a) { views.push(a); return this; }, invalidateSize() {}, getZoom: () => 6,
+    on(ev, fn) { for (const e of ev.split(' ')) mapHandlers.set(e, [...(mapHandlers.get(e) || []), fn]); return this; },
+    fire(ev, data = {}) { for (const fn of mapHandlers.get(ev) || []) fn({ type: ev, target: map, ...data }); return this; },
     getCenter: () => ({ lat: 44, lng: 11 }),
-    getBounds: () => ({ pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }) };
-  const L = { map: () => map, tileLayer: () => ({ addTo() {} }), canvas: () => ({}), Util: { wrapNum: x => x },
+    getBounds: () => ({ pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }),
+    getSize: () => ({ x: size.x, y: size.y }),
+    latLngToContainerPoint: ll => project(Array.isArray(ll) ? { lat: ll[0], lng: ll[1] } : ll),
+    mouseEventToContainerPoint: ev => ({ x: ev.clientX, y: ev.clientY }),
+    containerPointToLatLng: p => ({ lat: null, lng: null, point: p }),
+    _popup: null,
+    closePopup() { const p = this._popup; if (p) { this._popup = null; this.fire('popupclose', { popup: p }); } return this; } };
+  const canvasOptions = [];
+  // Popup finto: content è l'HTML passato a setContent; l'elemento registra i listener e trova le righe data-pick
+  class FakePopup {
+    constructor(options = {}) { this.options = { ...options }; this.listeners = []; }
+    setLatLng(ll) { this.latlng = ll; return this; }
+    setContent(c) { this.content = c; return this; }
+    openOn(m) { m.closePopup(); m._popup = this; m.fire('popupopen', { popup: this }); return this; }
+    isOpen() { return map._popup === this; }
+    rows() { return [...String(this.content).matchAll(/data-pick="(\d+)"/g)].map(x => x[1]); }
+    getElement() {
+      if (!this.el) {
+        const popup = this, rows = new Map();
+        const row = mmsi => { if (!rows.has(mmsi)) rows.set(mmsi, { dataset: { pick: mmsi },
+          closest: sel => (sel.includes('data-pick') ? rows.get(mmsi) : null),
+          focus() { document.activeElement = this; } }); return rows.get(mmsi); };
+        // × del popup (Leaflet: a.leaflet-popup-close-button) con i suoi attributi; pulsante «e altre N» (data-more)
+        const closeButton = { attributes: {}, setAttribute(k, v) { this.attributes[k] = String(v); } };
+        const more = { closest: sel => (sel.includes('data-more') ? more : null), focus() { document.activeElement = this; } };
+        this.el = { addEventListener: (type, fn) => popup.listeners.push({ type, fn }),
+          querySelector: sel => (sel.includes('close-button') ? closeButton
+            : sel.includes('pickrow') && popup.rows().length ? row(popup.rows()[0]) : null),
+          contains: x => [...rows.values()].includes(x) || x === more, row, closeButton, more };
+      }
+      return this.el;
+    }
+    // clic vero su una riga (delegazione: il listener è sull'elemento del popup)
+    clickRow(mmsi) { const target = this.getElement().row(String(mmsi)); for (const l of this.listeners) if (l.type === 'click') l.fn({ target }); }
+    // clic sul pulsante «e altre N: avvicina la mappa»
+    clickMore() { const target = this.getElement().more; for (const l of this.listeners) if (l.type === 'click') l.fn({ target }); }
+  }
+  // opzioni passate a L.map e a L.control.zoom (titoli dei pulsanti di zoom)
+  const mapOptions = [], zoomOptions = [];
+  const L = { map: (id, o) => { mapOptions.push(o); return map; }, tileLayer: () => ({ addTo() {} }),
+    canvas: o => { canvasOptions.push(o); return {}; },
+    control: { zoom: o => { zoomOptions.push(o); return { addTo() { return this; } }; } },
+    popup: o => new FakePopup(o), Util: { wrapNum: x => x },
     CircleMarker: { extend(proto) { class M extends FakeMarker {} Object.assign(M.prototype, proto); return M; } } };
   const abortError = () => Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
   const fetch = (url, opts = {}) => {
@@ -98,7 +164,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }
     },
     clearTimeout: id => { retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
-    ResizeObserver: class { observe() {} }, matchMedia: () => ({ matches: false }),
+    ResizeObserver: class { observe() {} }, matchMedia: q => ({ matches: !!media[q] }),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, navigator: {},
     addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
@@ -114,6 +180,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }
   // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
   const fire = type => { for (const fn of winListeners.get(type) || []) fn({ type }); };
   return { ctx, el, get, requests, stop, storage, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
+    map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }
 

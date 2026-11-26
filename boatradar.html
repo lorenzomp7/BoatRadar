@@ -85,6 +85,25 @@
   #panel td.wait { color:var(--muted); font-size:12px; font-style:italic; width:auto; }
   #panel .vfmore { border-color:#2c4a63; }
   #panel tr.owned td { color:var(--accent); font-weight:600; }
+  /* punto 10: popup di scelta fra navi sovrapposte, scuro come la scheda; righe e × da almeno 44 px */
+  .pick .leaflet-popup-content-wrapper, .pick .leaflet-popup-tip { background:var(--panel); color:var(--text);
+    border:1px solid var(--line); box-shadow:0 6px 24px rgba(0,0,0,.4); }
+  .pick .leaflet-popup-content-wrapper { border-radius:10px; }
+  /* altezza massima: maxHeight del popup, calcolata in openPick sullo spazio libero (pickMaxHeight); oltre si scorre */
+  .pick .leaflet-popup-content { margin:8px; font:13px system-ui, Segoe UI, sans-serif; }
+  .pick .pick-title { margin:4px 40px 6px 4px; color:var(--muted); font-size:12px; }
+  .pick .pickrow { display:block; width:100%; min-height:44px; margin:0 0 4px; padding:6px 10px; text-align:left; cursor:pointer;
+    background:#0f1720; border:1px solid var(--line); border-radius:8px; color:var(--text); font:inherit; }
+  /* hover: fondo appena più chiaro; focus: bordo azzurro di 2 px (≥ 3:1 su riga e pannello), mai il giallo della nave
+     selezionata, così nessuna riga sembra «già scelta». Dentro la riga: il contenuto che scorre non lo taglia. */
+  .pick .pickrow:hover { background:#1f2c3b; }
+  .pick .pickrow:focus-visible { outline:2px solid #7cc4ff; outline-offset:-2px; }
+  .pick .pickmore { color:var(--muted); text-align:center; }
+  .pick .pickrow small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+  /* .leaflet-container davanti: più specifico del CSS di Leaflet (24 px), che può arrivare dopo questo */
+  .leaflet-container .pick a.leaflet-popup-close-button { width:44px; height:44px; font:24px/44px system-ui, sans-serif; color:var(--muted); }
+  .leaflet-container .pick a.leaflet-popup-close-button:hover,
+  .leaflet-container .pick a.leaflet-popup-close-button:focus-visible { color:var(--accent); }
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:2000; max-width:calc(100% - 32px);
     background:var(--panel); border:1px solid var(--accent); border-radius:10px; padding:12px 16px; font-size:14px; display:none;
     box-shadow:0 6px 24px rgba(0,0,0,.4); }
@@ -161,7 +180,7 @@ if (!window.AisLogic) {
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
   clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits,
-  apiList, createFailover, networkDown } = AisLogic;
+  apiList, createFailover, networkDown, validSog, pickRadius, canvasTolerance, nearbyMarkers, pickTouch, pickLimit, pickMaxHeight } = AisLogic;
 
 // Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
 // Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
@@ -229,11 +248,16 @@ const MID = {201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',2
   750:'Guyana',755:'Paraguay',760:'Perù',765:'Suriname',770:'Uruguay',775:'Venezuela'};
 
 const $ = id => document.getElementById(id);
-const map = L.map('map', { preferCanvas:true, zoomControl:true, worldCopyJump:true }).setView([30, 10], 3);
+const map = L.map('map', { preferCanvas:true, zoomControl:false, worldCopyJump:true }).setView([30, 10], 3);
+// pulsanti di zoom con il nome in italiano (title e aria-label: Leaflet li mette in inglese)
+L.control.zoom({ zoomInTitle: 'Ingrandisci', zoomOutTitle: 'Riduci' }).addTo(map);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 18, className: 'tiles', attribution: '© OpenStreetMap · AIS: aisstream.io, Fintraffic / digitraffic.fi (CC BY 4.0)'
 }).addTo(map);
-const renderer = L.canvas({ padding: 0.5 });
+// Punto 10: schermo touch (dito, non mouse) → area toccabile più ampia: tolleranza del canvas (hover, tooltip) e raggio
+// entro cui un tocco raccoglie le navi (pick)
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+const renderer = L.canvas({ padding: 0.5, tolerance: canvasTolerance(TOUCH) });
 
 // Freccia orientata sulla prua (o sulla rotta, se la prua manca e la nave è in moto). Prua nota e nave non in moto
 // (ferma o velocità non nota): freccia corta (options.short). Senza direzione: pallino. Simbolo da symbol() di ais-logic.js.
@@ -517,8 +541,7 @@ async function loadLocations() {
       // la nave selezionata (es. scelta dalla ricerca, arrivata con include=) nasce già con il bordo giallo
       const sel = mmsi === selected;
       const marker = new ShipMarker([lat, lon], { renderer, ...markerStyle(f.properties, sel, now), fillColor:color,
-        ...symbol(f.properties) })
-        .on('click', () => select(mmsi)).addTo(map);
+        ...symbol(f.properties) }).addTo(map);   // clic: map.on('click') → pick (punto 10)
       if (sel) marker.bringToFront();
       marker.bindTooltip(() => tooltipText(mmsi), { direction:'top' });
       m = { marker };
@@ -597,6 +620,110 @@ function select(mmsi, props) {
   openPanel();
   if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
 }
+
+// Punto 10: scelta della nave toccata. Un clic sulla mappa (anche sopra un marker: Leaflet lo passa alla mappa) raccoglie
+// le navi entro pickRadius dal punto del mouse o del dito (non dal centro del marker, che Leaflet mette in containerPoint):
+// nessuna → niente; una → scheda; più di una → popup «N navi qui» con una riga (pulsante da almeno 44 px) per nave.
+// Si proiettano solo i marker nella vista, più il raggio. Raggio: quello del dito se il clic viene da un dito
+// (pointerType dell'evento; senza, il tipo di schermo), e per ogni marker almeno il doppio del suo simbolo (la nave
+// selezionata ha raggio 8: la punta della freccia è a 16 px dal centro). Durante l'animazione dello zoom i marker non
+// sono dove le proiezioni li mettono: niente scelta.
+let pickPopup = null, pickOpener = null, pickCenter = null, pickSeq = 0;
+function pick(point, touch = TOUCH) {
+  if (map._animatingZoom) return;
+  const r = pickRadius(touch), size = map.getSize(), items = [];
+  for (const [mmsi, m] of markers) {
+    const p = map.latLngToContainerPoint(m.marker.getLatLng()), mr = Math.max(r, (m.marker.options.radius || 0) * 2);
+    if (p.x >= -mr && p.y >= -mr && p.x <= size.x + mr && p.y <= size.y + mr) items.push({ mmsi, x: p.x, y: p.y, r: mr });
+  }
+  const near = nearbyMarkers(point, items, r);
+  if (near.length === 1) select(near[0].mmsi);
+  else if (near.length > 1) openPick(point, near.map(n => n.mmsi));
+}
+map.on('click', e => pick(e.originalEvent ? map.mouseEventToContainerPoint(e.originalEvent) : e.containerPoint,
+  pickTouch(e.originalEvent, TOUCH)));
+
+// Riga del popup: NOME, poi «tipo · 12,3 kn · MMSI …» (n.d. per i dati mancanti; l'MMSI distingue le navi omonime)
+function pickRow(mmsi) {
+  const v = meta.get(mmsi) || {}, p = propsOf(mmsi);
+  const type = v.shipType != null ? typeName(v.shipType) || typeOf(v.shipType).label : 'tipo n.d.';
+  const sog = validSog(p.sog) ? p.sog.toFixed(1).replace('.', ',') + ' kn' : 'velocità n.d.';
+  return `<button type="button" class="pickrow" data-pick="${mmsi}"><b>${esc(v.name || 'Senza nome')}</b>`
+    + `<small>${esc(`${type} · ${sog} · MMSI ${mmsi}`)}</small></button>`;
+}
+
+// Margini dell'autoPan: il popup resta sotto l'header e fuori dalla scheda aperta (a destra su desktop, in basso sul
+// telefono), così non si apre una riga coperta. maxHeight: altezza del contenuto che ci sta davvero fra il fondo
+// dell'header e la cima della scheda (telefono) o il fondo della mappa (pickMaxHeight, almeno ~3 righe: oltre scorre).
+function pickPadding() {
+  const m = $('map').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect();
+  const top = Math.max(0, h.bottom - m.top), topLeft = [10, Math.max(10, Math.round(top) + 10)];
+  const height = m.bottom - m.top;
+  if ($('panel').style.display !== 'block') return { topLeft, bottomRight: [10, 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
+  const p = $('panel').getBoundingClientRect();
+  if (!matchMedia('(max-width: 640px)').matches)
+    return { topLeft, bottomRight: [Math.max(10, Math.round(m.right - p.left) + 10), 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
+  return { topLeft, bottomRight: [10, Math.max(10, Math.round(m.bottom - p.top) + 10)],
+    maxHeight: pickMaxHeight({ top, bottom: Math.min(height, p.top - m.top) }) };
+}
+
+// list: MMSI dalla più vicina; al massimo PICK_MAX_ROWS righe, poi «e altre N: avvicina la mappa» (zoom + 2 sul punto)
+function openPick(point, list) {
+  // prima chiudo un popup aperto (il suo popupclose vede ancora il vecchio pickPopup e rimette il focus dov'era prima),
+  // poi prendo l'origine del focus, assegno e apro: popupopen riconosce il popup nuovo
+  map.closePopup();
+  pickOpener = document.activeElement;
+  const pad = pickPadding(), { shown, more } = pickLimit(list), id = `pick-title-${++pickSeq}`;
+  pickCenter = map.containerPointToLatLng(point);
+  pickPopup = L.popup({ className: 'pick', minWidth: 220, maxWidth: 320, maxHeight: pad.maxHeight,
+    autoPanPaddingTopLeft: pad.topLeft, autoPanPaddingBottomRight: pad.bottomRight })
+    .setLatLng(pickCenter)
+    .setContent(`<div class="pick-list" role="group" aria-labelledby="${id}"><p class="pick-title" id="${id}">${list.length} navi qui</p>`
+      + shown.map(pickRow).join('')
+      + (more ? `<button type="button" class="pickrow pickmore" data-more="${more}">e altre ${more}: avvicina la mappa</button>` : '')
+      + '</div>');
+  pickPopup.openOn(map);
+}
+
+// Popup aperto: delega del clic sulle righe (l'elemento è nuovo per ogni popup) e focus sulla prima riga, per tastiera e
+// lettori di schermo. Riga scelta → popup chiuso e scheda della nave.
+map.on('popupopen', e => {
+  if (e.popup !== pickPopup) return;
+  const el = e.popup.getElement();
+  el.addEventListener('click', ev => {
+    const row = ev.target.closest('[data-pick]');
+    if (row) { map.closePopup(); select(Number(row.dataset.pick)); return; }
+    if (!ev.target.closest('[data-more]')) return;
+    const center = pickCenter;
+    map.closePopup();
+    map.setView(center, map.getZoom() + 2);
+  });
+  el.querySelector('.leaflet-popup-close-button')?.setAttribute('aria-label', 'Chiudi elenco');
+  el.querySelector('.pickrow')?.focus();
+  // il tooltip della nave sotto il puntatore spunterebbe da sotto il popup
+  for (const m of markers.values()) m.marker.closeTooltip();
+});
+// Popup chiuso (Esc, ×, riga scelta, clic altrove): se il focus era nel popup torna dove era prima (di solito la mappa)
+map.on('popupclose', e => {
+  if (e.popup !== pickPopup) return;
+  const el = e.popup.getElement(), active = document.activeElement, opener = pickOpener;
+  pickPopup = null;
+  pickOpener = null;
+  pickCenter = null;
+  if (active && active !== document.body && !el.contains(active)) return;
+  const back = opener && opener !== document.body && opener.isConnected && opener.getClientRects().length ? opener : $('map');
+  back.focus();
+});
+// Esc con il popup aperto e il focus nel popup, sulla mappa o da nessuna parte (body) chiude solo il popup (prima di
+// Leaflet e degli altri Esc). Con il focus altrove (ricerca, scheda) Esc fa il suo lavoro lì: chiude i risultati o la scheda.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !pickPopup) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && !$('map').contains(a) && !pickPopup.getElement()?.contains(a)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  map.closePopup();
+}, true);
 
 // Proprietario annotato dall'utente, ricordato per ogni nave in questo browser
 function savedOwner(mmsi) { try { return localStorage.getItem('owner:' + mmsi) || ''; } catch { return ''; } }

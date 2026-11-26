@@ -606,9 +606,44 @@
     return balticNetwork === true && balticOkAt != null && Number.isFinite(t) && t - balticOkAt <= graceMs;
   }
 
+  // Punto 10: area toccabile. pickRadius: distanza in px dal punto toccato entro cui una nave si può scegliere (il dito è
+  // meno preciso del mouse); canvasTolerance: tolleranza del renderer canvas di Leaflet (area di hover e tooltip).
+  const pickRadius = touch => (touch ? 20 : 8);
+  const canvasTolerance = touch => (touch ? 12 : 4);
+  // Marker entro radius px da point ({x, y}, punto del contenitore della mappa): items = [{mmsi, x, y, r}] già proiettati,
+  // r facoltativo = raggio del singolo marker (la nave selezionata è più grande: la punta della sua freccia è a 2 × 8 px),
+  // mai sotto radius; → [{mmsi, d}] dal più vicino, a parità di distanza per MMSI crescente (ordine stabile). Bordo
+  // incluso; coordinate non numeriche scartate.
+  function nearbyMarkers(point, items, radius) {
+    const out = [];
+    for (const it of items || []) {
+      const d = Math.hypot(it.x - point.x, it.y - point.y);
+      const r = Number.isFinite(it.r) ? Math.max(radius, it.r) : radius;
+      if (Number.isFinite(d) && d <= r) out.push({ mmsi: it.mmsi, d });
+    }
+    return out.sort((a, b) => (a.d !== b.d ? a.d - b.d : a.mmsi < b.mmsi ? -1 : a.mmsi > b.mmsi ? 1 : 0));
+  }
+  // Tocco o mouse per questo clic: pointerType dell'evento (PointerEvent di Chrome, Firefox, Safari recente) se c'è,
+  // altrimenti fallback, il tipo di schermo (pointer: coarse). La penna è precisa come il mouse.
+  const pickTouch = (ev, fallback) => (ev && typeof ev.pointerType === 'string' && ev.pointerType
+    ? ev.pointerType === 'touch' : !!fallback);
+  // Tetto all'elenco del popup: le prime max (già dalla più vicina) e quante ne restano fuori
+  const PICK_MAX_ROWS = 15;
+  const pickLimit = (list, max = PICK_MAX_ROWS) => ({ shown: (list || []).slice(0, max), more: Math.max(0, (list || []).length - max) });
+  // Altezza massima in px del contenuto del popup (.leaflet-popup-content): lo spazio libero fra top (fondo dell'header)
+  // e bottom (cima della scheda aperta o fondo della mappa), in px del contenitore della mappa, meno i margini dell'autoPan
+  // sopra e sotto, la punta (tip: punta di Leaflet 20 px + margine sotto il popup 20 px) e chrome (margini del contenuto
+  // 2 × 8, bordo e padding del riquadro 2 × 2); almeno min (titolo e tre righe da 48 px: oltre si scorre). Per difetto.
+  const PICK_MIN_HEIGHT = 168;
+  function pickMaxHeight({ top, bottom, margin = 10, tip = 40, chrome = 20, min = PICK_MIN_HEIGHT } = {}) {
+    const h = Math.floor(bottom - top - 2 * margin - tip - chrome);
+    return Number.isFinite(h) ? Math.max(min, h) : min;
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
-    apiList, createRecheck, createFailover, networkDown };
+    apiList, createRecheck, createFailover, networkDown,
+    pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight };
 });
