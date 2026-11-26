@@ -38,6 +38,11 @@
     border-radius:10px; padding:8px 10px; font-size:12px; }
   #legend span { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
   #legend div { margin:2px 0; }
+  #legend summary { cursor:pointer; color:var(--muted); padding:2px 0; }
+  #legend summary:hover, #legend summary:focus-visible { color:var(--accent); }
+  #legend .sym { display:flex; align-items:center; gap:6px; margin-top:4px; }
+  #legend .sym:first-of-type { border-top:1px solid var(--line); padding-top:6px; }
+  #legend svg { width:12px; height:16px; flex:none; fill:var(--text); stroke:#0b1118; stroke-width:1; }
   .hbtn { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; white-space:nowrap; }
   .hbtn:hover { border-color:var(--accent); }
   #vf { position:absolute; inset:0; width:100%; height:100%; border:0; z-index:900; display:none; background:#0b1118; }
@@ -74,7 +79,9 @@
     .hbtn { padding:5px 8px; font-size:13px; }
     #results { width:100%; max-width:none; }
     #panel { top:auto; left:8px; right:8px; bottom:8px; width:auto; max-width:none; max-height:58vh; padding:14px; }
-    #legend { display:none; }
+    #legend { left:8px; bottom:36px; max-width:calc(100% - 16px); max-height:50vh; overflow:auto; padding:0 12px; }
+    #legend summary { min-height:44px; line-height:44px; padding:0; }   /* bersaglio da almeno 44 px */
+    #legend[open] { padding-bottom:8px; }
     #toast { bottom:calc(58vh + 20px); }
   }
 </style>
@@ -91,8 +98,14 @@
 </header>
 <iframe id="vf" title="Mappa VesselFinder"></iframe>
 <div id="toast"></div>
-<div id="legend"></div>
-<aside id="panel"><button id="close">×</button><div id="content"></div></aside>
+<details id="legend" open>
+  <summary>Legenda</summary>
+  <div id="legend-types"></div>
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-8L4.4,6L0,3.6L-4.4,6Z"/></svg>freccia = in moto</div>
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-5.2L4.4,3.9L0,2.34L-4.4,3.9Z"/></svg>freccia corta = ferma con prua nota</div>
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4"/></svg>pallino = direzione non nota</div>
+</details>
+<aside id="panel"><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
@@ -105,6 +118,7 @@ const API = (window.BOATRADAR_API || '/api').replace(/\/$/, '');
 const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
 const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
+const CLOCK_WAIT_MS = 3000;       // primo aggiornamento: attesa massima di /api/status prima di chiedere il Baltico
 
 // Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
 // Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
@@ -113,7 +127,7 @@ if (!window.AisLogic) {
   document.getElementById('status').textContent = msg;
   throw new Error(msg);
 }
-const { TYPES, typeOf, typeName, validHeading, symbol, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
+const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
   clockSample, createClock, includeParam } = AisLogic;
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
@@ -193,7 +207,9 @@ let worldTotal = 0;
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-$('legend').innerHTML = TYPES.map(t => `<div><span style="background:${t.color}"></span>${t.label}</div>`).join('');
+$('legend-types').innerHTML = TYPES.map(t => `<div><span style="background:${t.color}"></span>${t.label}</div>`).join('');
+// su telefono la legenda parte chiusa (resta il pulsante «Legenda»), così non copre la mappa
+if (matchMedia('(max-width: 640px)').matches) $('legend').open = false;
 
 async function loadDetail(mmsi) {
   const v = await fetch(`${API}/vessel?mmsi=${mmsi}`).then(r => r.ok ? r.json() : null).catch(() => null);
@@ -217,11 +233,13 @@ async function loadBalticMeta() {
   }
 }
 
-async function features(url) {
+// Posizioni di una fonte. setTotal: total della risposta = navi nella vista (solo per la richiesta della vista;
+// quello di include= conta le navi incluse)
+async function features(url, setTotal = false) {
   const res = await fetch(url);
   if (!res.ok) throw new Error('locations ' + res.status);
   const fc = await res.json();
-  if (fc.total != null) worldTotal = fc.total;
+  if (setTotal && fc.total != null) worldTotal = fc.total;
   return fc.features;
 }
 
@@ -235,12 +253,26 @@ async function loadStatus() {
   return st;
 }
 
+let clockChecked = false;   // false fino al primo aggiornamento
+
 async function loadLocations() {
-  const [med, baltic, status] = await Promise.allSettled([
-    features(`${API}/locations?bbox=${viewBox()}${includeParam([selected])}`), features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`), loadStatus()]);
+  const status = loadStatus();
+  // primo aggiornamento: from= del Baltico va calcolato con l'ora corretta, quindi aspetto /api/status (al massimo
+  // CLOCK_WAIT_MS, se il server non risponde si va avanti con l'ora del telefono); dopo tutto parte insieme
+  if (!clockChecked) {
+    clockChecked = true;
+    await Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
+  }
+  // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a
+  // parte con include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista
+  const ship = selected && $('panel').style.display === 'block' ? includeParam([selected]) : '';
+  const [med, inc, baltic, statusResult] = await Promise.allSettled([
+    features(`${API}/locations?bbox=${viewBox()}`, true), ship ? features(`${API}/locations?${ship}`) : [],
+    features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`), status]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
-  // stessa nave in entrambe le fonti: tengo la posizione più recente (properties.source dice da dove viene)
-  const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }]);
+  // stessa nave in più fonti: tengo la posizione più recente (properties.source dice da dove viene); la nave
+  // inclusa vince sulla vista (forse dalla cache) se è più recente
+  const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }, { source: 'aisstream', features: inc.value }]);
   for (const [mmsi, f] of merged) {
     const [lon, lat] = f.geometry.coordinates;
     const { name, shipType } = f.properties;
@@ -253,18 +285,19 @@ async function loadLocations() {
       const marker = new ShipMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95,
         ...symbol(f.properties) })
         .on('click', () => select(mmsi)).addTo(map);
-      marker.bindTooltip(() => meta.get(mmsi)?.name || String(mmsi), { direction:'top' });
+      marker.bindTooltip(() => (meta.get(mmsi)?.name || String(mmsi)) + (stopped(markers.get(mmsi)?.props || {}) ? ' · ferma' : ''),
+        { direction:'top' });
       m = { marker };
       markers.set(mmsi, m);
     } else {
       m.marker.setLatLng([lat, lon]);
-      Object.assign(m.marker.options, symbol(f.properties));
+      m.marker.setSymbol(symbol(f.properties));
       m.marker.setStyle({ fillColor: color });
     }
     m.props = f.properties;
   }
   for (const [mmsi, m] of markers) if (!merged.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
-  const st = status.status === 'fulfilled' ? status.value : null;
+  const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
   const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
     : st.error ? ' · Mondo: ' + st.error
@@ -278,8 +311,14 @@ async function loadLocations() {
   if (selected && markers.has(selected)) render(selected);
 }
 
-function select(mmsi) {
+// Nessuna nave scelta: tolgo il bordo giallo; senza selected la pagina non chiede più la nave con include=
+function deselect() {
   if (selected && markers.has(selected)) markers.get(selected).marker.setStyle({ radius:4, color:'#0b1118', weight:1 });
+  selected = null;
+}
+
+function select(mmsi) {
+  deselect();
   selected = mmsi;
   const m = markers.get(mmsi);
   if (m) { m.marker.setStyle({ radius:8, color:'#ffc83d', weight:3 }).bringToFront(); }
@@ -379,8 +418,7 @@ function render(mmsi) {
 
 // Pagina con tutti i registri, apribile dal pulsante in alto anche senza aver scelto una nave
 function showRegistries() {
-  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle({ radius:4, color:'#0b1118', weight:1 });
-  selected = null;
+  deselect();
   $('content').dataset.mmsi = '';
   $('content').innerHTML = `<h2>Registri</h2>
     <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`
@@ -388,7 +426,7 @@ function showRegistries() {
   $('panel').style.display = 'block';
 }
 
-$('close').onclick = () => { $('panel').style.display = 'none'; };
+$('close').onclick = () => { deselect(); $('panel').style.display = 'none'; };
 
 // Proprietario: i registri non accettano ricerche da link, quindi copio IMO/MMSI, apro il registro
 // e mostro cosa incollare. Equasis chiede l'accesso (gratuito) solo la prima volta.

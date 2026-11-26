@@ -320,6 +320,23 @@ test('createClock: mediana degli ultimi 5 campioni, risposte lente e campioni nu
   assert.equal(AL.createClock().now() <= Date.now(), true, 'senza opzioni usa Date.now');
 });
 
+test('createClock.now(): millisecondi interi anche con scarto frazionario (from= di Digitraffic è un intero)', () => {
+  const c = AL.createClock({ now: () => 1000 });
+  c.add(AL.clockSample(1000, 1001, 500));   // offset 500,5
+  assert.equal(c.offset(), 500.5);
+  assert.ok(Number.isInteger(c.now()), `now() ${c.now()}`);
+  assert.equal(c.now(), 500);
+});
+
+test('createClock.add ignora campioni con rtt negativo o non finito (punto 7)', () => {
+  const c = AL.createClock({ now: () => 0, maxRtt: Infinity });
+  c.add({ offset: 100, rtt: 10 });
+  for (const rtt of [-1, -Infinity, NaN, Infinity, undefined, null, '10']) c.add({ offset: 999999, rtt });
+  assert.equal(c.offset(), 100, 'contano solo campioni con 0 ≤ rtt ≤ maxRtt finito');
+  c.add({ offset: 200, rtt: 0 });
+  assert.equal(c.offset(), 150, 'rtt 0 è valido');
+});
+
 test('boatradar.html: età e finestre con clock.now(); Date.now() solo per misurare /api/status', () => {
   const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
   const code = html.split('<script src="public/ais-logic.js"></script>')[1];
@@ -369,14 +386,71 @@ test('includeParam: MMSI interi > 0, senza doppioni, al massimo 50, nell\'ordine
   assert.equal(AL.includeParam([null]), '');
   assert.equal(AL.includeParam([]), '');
   assert.equal(AL.includeParam(undefined), '');
-  assert.equal(AL.includeParam([1, 1, 2]), '&include=1,2');
-  assert.equal(AL.includeParam([247000002, 247000001]), '&include=247000002,247000001', 'la prima (la selezionata) resta prima');
+  assert.equal(AL.includeParam([1, 1, 2]), 'include=1,2');
+  assert.equal(AL.includeParam([247000002, 247000001]), 'include=247000002,247000001', 'la prima (la selezionata) resta prima');
   assert.equal(AL.includeParam(['5', 1.5, -3, 0, undefined, NaN, Infinity]), '', 'scartati stringhe, non interi, ≤ 0');
   const many = Array.from({ length: 60 }, (_, i) => i + 1);
-  assert.equal(AL.includeParam(many), '&include=' + many.slice(0, 50).join(','), 'al massimo 50');
+  assert.equal(AL.includeParam(many), 'include=' + many.slice(0, 50).join(','), 'al massimo 50');
 });
 
-test('boatradar.html chiede sempre la nave selezionata a /api/locations', () => {
+test('includeParam: ingresso non array → stringa vuota (punto 7)', () => {
+  for (const bad of ['247000001', 247000001, { 0: 1, length: 1 }, new Set([1]), null, true, () => [1]])
+    assert.equal(AL.includeParam(bad), '', String(bad));
+});
+
+// --- Correzioni 43/5/3: richieste della pagina ------------------------------------------------------------
+const pageCode = () => fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8').split('<script src="public/ais-logic.js"></script>')[1];
+
+test('boatradar.html: vista senza include (in cache) e include solo per la nave selezionata con la scheda aperta', () => {
+  const code = pageCode();
+  assert.match(code, /features\(`\$\{API\}\/locations\?bbox=\$\{viewBox\(\)\}`/, 'la richiesta della vista non ha include');
+  assert.match(code, /const ship = selected && \$\('panel'\)\.style\.display === 'block' \? includeParam\(\[selected\]\) : '';/,
+    'include solo con una nave selezionata e la scheda aperta');
+  assert.match(code, /ship \? features\(`\$\{API\}\/locations\?\$\{ship\}`\) : \[\]/, 'richiesta separata con solo include=, nello stesso allSettled');
+  assert.match(code, /mergeFeatures\(\[\{ source: 'digitraffic'[^\n]*\{ source: 'aisstream', features: med\.value \}, \{ source: 'aisstream', features: inc\.value \}\]\)/,
+    'la nave inclusa entra in mergeFeatures dopo la vista (vince se più recente)');
+});
+
+test('boatradar.html: la × azzera selected e il bordo giallo (punto 2)', () => {
+  const code = pageCode();
+  const close = code.match(/\$\('close'\)\.onclick = \(\) => \{([^\n]*)\};/);
+  assert.ok(close, 'gestore della ×');
+  assert.match(close[1], /deselect\(\)/);
+  const deselect = code.match(/function deselect\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(deselect, 'function deselect');
+  assert.match(deselect[1], /setStyle\(\{ radius:4, color:'#0b1118', weight:1 \}\)/, 'toglie il bordo giallo');
+  assert.match(deselect[1], /selected = null/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8'), /<button id="close" aria-label="Chiudi la scheda"/,
+    'la × ha un nome per i lettori di schermo');
+});
+
+test('boatradar.html: setSymbol aggiorna il simbolo dei marker, niente Object.assign sulle options (punto 5)', () => {
+  const code = pageCode();
+  assert.match(code, /m\.marker\.setSymbol\(symbol\(f\.properties\)\)/);
+  assert.doesNotMatch(code, /Object\.assign\(m\.marker\.options/);
+});
+
+test('boatradar.html: legenda dei simboli raggiungibile anche su telefono e «ferma» nel tooltip (punto 6)', () => {
   const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  assert.match(html, /\/locations\?bbox=\$\{viewBox\(\)\}\$\{includeParam\(\[selected\]\)\}/);
+  for (const t of ['freccia = in moto', 'freccia corta = ferma con prua nota', 'pallino = direzione non nota'])
+    assert.ok(html.includes(t), t);
+  assert.match(html, /<details id="legend"[^>]*>\s*<summary>Legenda<\/summary>/, 'legenda apribile (anche da tastiera)');
+  const mobile = html.slice(html.indexOf('@media (max-width: 640px)'));
+  assert.doesNotMatch(mobile.slice(0, mobile.indexOf('</style>')), /#legend \{ display:none/, 'su telefono non è nascosta');
+  assert.match(pageCode(), /stopped\(/, 'tooltip con «ferma»');
+});
+
+test('stopped: ferma solo con velocità nota fino a 0,5 kn', () => {
+  for (const sog of [0, 0.3, 0.5]) assert.equal(AL.stopped({ sog }), true, String(sog));
+  for (const sog of [0.6, 10, 102.3, 102.2, -1, null, undefined, NaN, '0']) assert.equal(AL.stopped({ sog }), false, String(sog));
+  assert.equal(AL.stopped({}), false);
+});
+
+test('boatradar.html: primo giro aspetta /api/status (al massimo CLOCK_WAIT_MS) prima di calcolare from= (punto 43)', () => {
+  const code = pageCode();
+  assert.match(code, /const CLOCK_WAIT_MS = 3000;/);
+  const body = code.slice(code.indexOf('async function loadLocations()'));
+  const wait = body.indexOf('CLOCK_WAIT_MS'), from = body.indexOf('from=${clock.now()');
+  assert.ok(wait > 0 && from > wait, 'l\'attesa viene prima del calcolo di from=');
+  assert.match(body, /const status = loadStatus\(\);/, 'la richiesta di stato parte una volta sola per giro');
 });

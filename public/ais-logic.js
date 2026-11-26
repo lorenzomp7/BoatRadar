@@ -43,6 +43,8 @@
   // Simbolo della nave: heading null = pallino; short = freccia corta, per una nave ferma con la prua nota
   // (all'ancora o ormeggiata), così non sembra in moto
   const symbol = p => ({ heading: heading(p), short: validHeading(p.heading) != null && !moving(p) });
+  // Ferma (per il tooltip): velocità nota fino a 0,5 kn; velocità mancante o n.d. (102.3) = non si sa
+  const stopped = p => typeof p.sog === 'number' && p.sog >= 0 && p.sog <= 0.5;
 
   // ETA di Digitraffic, un intero: mese << 16 | giorno << 11 | ora << 6 | minuto (UTC, senza anno).
   // Mese 0 o giorno 0 = non disponibile; ora 24 e minuto 60 = non disponibili.
@@ -122,7 +124,7 @@
   }
 
   // Orologio corretto: offset = mediana degli ultimi keep campioni con rtt ≤ maxRtt (le risposte lente
-  // misurano male), 0 senza campioni. now() = ora del telefono − offset, letta a ogni chiamata.
+  // misurano male), 0 senza campioni. now() = ora del telefono − offset (arrotondata al ms), letta a ogni chiamata.
   function createClock({ now = () => Date.now(), keep = 5, maxRtt = 2000 } = {}) {
     const samples = [];
     const offset = () => {
@@ -132,22 +134,27 @@
     };
     return {
       add(sample) {
-        if (!sample || !(sample.rtt <= maxRtt) || !Number.isFinite(sample.offset)) return;
+        // rtt valido: numero finito fra 0 e maxRtt (negativo = orologio spostato, non finito = misura rotta)
+        if (!sample || !Number.isFinite(sample.rtt) || sample.rtt < 0 || sample.rtt > maxRtt
+          || !Number.isFinite(sample.offset)) return;
         samples.push(sample.offset);
         if (samples.length > keep) samples.shift();
       },
       offset,
-      now: () => now() - offset(),
+      // intero: l'offset (mediana di metà richieste) può avere ,5 e from= di Digitraffic vuole millisecondi interi
+      now: () => Math.round(now() - offset()),
     };
   }
 
-  // Punto 3: parametro include= di /api/locations per le navi da avere sempre in mappa (la selezionata,
-  // più avanti le preferite). Solo interi > 0, senza doppioni, al massimo 50 nell'ordine dato; '' se nessuno.
+  // Punto 3: query di /api/locations?include=… per le navi da avere sempre in mappa (la selezionata, più
+  // avanti le preferite), chiesta a parte dalla vista. Solo interi > 0, senza doppioni, al massimo 50
+  // nell'ordine dato: 'include=1,2'; '' se nessuno o se list non è un array.
   function includeParam(list) {
-    const ids = [...new Set((list || []).filter(n => Number.isInteger(n) && n > 0))].slice(0, 50);
-    return ids.length ? '&include=' + ids.join(',') : '';
+    if (!Array.isArray(list)) return '';
+    const ids = [...new Set(list.filter(n => Number.isInteger(n) && n > 0))].slice(0, 50);
+    return ids.length ? 'include=' + ids.join(',') : '';
   }
 
-  return { TYPES, typeOf, typeName, validHeading, heading, symbol, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
+  return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam };
 });

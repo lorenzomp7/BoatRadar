@@ -24,9 +24,14 @@ Leggi `server.js` e `test/server.test.js` prima di cambiare qualcosa.
 - `bbox` = `minLon,minLat,maxLon,maxLat`; se minLon > maxLon l'area attraversa
   l'antimeridiano. Parametri non validi = nessun filtro, mai un errore 500.
 - `limit` riduce le navi restituite ma `total` resta il conteggio reale.
-- `include=mmsi1,mmsi2` (al massimo 50) aggiunge sempre quelle navi, anche fuori da `bbox` e `limit`;
-  `total` non le conta. Ogni parametro di `/api/locations` si legge solo in `locationsParams()` ed entra nella
-  chiave della cache, normalizzato.
+- `include=mmsi1,mmsi2` (al massimo 50, spazi attorno ai valori ignorati) restituisce solo quelle navi, se
+  hanno una posizione, ovunque siano: niente `bbox` né campione, `total` = navi trovate, valori tutti non validi =
+  `features: []`. Non passa dalla cache e non crea voci (risposta con `json()`), così la nave selezionata è sempre
+  aggiornata; la pagina la chiede a parte dalla vista e unisce le due con `mergeFeatures`.
+- Ogni parametro di `/api/locations` si legge solo in `locationsParams()`; nella chiave della cache entrano,
+  normalizzati, quelli della vista (`bbox` arrotondato e `limit`), non `include`.
+- Nelle properties di `/api/locations` i campi facoltativi mancanti (`heading`, `rot`) si omettono
+  (`undefined`), non si mandano come `null`: la pagina li legge con `== null`.
 - Le risposte JSON passano per la compressione gzip esistente.
 - Nessun nuovo endpoint deve esporre file del server o la chiave.
 

@@ -244,19 +244,21 @@ function inBox(box, p) {
   return w <= e ? p.lon >= w && p.lon <= e : p.lon >= w || p.lon <= e;
 }
 
-// Parametri di /api/locations, letti solo qui: gli stessi valori filtrano le navi in locations() e formano la
-// chiave della cache, quindi due richieste con la stessa chiave hanno la stessa risposta e i parametri
-// sconosciuti non creano voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui (anche nella chiave).
+// Parametri di /api/locations, letti solo qui: gli stessi valori filtrano le navi e formano la chiave della
+// cache, quindi due richieste con la stessa chiave hanno la stessa risposta e i parametri sconosciuti non creano
+// voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui; nella chiave entrano bbox e limit, non
+// include, perché le richieste con include non passano dalla cache (vedi sendLocations).
 function locationsParams(query) {
   const box = roundBox(query.get('bbox')?.split(',').map(Number));
   // limit valido: intero da 1 a MAX_FEATURES; negativo, zero o non intero vale come il massimo
   const asked = Number(query.get('limit'));
   const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_FEATURES) : MAX_FEATURES;
-  // include=mmsi1,mmsi2 (anche ripetuto): i primi MAX_INCLUDE MMSI validi (1-9 cifre, > 0) nell'ordine dato,
-  // senza doppioni; ordinati nella chiave, così ordine e doppioni non creano voci nuove. Il resto è ignorato.
-  const include = [...new Set(query.getAll('include').join(',').split(',')
-    .filter(x => /^\d{1,9}$/.test(x)).map(Number).filter(n => n > 0))].slice(0, MAX_INCLUDE).sort((a, b) => a - b);
-  return { box, limit, include, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}&include=${include.join(',')}` };
+  // include=mmsi1,mmsi2 (anche ripetuto, spazi attorno ai valori ignorati): null se assente o vuoto, altrimenti
+  // i primi MAX_INCLUDE MMSI validi (1-9 cifre, > 0) nell'ordine dato, senza doppioni ([] se nessuno è valido)
+  const parts = query.getAll('include').flatMap(v => v.split(',')).map(x => x.trim()).filter(Boolean);
+  const include = parts.length
+    ? [...new Set(parts.filter(x => /^\d{1,9}$/.test(x)).map(Number).filter(n => n > 0))].slice(0, MAX_INCLUDE) : null;
+  return { box, limit, include, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
 }
 
 // bbox arrotondato verso l'esterno, così viste quasi uguali (piccoli spostamenti della mappa) condividono la
@@ -276,24 +278,29 @@ function roundBox(box) {
   return [w, s, e, n];
 }
 
-function locations({ box, limit, include = [] }) {
+// Feature GeoJSON di una nave; heading e rot mancanti (null) non vanno nella risposta: undefined = chiave omessa
+function shipFeature(mmsi, p) {
+  const v = vessels.get(mmsi) || {};
+  return { type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+    properties: { mmsi, name: v.name, shipType: v.shipType, sog: p.sog, cog: p.cog, heading: p.heading ?? undefined,
+      rot: p.rot ?? undefined, navStat: p.navStat, timestampExternal: p.ts } };
+}
+
+function locations({ box, limit }) {
   const hits = [];
   for (const [mmsi, p] of positions) if (inBox(box, p)) hits.push([mmsi, p]);
   // campione stabile per MMSI, così le navi mostrate non cambiano a ogni aggiornamento
   const k = Math.ceil(hits.length / limit);
-  const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : [...hits];   // copia: include= non deve toccare hits
-  // navi chieste con include= (punto 3): sempre presenti se hanno una posizione, anche fuori dal bbox e oltre
-  // il limite, una volta sola; total resta il numero di navi nel bbox
-  if (include.length) {
-    const ids = new Set(shown.map(([mmsi]) => mmsi));
-    for (const mmsi of include) if (!ids.has(mmsi) && positions.has(mmsi)) shown.push([mmsi, positions.get(mmsi)]);
-  }
-  return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => {
-    const v = vessels.get(mmsi) || {};
-    return { type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
-      properties: { mmsi, name: v.name, shipType: v.shipType, sog: p.sog, cog: p.cog, heading: p.heading, rot: p.rot, navStat: p.navStat,
-        timestampExternal: p.ts } };
-  }) };
+  const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : hits;
+  return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) };
+}
+
+// Navi chieste con include= (punto 3: la nave selezionata, più avanti le preferite): solo quelle che hanno una
+// posizione, nell'ordine dato, senza bbox né campione; total = navi trovate. Sempre calcolata al momento, così la
+// nave selezionata è aggiornata anche quando la vista viene dalla cache.
+function included(include) {
+  const features = include.filter(mmsi => positions.has(mmsi)).map(mmsi => shipFeature(mmsi, positions.get(mmsi)));
+  return { type: 'FeatureCollection', total: features.length, features };
 }
 
 // Cache di /api/locations. Una voce tiene la risposta compressa (gz); il JSON (raw) resta solo finché serve
@@ -347,6 +354,8 @@ setInterval(() => {
 
 function sendLocations(req, res, query) {
   const params = locationsParams(query);
+  // include: risposta piccola e diversa per ogni utente, fuori dalla cache condivisa (non crea voci)
+  if (params.include) return json(req, res, included(params.include));
   const key = params.key, now = Date.now(), gzip = acceptsGzip(req);
   let entry = LOCATIONS_CACHE_SIZE > 0 ? locationsCache.get(key) : undefined;
   const hit = !!entry && (now - entry.t < LOCATIONS_CACHE_MS
