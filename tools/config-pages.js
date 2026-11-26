@@ -38,7 +38,10 @@ function cleanVmHost(value) {
 function backends(env = {}) {
   const list = [];
   const ip = cleanVmHost(env.VM_HOST);
-  const vm = cleanHost(env.API_HOST, 'API_HOST') || (ip && `boatradar.${ip.replace(/\./g, '-')}.sslip.io`);
+  const api = cleanHost(env.API_HOST, 'API_HOST');
+  // sslip.io risolve solo indirizzi IP: con un nome in VM_HOST l'indirizzo HTTPS va dato in API_HOST
+  if (ip && !api && !IPV4_RE.test(ip)) throw invalid('VM_HOST', env.VM_HOST, 'è un nome: imposta anche API_HOST con il nome HTTPS del server, sslip.io funziona solo con un IP');
+  const vm = api || (ip && `boatradar.${ip.replace(/\./g, '-')}.sslip.io`);
   if (vm) list.push({ url: `https://${vm}/api`, name: 'VM Oracle', sleeps: false });
   const render = cleanHost(env.RENDER_HOST, 'RENDER_HOST');
   if (render) list.push({ url: `https://${render}/api`, name: 'Render', sleeps: true });

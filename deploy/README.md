@@ -27,7 +27,7 @@ In **Settings → Secrets and variables → Actions**:
 
 | Tipo | Nome | Valore |
 |---|---|---|
-| Variable | `VM_HOST` | IP pubblico della VM, es. `130.61.10.20` |
+| Variable | `VM_HOST` | IP pubblico della VM, es. `130.61.10.20` (con un nome al posto dell'IP serve anche `API_HOST`: sslip.io funziona solo con un IP) |
 | Variable | `VM_USER` | facoltativa, di base `ubuntu` |
 | Secret | `VM_SSH_KEY` | contenuto della chiave privata scaricata al punto 2 |
 | Variable | `API_HOST` | facoltativa: tuo dominio per il server, es. `api.miosito.it` |

@@ -116,7 +116,9 @@ test('configJs: VM_HOST è un IPv4 o un nome, senza schema, porta né barra (dep
   assert.equal(runConfig(configJs({ VM_HOST: '130.61.10.20' })).BOATRADAR_APIS[0].url, 'https://boatradar.130-61-10-20.sslip.io/api');
   assert.equal(runConfig(configJs({ VM_HOST: '0.0.0.0' })).BOATRADAR_APIS.length, 1);
   assert.equal(runConfig(configJs({ VM_HOST: '255.255.255.255' })).BOATRADAR_APIS.length, 1);
-  assert.doesNotThrow(() => configJs({ VM_HOST: 'vm.miosito.it' }), 'un nome è ammesso');
+  assert.doesNotThrow(() => configJs({ VM_HOST: 'vm.miosito.it', API_HOST: 'vm.miosito.it' }), 'un nome è ammesso con API_HOST');
+  // sslip.io funziona solo con un IP: un nome senza API_HOST darebbe un indirizzo che non risolve
+  assert.throws(() => configJs({ VM_HOST: 'vm.miosito.it' }), { message: /^VM_HOST non valido.*API_HOST/ });
   for (const v of ['https://130.61.10.20', 'http://130.61.10.20', 'HTTPS://vm.miosito.it', 'ssh://vm.miosito.it',
     '130.61.10.20/', '130.61.10.20:22', 'vm.miosito.it:22', 'ubuntu@130.61.10.20',
     '256.1.1.1', '1.2.3', '1.2.3.4.5', '1.2.3.-4', '-vm.it', 'vm .it']) {
