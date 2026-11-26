@@ -20,6 +20,9 @@ const positions = new Map(); // mmsi -> { lat, lon, sog, cog, navStat, ts }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
 const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
 const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
+// compressione con aisstream: negotiated = permessage-deflate accettato all'apertura, confirmed = CompressionEnabled
+// della SubscriptionConfirmation (null finché non arriva). aisstream limita la banda delle connessioni non compresse.
+status.compression = null;
 
 function readKey() {
   if (process.env.AISSTREAM_KEY) return process.env.AISSTREAM_KEY.trim();
@@ -59,6 +62,12 @@ function vessel(mmsi) {
 
 function handle(msg) {
   if (msg.error) { status.error = msg.error; return; }
+  if (msg.MessageType === 'SubscriptionConfirmation') {
+    // non è un messaggio AIS: non lo conto
+    if (status.compression) status.compression.confirmed = msg.Message?.CompressionEnabled === true;
+    status.error = null;
+    return;
+  }
   status.messages++;
   status.error = null;
   const md = msg.MetaData || {};
@@ -116,11 +125,13 @@ function connect() {
   // ma ws apre la connessione da sé e il proxy va passato esplicitamente come agent
   const options = process.env.NODE_USE_ENV_PROXY === '1'
     ? { agent: url.startsWith('wss:') ? https.globalAgent : http.globalAgent } : {};
-  const ws = current = new WebSocket(url, options);
+  const ws = current = new WebSocket(url, { ...options, perMessageDeflate: true });
   let received = false;
   ws.on('open', () => {
     lastMessage = Date.now();
-    console.log(`aisstream.io: connesso (compressione: ${/permessage-deflate/.test(ws.extensions) ? 'sì' : 'no'}), invio sottoscrizione`);
+    const negotiated = /permessage-deflate/.test(ws.extensions);
+    status.compression = { negotiated, confirmed: null };
+    console.log(`aisstream.io: connesso (compressione: ${negotiated ? 'sì' : 'no'}), invio sottoscrizione`);
     status.connected = true;
     ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: BBOX, FilterMessageTypes: ['PositionReport',
       'StandardClassBPositionReport', 'ExtendedClassBPositionReport', 'ShipStaticData', 'StaticDataReport'] }));
@@ -131,7 +142,11 @@ function connect() {
       const msg = JSON.parse(data.toString('utf8'));
       handle(msg);
       if (msg.error) console.error('aisstream.io rifiuta la richiesta:', msg.error);
-      else if (!received) { received = true; console.log('aisstream.io: arrivano i dati'); }
+      else if (msg.MessageType === 'SubscriptionConfirmation') {
+        const on = msg.Message?.CompressionEnabled === true;
+        console.log(`aisstream.io: sottoscrizione confermata (compressione: ${on ? 'sì' : 'no'})`);
+        if (!on) console.warn('aisstream.io: connessione non compressa, aisstream può scartare messaggi per limitare la banda');
+      } else if (!received) { received = true; console.log('aisstream.io: arrivano i dati'); }
       retry = 1000;
     } catch (err) { console.error('messaggio non valido:', err.message); }
   });
