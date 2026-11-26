@@ -22,6 +22,8 @@ Tocca un’imbarcazione per vedere la scheda AIS. Quando trasmessi, mostra anche
 - **Server** (`server.js`, raccoglie l'AIS di tutto il mondo): VM Oracle Cloud *Always Free*, 0 €/mese,
   sempre accesa, quindi le navi non spariscono più dopo 15 minuti senza visite. Si aggiorna da solo a ogni
   push su `main` (workflow `.github/workflows/deploy-backend.yml`).
+- **Server di riserva** su Render Free (`render.yaml`): ruoli, costi e come cambiare backend in
+  [deploy/README.md, sezione «Due backend»](deploy/README.md#due-backend-vm-oracle-e-render).
 
 Configurazione, una volta sola: segui [deploy/README.md](deploy/README.md) per la VM, poi in
 **Settings → Secrets and variables → Actions** aggiungi la variabile `VM_HOST`, i secret `VM_SSH_KEY` e

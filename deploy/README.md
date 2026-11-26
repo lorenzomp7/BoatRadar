@@ -73,11 +73,9 @@ BoatRadar può avere due server con lo stesso `Dockerfile`. `tools/config-pages.
 | Principale, sempre acceso, con disco | VM Oracle Always Free (questa guida) | `VM_HOST` o `API_HOST` | 0 €/mese |
 | Di riserva, si addormenta | Render Free (`render.yaml`) | `RENDER_HOST` | 0 €/mese |
 
-Render Free: 750 ore gratuite al mese per workspace, 512 MB di RAM e 0,1 CPU. Si spegne dopo 15
-minuti senza traffico in entrata (la connessione verso aisstream non conta) e alla visita successiva
-riparte in circa un minuto **con la memoria vuota**: le navi ricompaiono man mano che arrivano i
-messaggi. Anche il disco è effimero. Il traffico in uscita e i minuti di build contano nella quota
-inclusa del workspace; se si supera, Render fa pagare oppure, senza carta registrata, sospende il servizio.
+Render Free: 512 MB di RAM e 0,1 CPU. Si spegne dopo 15 minuti senza traffico in entrata (la
+connessione verso aisstream non conta) e alla visita successiva riparte in circa un minuto **con la
+memoria vuota**: le navi ricompaiono man mano che arrivano i messaggi. Anche il disco è effimero.
 La seconda chiave aisstream è gratuita come la prima.
 
 `config.js` contiene l'elenco nell'ordine VM, poi Render:
@@ -89,16 +87,49 @@ window.BOATRADAR_API = window.BOATRADAR_APIS[0].url;
 
 Per ora la pagina usa solo il primo indirizzo (`window.BOATRADAR_API`). Il passaggio automatico al
 secondo, quando il primo non risponde, non c'è ancora. Senza nessuna variabile `config.js` resta un
-commento e la pagina mostra solo il Baltico. Un valore che non è un nome di host (per esempio con
-spazi o virgolette) fa fallire il workflow *GitHub Pages*, invece di finire nella pagina.
+commento e la pagina mostra solo il Baltico. Se `API_HOST` (o il nome sslip.io di `VM_HOST`) e
+`RENDER_HOST` sono lo stesso indirizzo, in `config.js` resta una sola voce, quella della VM. Un valore
+che non è un nome di host (per esempio con spazi o virgolette, una porta fuori da 1-65535, o
+`https://` in `VM_HOST`, che *Deploy backend* usa per ssh così com'è) fa fallire il workflow
+*GitHub Pages* con un messaggio che riporta il valore inserito, invece di finire nella pagina.
+
+### Costi e quote di Render
+
+Fonti: <https://render.com/docs/free> e <https://render.com/docs/outbound-bandwidth>, verificate il 26/11/2026.
+
+| Voce | Workspace Hobby (0 $/mese) |
+|---|---|
+| Ore dei servizi Free | 750 al mese |
+| Minuti di build | 500 al mese |
+| Traffico in uscita | 5 GB al mese, **condivisi da tutti i servizi del workspace** |
+| Oltre i 5 GB, con un metodo di pagamento | 0,15 $/GB |
+| Oltre i 5 GB, senza metodo di pagamento | Render sospende **tutti** i servizi Free del workspace fino a fine mese |
+
+Quanto consuma una scheda aperta (misura con `node --expose-gc tools/carico.js --navi 30000`, 26/11/2026,
+stesse navi di `docs/prestazioni.md`): la vista mondo restituisce 5979 navi (il massimo è 6000,
+`MAX_FEATURES` di `server.js`), **227,5 KB gzip** per risposta. La pagina la richiede ogni 15 s
+(`REFRESH_MS` di `boatradar.html`), cioè 240 volte all'ora:
+
+- vista mondo: 227,5 KB × 240 ≈ **56 MB all'ora** per scheda, circa 1,3 GB al giorno;
+- vista porto (Rotterdam, 1427 navi, 53,2 KB gzip): circa 13 MB all'ora.
+
+**Con Render come unico server, circa 90 ore di una scheda aperta sulla vista mondo esauriscono la
+quota di 5 GB del mese** (meno di 4 giorni di una sola scheda lasciata aperta, o una sera con una
+ventina di schede). Il conto non include intestazioni HTTP, `/api/status` e le richieste in più
+quando si sposta la mappa, quindi il consumo reale è un po' più alto; la quota è anche condivisa con
+gli altri servizi del workspace. La VM Oracle include invece 10 TB al mese. Per questo **la VM resta
+il server principale e Render la riserva**: Render va usato per brevi periodi, quando la VM non
+risponde, e senza metodo di pagamento il superamento lo spegne fino al mese successivo.
 
 ### Creare il servizio su Render (una volta sola)
 
 1. Crea una **seconda chiave** su <https://aisstream.io>, diversa da quella della VM. aisstream accetta
    una sola connessione per chiave. Con la stessa chiave sui due server le connessioni si chiudono a
    vicenda e nessuno dei due riceve dati con continuità.
-2. Su <https://dashboard.render.com>: **New → Blueprint** e collega la repo `lorenzomp7/BoatRadar`.
-   Render legge `render.yaml` e chiede il valore di `AISSTREAM_KEY` (lo chiede solo a questa prima
+2. Su <https://dashboard.render.com>: **New → Blueprint**, collega la repo `lorenzomp7/BoatRadar` e
+   come branch scegli **`main`**: `render.yaml` deve essere già su `main` (fai prima il merge), perché
+   Render legge il Blueprint dal branch scelto e poi si aggiorna solo da quello (`branch: main`).
+   Poi Render chiede il valore di `AISSTREAM_KEY` (lo chiede solo a questa prima
    creazione; per cambiarlo dopo: servizio → *Environment*). Incolla lì la seconda chiave: non va mai
    nel file né nella repo.
 3. Alla fine del primo deploy Render mostra l'indirizzo del servizio, per esempio

@@ -85,6 +85,47 @@ test('configJs: un indirizzo non valido è un errore, non finisce in config.js',
   assert.doesNotThrow(() => configJs({ API_HOST: 'api.miosito.it:8443' }), 'la porta è ammessa');
 });
 
+test('configJs: host valido = etichette a-z0-9 col trattino solo all\'interno, porta facoltativa 1-65535', () => {
+  for (const h of ['a.it', 'x-y.onrender.com', 'boatradar-ab12.onrender.com', 'API.MioSito.IT', 'localhost',
+    'api.miosito.it:1', 'api.miosito.it:8443', 'api.miosito.it:65535', 'https://api.miosito.it:8443/']) {
+    for (const name of ['API_HOST', 'RENDER_HOST']) {
+      assert.doesNotThrow(() => configJs({ [name]: h }), `${name}=${h}`);
+    }
+  }
+  for (const h of ['-a.it', 'a-.it', 'a.-b.it', 'a..it', '.a.it', 'a.it.', 'a_b.it', 'à.it', '-',
+    'a.it:0', 'a.it:65536', 'a.it:99999', 'a.it:', ':8443', 'a.it:80:90', 'a.it:-1', 'a.it:8o']) {
+    for (const name of ['API_HOST', 'RENDER_HOST']) {
+      assert.throws(() => configJs({ [name]: h }), { message: new RegExp(`^${name} non valido`) }, `${name}=${h}`);
+    }
+  }
+});
+
+test('configJs: il messaggio d\'errore riporta il valore inserito, non quello ripulito o derivato', () => {
+  const msg = env => { try { configJs(env); } catch (err) { return err.message; } assert.fail(`nessun errore per ${JSON.stringify(env)}`); };
+  assert.ok(msg({ RENDER_HOST: ' https://-x.onrender.com/ ' }).includes(JSON.stringify(' https://-x.onrender.com/ ')));
+  assert.ok(msg({ API_HOST: 'HTTPS://a..it//' }).includes(JSON.stringify('HTTPS://a..it//')));
+  for (const v of ['1.2.3.4/x', '300.1.2.3', 'https://130.61.10.20', '-vm.it']) {
+    const m = msg({ VM_HOST: v });
+    assert.match(m, /^VM_HOST non valido/, v);
+    assert.ok(m.includes(JSON.stringify(v)), `${v} nel messaggio: ${m}`);
+    assert.doesNotMatch(m, /sslip\.io"/, 'non il nome sslip.io derivato');
+  }
+});
+
+test('configJs: VM_HOST è un IPv4 o un nome, senza schema, porta né barra (deploy-backend.yml lo usa per ssh)', () => {
+  assert.equal(runConfig(configJs({ VM_HOST: '130.61.10.20' })).BOATRADAR_APIS[0].url, 'https://boatradar.130-61-10-20.sslip.io/api');
+  assert.equal(runConfig(configJs({ VM_HOST: '0.0.0.0' })).BOATRADAR_APIS.length, 1);
+  assert.equal(runConfig(configJs({ VM_HOST: '255.255.255.255' })).BOATRADAR_APIS.length, 1);
+  assert.doesNotThrow(() => configJs({ VM_HOST: 'vm.miosito.it' }), 'un nome è ammesso');
+  for (const v of ['https://130.61.10.20', 'http://130.61.10.20', 'HTTPS://vm.miosito.it', 'ssh://vm.miosito.it',
+    '130.61.10.20/', '130.61.10.20:22', 'vm.miosito.it:22', 'ubuntu@130.61.10.20',
+    '256.1.1.1', '1.2.3', '1.2.3.4.5', '1.2.3.-4', '-vm.it', 'vm .it']) {
+    assert.throws(() => configJs({ VM_HOST: v }), { message: /^VM_HOST non valido/ }, v);
+  }
+  // con API_HOST impostato VM_HOST non entra in config.js, ma resta quello che usa ssh: va controllato lo stesso
+  assert.throws(() => configJs({ API_HOST: 'api.miosito.it', VM_HOST: 'https://130.61.10.20' }), { message: /^VM_HOST non valido/ });
+});
+
 test('tools/config-pages.js da riga di comando: stampa config.js, exit 1 con un indirizzo non valido', () => {
   const ok = cli({ VM_HOST: '130.61.10.20', RENDER_HOST: 'boatradar.onrender.com' });
   assert.equal(ok.status, 0, ok.stderr);
@@ -99,6 +140,11 @@ test('tools/config-pages.js da riga di comando: stampa config.js, exit 1 con un 
   assert.equal(bad.status, 1);
   assert.equal(bad.stdout, '', 'niente in config.js');
   assert.match(bad.stderr, /RENDER_HOST/);
+
+  const badVm = cli({ VM_HOST: 'https://130.61.10.20' });
+  assert.equal(badVm.status, 1);
+  assert.equal(badVm.stdout, '', 'niente in config.js');
+  assert.ok(badVm.stderr.includes('VM_HOST non valido: "https://130.61.10.20"'), badVm.stderr);
 });
 
 // pages.yml con le virgolette del comando shell (\") lette come virgolette semplici
@@ -119,9 +165,12 @@ test('pages.yml scrive config.js con tools/config-pages.js e passa RENDER_HOST',
   assert.match(yml, /VM_HOST: \$\{\{ vars\.VM_HOST \}\}/);
   assert.ok(inlinePaths(yml, 'pages.yml').includes('tools/config-pages.js'), 'tools/config-pages.js nei paths di pages.yml');
   assert.doesNotMatch(yml, /printf 'window\.BOATRADAR_API/, 'il vecchio printf non c\'è più');
-  // config.js con la versione dell'esecuzione: un nuovo RENDER_HOST non resta nella cache del browser
-  assert.match(yml, /sed -i [^\n]*src="config\.js"[^\n]*src="config\.js\?v=\$\{GITHUB_RUN_ID\}"[^\n]*_site\/index\.html/);
-  assert.match(yml, /grep -q[^\n]*config\.js\?v=\$\{GITHUB_RUN_ID\}[^\n]*_site\/index\.html/);
+  // config.js con la versione dell'esecuzione e del tentativo: un nuovo RENDER_HOST non resta nella cache
+  // del browser, nemmeno con «Re-run» (stesso GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT diverso)
+  const v = '\\?v=\\$\\{GITHUB_RUN_ID\\}-\\$\\{GITHUB_RUN_ATTEMPT\\}';
+  assert.match(yml, new RegExp(`sed -i [^\\n]*src="config\\.js"[^\\n]*src="config\\.js${v}"[^\\n]*_site/index\\.html`));
+  assert.match(yml, new RegExp(`grep -q[^\\n]*src="config\\.js${v}"[^\\n]*_site/index\\.html`));
+  assert.doesNotMatch(yml, /config\.js\?v=\$\{GITHUB_RUN_ID\}"/, 'la versione senza il tentativo non c\'è più');
   assert.match(read('boatradar.html'), /<script src="config\.js"><\/script>/, 'la riga che sed sostituisce');
 });
 
@@ -132,6 +181,9 @@ test('render.yaml: servizio Docker Free, chiave aisstream segreta, CORS verso Pa
   assert.match(y, /^\s*plan:\s*free\s*$/m);
   assert.match(y, /^\s*dockerfilePath:\s*\.\/Dockerfile\s*$/m);
   assert.match(y, /^\s*healthCheckPath:\s*\/api\/status\s*$/m);
+  // deploy solo da main, a ogni commit (filtrato da buildFilter), come i workflow della VM e di Pages
+  assert.match(y, /^\s*branch:\s*main\s*$/m);
+  assert.match(y, /^\s*autoDeployTrigger:\s*commit\s*$/m);
   assert.doesNotMatch(y, /key:\s*PORT\b/, 'la porta la sceglie Render');
   const env = y.split(/^\s*-\s*key:\s*/m).slice(1).map(b => b.split(/\n(?=\s*-\s)/)[0]);
   const key = env.find(b => b.startsWith('AISSTREAM_KEY'));
@@ -154,4 +206,12 @@ test('ogni file copiato dal Dockerfile fa partire il deploy della VM e quello di
     assert.ok(covered(f, renderPaths), `${f} manca nel buildFilter di render.yaml`);
   }
   assert.ok(renderPaths.includes('render.yaml'));
+});
+
+test('pages.yml e deploy-backend.yml partono solo dai push su main, come Render', () => {
+  for (const f of ['.github/workflows/pages.yml', '.github/workflows/deploy-backend.yml']) {
+    const m = read(f).match(/^on:\s*\n(?:[ \t]+.*\n|\s*\n)*?[ \t]+push:\s*\n[ \t]+branches:\s*\[([^\]]*)\]/m);
+    assert.ok(m, `on.push.branches non trovato in ${f}`);
+    assert.deepEqual(m[1].split(',').map(s => s.trim()), ['main'], f);
+  }
 });

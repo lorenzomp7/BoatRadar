@@ -6,6 +6,8 @@ nave e li serve alla pagina. La pagina è su GitHub Pages, il server su una VM O
 Cloud Always Free con Docker e Caddy (`deploy/`, workflow in `.github/workflows/`) e, di riserva,
 su Render Free (`render.yaml`, si addormenta dopo 15 minuti senza visite). Ruoli, costi e come
 cambiare backend: `deploy/README.md`, sezione «Due backend».
+Render include solo 5 GB al mese di traffico in uscita (circa 90 ore di una scheda sulla vista mondo):
+la VM resta il server principale, Render solo la riserva.
 Lavora su `main_claude` salvo indicazione diversa.
 
 ## Struttura

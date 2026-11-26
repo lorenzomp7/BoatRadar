@@ -39,9 +39,10 @@ jobs:
           mkdir -p _site/public && cp public/ais-logic.js _site/public/
           # elenco dei server (VM, poi Render); esce con errore se una variabile non è un nome di host
           node tools/config-pages.js > _site/config.js
-          # versione di config.js legata all'esecuzione: un server cambiato non resta nella cache del browser
-          sed -i "s|src=\"config.js\"|src=\"config.js?v=${GITHUB_RUN_ID}\"|" _site/index.html
-          grep -qF "src=\"config.js?v=${GITHUB_RUN_ID}\"" _site/index.html || { echo "versione di config.js non applicata a index.html"; exit 1; }
+          # versione di config.js legata all'esecuzione e al tentativo (anche «Re-run» cambia la versione):
+          # un server cambiato non resta nella cache del browser
+          sed -i "s|src=\"config.js\"|src=\"config.js?v=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"|" _site/index.html
+          grep -qF "src=\"config.js?v=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"" _site/index.html || { echo "versione di config.js non applicata a index.html"; exit 1; }
           cat _site/config.js
       - uses: actions/upload-pages-artifact@v3
         with:
