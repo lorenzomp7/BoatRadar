@@ -164,7 +164,7 @@ test('bbox non valido usa la voce del mondo; limit resta nella chiave', async ()
   assert.equal((await s.get('/api/locations?bbox=a,b,c,d', GZ)).headers['x-cache'], 'hit');
   const lim = await s.get('/api/locations?limit=1', GZ);
   assert.equal(lim.headers['x-cache'], 'miss');
-  // campione per MMSI (mmsi % k): con limit=1 al massimo una nave, a volte nessuna
+  // campione per importanza (punto 4): con limit=1 al massimo una nave
   assert.ok(body(lim).features.length <= 1);
   assert.equal(body(lim).total, body(world).total);
   assert.ok(body(world).total >= 2);

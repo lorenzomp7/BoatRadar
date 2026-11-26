@@ -36,7 +36,7 @@ test('file statico illeggibile: risposta 500 e il server resta in piedi', async 
   // copia di server.js senza pagine né public/: ogni file statico manca
   const ROOT = path.join(__dirname, '..');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-statici-'));
-  for (const f of ['server.js', 'position-check.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
+  for (const f of ['server.js', 'position-check.js', 'sample.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
   const solo = await startServer({ NODE_PATH: path.join(ROOT, 'node_modules') }, {}, { cwd: dir });
   try {
     for (const p of ['/public/ais-logic.js', '/', '/vesselfinder.html']) {
@@ -109,7 +109,7 @@ const pos = (mmsi, lat, lon) => report(mmsi, lat, lon, { Sog: 5, NavigationalSta
 const ids = fc => fc.features.map(f => f.mmsi);
 
 test('include: la nave indicata c\'è anche fuori dal campione e fuori dal bbox, una volta sola; total invariato (punto 3)', async () => {
-  // 10 navi nella zona: con limit=1 il campione (mmsi % 10 === 0) ne tiene una sola, 247530000
+  // 10 navi uguali nella zona: con limit=1 il campione per importanza (punto 4) a parità tiene l'MMSI più basso, 247530000
   const zone = Array.from({ length: 10 }, (_, i) => 247530000 + i);
   await sendAll(srv, ...zone.map((m, i) => pos(m, 44.1, 11.1 + i / 100)), pos(247539999, -30, -40));
   const box = '/api/locations?bbox=11,44,12,45&limit=1';

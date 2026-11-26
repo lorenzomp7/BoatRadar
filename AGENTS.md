@@ -10,9 +10,15 @@ Lavora su `main_claude` salvo indicazione diversa.
 
 - `server.js`: connessione aisstream.io (riconnessione, backoff che torna a 1 s solo con un vero
   messaggio AIS, 429), stato in
-  memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione con `limit`, navi sempre presenti con
+  memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione per importanza con `limit` (`sample.js`), navi sempre presenti con
   `include=mmsi,…`, al massimo 50),
   `/api/vessel`, `/api/search`, `/api/status`.
+- `sample.js`: funzioni pure del campione di `/api/locations` (punto 4): oltre `limit` restano le navi più
+  importanti (classe A, in moto, lunghe, cargo/petroliere/passeggeri, posizione recente), al massimo
+  `ceil(limit / 64²)` per cella di una griglia 64 × 64 sul bbox prima di riempire con le altre; la parte statica del
+  punteggio (`staticScore`) la calcola `handle()`. Test in `test/sample.test.js` e `test/campione.test.js`. Va nella
+  `COPY` del `Dockerfile`, nei `paths` di `deploy-backend.yml` e `browser.yml` e in `node --check` di `test.yml`
+  (lo controlla un test).
 - `position-check.js`: funzioni pure usate da `server.js` per scartare posizioni non valide e
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
