@@ -37,7 +37,9 @@ Lavora su `main_claude` salvo indicazione diversa.
   aggiunge `?v=<commit>` allo script contro la cache (lo controlla un test).
 - Scelta della nave toccata (punto 10): un clic sulla mappa raccoglie le navi entro `pickRadius` (8 px, 20 px su schermo
   touch; `canvasTolerance` 4/12 px per il renderer) con `nearbyMarkers` di `public/ais-logic.js`; con più navi la pagina
-  apre il popup «N navi qui» (`pick()`, test in `test/pagina-scelta.test.js`).
+  apre il popup «N navi qui» (`pick()`, test in `test/pagina-scelta.test.js`): raggio del dito se l'evento viene da un
+  dito (`pickTouch`), almeno il doppio del simbolo per ogni marker, al massimo 15 righe (`pickLimit`) più «e altre N:
+  avvicina la mappa» (zoom + 2), altezza sullo spazio fra header e scheda (`pickMaxHeight`, almeno ~3 righe).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -136,7 +138,8 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   a 1280×800 e 390×844, controlla navi in mappa, apertura della scheda con un clic vero del mouse,
   chiusura con un clic vero sulla × (almeno 44×44 px, non coperta dall'header) e con Esc, la scelta fra le due navi
   sovrapposte GEMELLA della fixture a Genova (popup «2 navi qui» con righe da almeno 44 px, Esc, clic sulla seconda riga
-  → scheda di 247555002; punto 10) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
+  → scheda di 247555002; con la scheda aperta 30 navi finte nello stesso punto: 15 righe e «e altre 15», tutte
+  raggiungibili; punto 10) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
   passi al secondo con «server di riserva (Render)» nella riga di stato, e che con il primo buono non chieda nulla al

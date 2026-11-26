@@ -7,7 +7,10 @@
 #      o Esc la chiudano, lasciando il focus su un elemento visibile;
 #   3. (punto 10) un clic vero sulle due navi sovrapposte della fixture (GEMELLA, 247555001 e 247555002, a 10 m a
 #      Genova) apra il popup «2 navi qui» con due righe e la × da almeno 44 px e il focus sulla prima, Esc lo chiuda, e un clic
-#      vero sulla seconda riga apra la scheda di 247555002; la nave isolata del punto 2 apre la scheda senza popup;
+#      vero sulla seconda riga apra la scheda di 247555002; la nave isolata del punto 2 apre la scheda senza popup; poi,
+#      con la scheda aperta, 30 navi finte nello stesso punto: popup con 15 righe e «e altre 15» fra l'header e la
+#      scheda (o il fondo della mappa), ogni riga raggiungibile scorrendo, × «Chiudi elenco», zoom «Ingrandisci»/«Riduci»,
+#      e un clic vero su «e altre 15» che chiude il popup e ingrandisce di 2;
 #   3b. la pagina non abbia errori JavaScript né messaggi console.error;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
@@ -213,6 +216,79 @@ check() {
       || { "${AB[@]}" screenshot "$OUT/$name-sovrapposte-errore.png" >/dev/null || true; fail "$name: il clic sulla seconda riga non apre la scheda di $srow"; }
     [ "$srow" = 247555002 ] || fail "$name: la seconda riga è $srow, attesa 247555002"
     ok "$name: clic sulla seconda riga → scheda di $srow ($(js "document.querySelector('#content h2')?.textContent || ''"))"
+
+    # molte navi nello stesso punto con la scheda aperta (correzioni da revisione del punto 10): 30 marker finti
+    # aggiunti a markers nella parte libera della mappa (sotto l'header, fuori dalla scheda), poi un clic vero lì: popup
+    # «30 navi qui» con 15 righe e «e altre 15», tutto fra l'header e la scheda (o il fondo della mappa), ogni riga
+    # raggiungibile scorrendo (sopra il suo centro c'è lei, non la scheda né l'header), × con aria-label; un clic vero su
+    # «e altre 15» chiude il popup e ingrandisce di 2. I marker finti spariscono al giro dopo (non sono nella risposta).
+    local crowd
+    crowd=$(js "(() => { const m = document.getElementById('map').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect();
+      const p = document.getElementById('panel').getBoundingClientRect(), phone = matchMedia('(max-width: 640px)').matches;
+      const right = phone ? m.right : p.left, bottom = phone ? p.top : m.bottom;
+      const x = Math.round((m.left + right) / 2), y = Math.round(bottom - 40);
+      const c = { x: x - m.left, y: y - m.top };
+      for (let i = 0; i < 30; i++) {
+        const mmsi = 990000000 + i, ll = map.containerPointToLatLng([c.x + (i % 6) - 3, c.y + Math.floor(i / 6) - 2]);
+        meta.set(mmsi, { name: 'PROVA ' + i, shipType: 70 });
+        const marker = new ShipMarker(ll, { renderer, ...STYLE.normal, fillColor: '#888', fillOpacity: 0.9 }).addTo(map);
+        markers.set(mmsi, { marker, props: { mmsi, sog: 1 } });
+      }
+      return x + ' ' + y + ' ' + map.getZoom(); })()" | tr -d '"')
+    local cx cy z0
+    read -r cx cy z0 <<<"$crowd"
+    "${AB[@]}" mouse move "$cx" "$cy" >/dev/null
+    "${AB[@]}" mouse down >/dev/null
+    "${AB[@]}" mouse up >/dev/null
+    "${AB[@]}" wait --fn "document.querySelectorAll('.leaflet-popup.pick [data-more]').length === 1" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-molte-errore.png" >/dev/null || true
+           fail "$name: il clic su 30 navi ($cx $cy) non apre il popup con «e altre» · righe: $(js "document.querySelectorAll('.pickrow').length")"; }
+    "${AB[@]}" wait 600 >/dev/null   # fine dell'autoPan
+    local reach
+    reach=$(js "(() => {
+      const pop = document.querySelector('.leaflet-popup.pick'), box = pop.querySelector('.leaflet-popup-content-wrapper').getBoundingClientRect();
+      const tip = pop.querySelector('.leaflet-popup-tip-container').getBoundingClientRect();
+      const h = document.querySelector('header').getBoundingClientRect(), m = document.getElementById('map').getBoundingClientRect();
+      const p = document.getElementById('panel').getBoundingClientRect(), phone = matchMedia('(max-width: 640px)').matches;
+      const limit = phone ? p.top : m.bottom, out = [];
+      if (box.top < h.bottom) out.push('popup sotto l\'header (' + Math.round(box.top) + ' < ' + Math.round(h.bottom) + ')');
+      // il riquadro sempre fuori dalla scheda; la punta pure, salvo quando lo spazio è sotto il minimo di ~3 righe
+      // (PICK_MIN_HEIGHT: il popup tiene le sue 3 righe e la punta può toccare la scheda)
+      const content = pop.querySelector('.leaflet-popup-content'), atMin = content.clientHeight <= AisLogic.PICK_MIN_HEIGHT;
+      if (box.bottom > limit) out.push('riquadro oltre ' + (phone ? 'la scheda' : 'la mappa') + ' (' + Math.round(box.bottom) + ' > ' + Math.round(limit) + ')');
+      if (tip.bottom > limit && !atMin) out.push('punta oltre ' + (phone ? 'la scheda' : 'la mappa') + ' (' + Math.round(tip.bottom) + ' > ' + Math.round(limit) + ')');
+      if (!phone && box.right > p.left) out.push('popup sotto la scheda');
+      const rows = [...pop.querySelectorAll('.pickrow')];
+      if (rows.length !== 16) out.push(rows.length + ' pulsanti invece di 15 + 1');
+      for (const b of rows) {
+        b.scrollIntoView({ block: 'nearest' });
+        const r = b.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('button');
+        if (hit !== b) out.push((b.dataset.pick || 'altre') + ' coperta da ' + (hit?.className || 'niente'));
+        if (Math.round(r.height) < 44) out.push((b.dataset.pick || 'altre') + ' alta ' + Math.round(r.height) + ' px');
+      }
+      const label = pop.querySelector('.leaflet-popup-close-button').getAttribute('aria-label');
+      if (label !== 'Chiudi elenco') out.push('× con aria-label ' + label);
+      const zin = document.querySelector('.leaflet-control-zoom-in')?.getAttribute('aria-label'),
+        zout = document.querySelector('.leaflet-control-zoom-out')?.getAttribute('aria-label');
+      if (zin !== 'Ingrandisci' || zout !== 'Riduci') out.push('zoom con aria-label ' + zin + '/' + zout);
+      return out.length ? out.join('; ') : 'ok ' + Math.round(box.top) + '-' + Math.round(tip.bottom) + ' px (limite ' + Math.round(h.bottom) + '-'
+        + Math.round(limit) + '), contenuto ' + content.clientHeight + '/' + content.scrollHeight + ' px' + (atMin ? ' (minimo)' : '')
+        + ', ' + rows.length + ' pulsanti';
+    })()" | tr -d '"')
+    "${AB[@]}" screenshot "$OUT/$name-molte.png" >/dev/null
+    case "$reach" in ok*) ;; *) fail "$name: 30 navi con la scheda aperta: $reach (screenshot in $OUT/)" ;; esac
+    ok "$name: 30 navi con la scheda aperta → «$(js "document.querySelector('.pick .pick-title').textContent" | tr -d '"')», 15 righe + «e altre», tutte raggiungibili: $reach"
+    local mx my
+    read -r mx my <<<"$(js "(() => { const b = document.querySelector('.leaflet-popup.pick [data-more]'); b.scrollIntoView({ block: 'nearest' });
+      const r = b.getBoundingClientRect(); return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')"
+    "${AB[@]}" mouse move "$mx" "$my" >/dev/null
+    "${AB[@]}" mouse down >/dev/null
+    "${AB[@]}" mouse up >/dev/null
+    "${AB[@]}" wait --fn "!document.querySelector('.leaflet-popup.pick') && map.getZoom() === $z0 + 2" >/dev/null \
+      || fail "$name: «e altre 15» non chiude il popup né ingrandisce (zoom $(js "map.getZoom()"), da $z0)"
+    ok "$name: «e altre 15» → popup chiuso, zoom da $z0 a $(js "map.getZoom()")"
+    [ "$(js "getComputedStyle(document.getElementById('panel')).display")" != '"none"' ] || fail "$name: «e altre» ha chiuso la scheda"
+    js "(() => { for (let i = 0; i < 30; i++) { const m = markers.get(990000000 + i); if (m) { m.marker.remove(); markers.delete(990000000 + i); } } return true; })()" >/dev/null
     "${AB[@]}" press Escape >/dev/null
     "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none'" >/dev/null || fail "$name: Esc non chiude la scheda dopo la scelta"
   else

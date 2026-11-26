@@ -41,6 +41,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
   const el = id => {
     if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
       isConnected: true, addEventListener() {}, focus() { document.activeElement = this; }, getClientRects: () => [{}],
+      contains(x) { return x === this; },
       getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }) });
     return elements.get(id);
   };
@@ -66,7 +67,9 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
   // Mappa finta: eventi registrati (fire), dimensioni size e proiezione project(latlng) → punto del contenitore;
   // popup: uno aperto alla volta, popupopen e popupclose come Leaflet
   const mapHandlers = new Map();
-  const map = { setView() { return this; }, invalidateSize() {}, getZoom: () => 6,
+  // views: argomenti di ogni setView (il primo è la vista iniziale della pagina)
+  const views = [];
+  const map = { views, setView(...a) { views.push(a); return this; }, invalidateSize() {}, getZoom: () => 6,
     on(ev, fn) { for (const e of ev.split(' ')) mapHandlers.set(e, [...(mapHandlers.get(e) || []), fn]); return this; },
     fire(ev, data = {}) { for (const fn of mapHandlers.get(ev) || []) fn({ type: ev, target: map, ...data }); return this; },
     getCenter: () => ({ lat: 44, lng: 11 }),
@@ -89,18 +92,29 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
     getElement() {
       if (!this.el) {
         const popup = this, rows = new Map();
-        const row = mmsi => { if (!rows.has(mmsi)) rows.set(mmsi, { dataset: { pick: mmsi }, closest() { return this; },
+        const row = mmsi => { if (!rows.has(mmsi)) rows.set(mmsi, { dataset: { pick: mmsi },
+          closest: sel => (sel.includes('data-pick') ? rows.get(mmsi) : null),
           focus() { document.activeElement = this; } }); return rows.get(mmsi); };
+        // × del popup (Leaflet: a.leaflet-popup-close-button) con i suoi attributi; pulsante «e altre N» (data-more)
+        const closeButton = { attributes: {}, setAttribute(k, v) { this.attributes[k] = String(v); } };
+        const more = { closest: sel => (sel.includes('data-more') ? more : null), focus() { document.activeElement = this; } };
         this.el = { addEventListener: (type, fn) => popup.listeners.push({ type, fn }),
-          querySelector: sel => (sel.includes('pickrow') && popup.rows().length ? row(popup.rows()[0]) : null),
-          contains: x => [...rows.values()].includes(x), row };
+          querySelector: sel => (sel.includes('close-button') ? closeButton
+            : sel.includes('pickrow') && popup.rows().length ? row(popup.rows()[0]) : null),
+          contains: x => [...rows.values()].includes(x) || x === more, row, closeButton, more };
       }
       return this.el;
     }
     // clic vero su una riga (delegazione: il listener è sull'elemento del popup)
     clickRow(mmsi) { const target = this.getElement().row(String(mmsi)); for (const l of this.listeners) if (l.type === 'click') l.fn({ target }); }
+    // clic sul pulsante «e altre N: avvicina la mappa»
+    clickMore() { const target = this.getElement().more; for (const l of this.listeners) if (l.type === 'click') l.fn({ target }); }
   }
-  const L = { map: () => map, tileLayer: () => ({ addTo() {} }), canvas: o => { canvasOptions.push(o); return {}; },
+  // opzioni passate a L.map e a L.control.zoom (titoli dei pulsanti di zoom)
+  const mapOptions = [], zoomOptions = [];
+  const L = { map: (id, o) => { mapOptions.push(o); return map; }, tileLayer: () => ({ addTo() {} }),
+    canvas: o => { canvasOptions.push(o); return {}; },
+    control: { zoom: o => { zoomOptions.push(o); return { addTo() { return this; } }; } },
     popup: o => new FakePopup(o), Util: { wrapNum: x => x },
     CircleMarker: { extend(proto) { class M extends FakeMarker {} Object.assign(M.prototype, proto); return M; } } };
   const abortError = () => Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
@@ -153,7 +167,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
   const status = () => el('status').textContent;
   const stop = () => { stopped = true; for (const id of allTimers) clearTimeout(id); allTimers.clear(); };
   return { ctx, el, get, requests, stop, storage, retryTimers, pageNow, status, tick: () => ctx.tick(), markers: () => get('markers'),
-    map, canvasOptions, keydown, document,
+    map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }
 

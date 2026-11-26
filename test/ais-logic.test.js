@@ -572,3 +572,69 @@ test('nearbyMarkers: marker entro il raggio, dal più vicino, a parità per MMSI
   // coordinate non numeriche: scartate, mai NaN nell'ordine
   assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 5, x: NaN, y: 100 }, { mmsi: 6, x: 100, y: 100 }], 20), [{ mmsi: 6, d: 0 }]);
 });
+
+// Punto 10, correzioni da revisione
+test('nearbyMarkers: raggio per elemento (r), mai sotto quello comune', () => {
+  const p = { x: 100, y: 100 };
+  // nave selezionata (simbolo di raggio 8 → r 16): la punta della freccia a 14 px è sua; quella normale a 14 px no
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 1, x: 100, y: 114, r: 16 }, { mmsi: 2, x: 114, y: 100, r: 8 }], 8), [{ mmsi: 1, d: 14 }]);
+  // r più piccolo del raggio comune: vale il comune (il dito su touch resta a 20 px)
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 3, x: 118, y: 100, r: 8 }], 20), [{ mmsi: 3, d: 18 }]);
+  // bordo incluso; r non numerico → raggio comune
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 4, x: 116, y: 100, r: 16 }, { mmsi: 5, x: 100, y: 109, r: NaN }], 8), [{ mmsi: 4, d: 16 }]);
+});
+
+test('pickTouch: tipo di puntatore dell\'evento, altrimenti il tipo di schermo', () => {
+  assert.equal(AL.pickTouch({ pointerType: 'touch' }, false), true, 'dito su un PC con touch screen');
+  assert.equal(AL.pickTouch({ pointerType: 'mouse' }, true), false, 'mouse su un tablet');
+  assert.equal(AL.pickTouch({ pointerType: 'pen' }, true), false, 'penna: precisa come il mouse');
+  // senza pointerType (MouseEvent, Safari) o vuoto (clic da tastiera): ripiego sullo schermo
+  assert.equal(AL.pickTouch({}, true), true);
+  assert.equal(AL.pickTouch({ pointerType: '' }, false), false);
+  assert.equal(AL.pickTouch(undefined, true), true);
+  assert.equal(AL.pickTouch(null, false), false);
+});
+
+test('pickLimit: al massimo 15 righe dalla più vicina, il resto contato', () => {
+  const list = Array.from({ length: 30 }, (_, i) => ({ mmsi: 100 + i, d: i }));
+  const { shown, more } = AL.pickLimit(list);
+  assert.equal(AL.PICK_MAX_ROWS, 15);
+  assert.equal(shown.length, 15);
+  assert.deepEqual(shown.map(n => n.mmsi), list.slice(0, 15).map(n => n.mmsi));
+  assert.equal(more, 15);
+  assert.deepEqual(AL.pickLimit(list.slice(0, 15)), { shown: list.slice(0, 15), more: 0 }, '15 esatte: nessuna riga in più');
+  assert.deepEqual(AL.pickLimit(list.slice(0, 16)).more, 1);
+  assert.deepEqual(AL.pickLimit([]), { shown: [], more: 0 });
+  assert.deepEqual(AL.pickLimit(list, 4).shown.length, 4);
+});
+
+test('pickMaxHeight: spazio fra header e scheda (o fondo della mappa) meno margini, punta e bordi, almeno ~3 righe', () => {
+  // telefono, scheda aperta da y 500, header fino a 60: 500 − 60 − 2×10 − 40 (punta) − 20 (margini e bordi) = 360
+  assert.equal(AL.pickMaxHeight({ top: 60, bottom: 500 }), 360);
+  assert.equal(AL.pickMaxHeight({ top: 60, bottom: 844 }), 704, 'scheda chiusa: fino al fondo della mappa');
+  assert.equal(AL.pickMaxHeight({ top: 60.6, bottom: 500.4 }), 359, 'per difetto: mai oltre lo spazio vero');
+  assert.equal(AL.pickMaxHeight({ top: 100, bottom: 520, margin: 0, tip: 0, chrome: 0 }), 420);
+  // spazio troppo poco: il minimo (titolo e tre righe da 48 px), il popup scorre
+  assert.equal(AL.PICK_MIN_HEIGHT, 168);
+  assert.equal(AL.pickMaxHeight({ top: 60, bottom: 200 }), 168);
+  assert.equal(AL.pickMaxHeight({ top: 60, bottom: NaN }), 168);
+  assert.equal(AL.pickMaxHeight({}), 168);
+});
+
+test('boatradar.html: focus delle righe del popup con un bordo di 2 px non giallo, ≥ 3:1; hover con il fondo più chiaro', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  const accent = html.match(/--accent:(#[0-9a-f]{6})/)[1], panel = html.match(/--panel:(#[0-9a-f]{6})/)[1];
+  const focus = html.match(/\.pick \.pickrow:focus-visible \{ outline:2px solid (#[0-9a-f]{6});/);
+  assert.ok(focus, 'outline di 2 px sulle righe con il focus');
+  const c = focus[1];
+  assert.notEqual(c, accent, 'non il giallo della nave selezionata');
+  // tinta fredda (più blu che rosso), lontana dal giallo anche a parità di luminosità
+  assert.ok(parseInt(c.slice(5, 7), 16) > parseInt(c.slice(1, 3), 16), `${c}: più blu che rosso`);
+  for (const [name, bg] of [['riga', '#0f1720'], ['pannello', panel], ['riga in hover', '#1f2c3b']])
+    assert.ok(contrast(c, bg) >= 3, `${c} su ${name} ${bg}: ${contrast(c, bg).toFixed(2)}`);
+  const hover = html.match(/\.pick \.pickrow:hover \{ ([^}]*)\}/);
+  assert.ok(hover, 'stile di hover');
+  assert.match(hover[1], /background:#1f2c3b/);
+  assert.doesNotMatch(hover[1], /accent|border-color/, 'l\'hover non colora il bordo come la nave scelta');
+  assert.doesNotMatch(html, /\.pickrow:focus-visible[^{]*\{[^}]*border-color:var\(--accent\)/);
+});
