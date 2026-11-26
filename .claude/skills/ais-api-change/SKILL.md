@@ -45,6 +45,9 @@ Leggi `server.js` e `test/server.test.js` prima di cambiare qualcosa.
   `LOCATIONS_CACHE_SIZE`; `0` = le filtrate non entrano in cache); una voce filtrata oltre la quota o i tetti totali
   (voci, byte) espelle la filtrata più vecchia, mai una voce senza filtro. `filtered` in `locationsCache` di `/api/status`.
   Test: `test/filtri-logica.test.js` (unitari), `test/filtri.test.js` (server, cache) e `test/cache-locations.test.js` (quota).
+  Pagina (punto 9 b): legenda con i tipi accendibili e pannello «Filtri» in `boatradar.html`; il filtro vale sempre anche
+  nella pagina su tutte le fonti (Baltico compreso) e va nella vista solo se attivo (`viewQuery`), anche nella prova della
+  VM. Un nuovo criterio va in `parseFilter`/`passesFilter`, nel pannello e in `test/pagina-filtri.test.js`.
 - Posizioni oltre il loro limite (`isLive` in server.js: in moto `STALE_MOVING_MS`, ferme `STALE_STILL_MS`) non
   vanno in nessuna risposta (`/api/locations`, `include=`, `/api/search`), anche prima della pulizia periodica; una
   voce della cache vale a dati fermi solo fino a `expires` (prima scadenza delle sue navi). Test: `test/eta-posizione.test.js`.

@@ -45,8 +45,25 @@
     background:none; border:0; border-radius:8px; color:var(--muted); font-size:24px; line-height:1; cursor:pointer; }
   #close:hover, #close:focus-visible { color:var(--accent); }
   #legend { position:absolute; left:12px; bottom:24px; z-index:1000; background:var(--panel); border:1px solid var(--line);
-    border-radius:10px; padding:8px 10px; font-size:12px; }
-  #legend span { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+    border-radius:10px; padding:8px 10px; font-size:12px; max-height:calc(100% - 110px); overflow:auto; }
+  /* punto 9: un pulsante per tipo (aria-pressed). Spento: anello vuoto, testo attenuato e barrato (non solo il colore) */
+  #legend .dot { display:inline-block; flex:none; width:10px; height:10px; border-radius:50%; margin-right:6px;
+    background:var(--c); border:2px solid var(--c); }
+  #legend .ltype { display:flex; align-items:center; width:100%; min-height:24px; margin:1px 0; padding:2px 4px; background:none;
+    border:0; border-radius:6px; color:var(--text); font:inherit; text-align:left; cursor:pointer; }
+  #legend .ltype:hover { background:#1f2c3b; }
+  #legend .ltype[aria-pressed="false"] { color:var(--muted); text-decoration:line-through; }
+  #legend .ltype[aria-pressed="false"] .dot { background:transparent; }
+  #legend .ltype:focus-visible, #legend select:focus-visible, #legend input:focus-visible, #legend #f-reset:focus-visible {
+    outline:2px solid #7cc4ff; outline-offset:1px; }
+  #filters { border-top:1px solid var(--line); margin-top:6px; }
+  #filters fieldset { border:0; margin:4px 0; padding:0; }
+  #filters legend { color:var(--muted); padding:0; margin-bottom:2px; }
+  #filters label { display:flex; align-items:center; gap:6px; min-height:24px; cursor:pointer; }
+  #filters .frow { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 0 2px; }
+  #filters select { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:3px 6px; font:inherit; }
+  #filters .fnote { color:var(--muted); font-size:11px; margin:2px 0 6px; max-width:250px; line-height:1.35; }
+  #f-reset { margin:6px 0 2px; font:inherit; }
   #legend div { margin:2px 0; }
   #legend summary { cursor:pointer; color:var(--muted); padding:2px 0; }
   #legend summary:hover, #legend summary:focus-visible { color:var(--accent); }
@@ -119,6 +136,7 @@
     #legend { left:8px; bottom:36px; max-width:calc(100% - 16px); max-height:50vh; overflow:auto; padding:0 12px; }
     #legend summary { min-height:44px; line-height:44px; padding:0; }   /* bersaglio da almeno 44 px */
     #legend[open] { padding-bottom:8px; }
+    #legend .ltype, #filters label, #filters select, #f-reset { min-height:44px; }   /* righe e controlli da 44 px */
     #toast { bottom:calc(58vh + 20px); }
   }
 </style>
@@ -136,8 +154,9 @@
 <iframe id="vf" title="Mappa VesselFinder"></iframe>
 <div id="toast"></div>
 <details id="legend" open>
-  <summary>Legenda</summary>
-  <div id="legend-types"></div>
+  <summary>Legenda e filtri<span id="filter-count"></span></summary>
+  <!-- punto 9: un pulsante per tipo di nave (aria-pressed), creati dallo script -->
+  <div id="legend-types" role="group" aria-label="Tipi di nave mostrati"></div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-8L4.4,6L0,3.6L-4.4,6Z"/></svg>freccia = in moto</div>
   <!-- come symbol() di ais-logic.js: freccia corta quando la prua è nota e la nave non è in moto, cioè ferma
        (fino a 0,5 kn) o con la velocità non nota; «ferma» nel tooltip invece solo con la velocità nota (stopped) -->
@@ -147,6 +166,22 @@
        tratteggiate dopo 30 min -->
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="fading"/></svg>sbiadita, bordo chiaro = posizione di qualche minuto fa</div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="old"/></svg>sbiadita, tratteggiata = posizione vecchia (ferma)</div>
+  <!-- punto 9: filtri, salvati in localStorage['boatradar:filtri']; le opzioni delle tendine le scrive lo script -->
+  <details id="filters">
+    <summary>Filtri</summary>
+    <fieldset><legend>Movimento</legend>
+      <label><input type="radio" name="f-moving" id="fm-all" value="" checked> Tutte</label>
+      <!-- moving=1 del server: «non ferma», comprese le navi che non trasmettono la velocità -->
+      <label><input type="radio" name="f-moving" id="fm-1" value="1"> In moto o velocità n.d.</label>
+      <label><input type="radio" name="f-moving" id="fm-0" value="0"> Ferme</label>
+    </fieldset>
+    <div class="frow"><label for="f-min">Velocità da</label><select id="f-min"></select>
+      <label for="f-max">a</label><select id="f-max"></select></div>
+    <p class="fnote">Con un limite di velocità le navi che non la trasmettono non si vedono.</p>
+    <div class="frow"><label for="f-seen">Ricevute negli ultimi</label><select id="f-seen"></select></div>
+    <details id="f-status-box"><summary>Stato di navigazione</summary><div id="f-status"></div></details>
+    <button type="button" id="f-reset" class="hbtn">Mostra tutte</button>
+  </details>
 </details>
 <aside id="panel"><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
@@ -180,7 +215,8 @@ if (!window.AisLogic) {
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
   clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits,
-  apiList, createFailover, networkDown, validSog, pickRadius, canvasTolerance, nearbyMarkers, pickTouch, pickLimit, pickMaxHeight } = AisLogic;
+  apiList, createFailover, networkDown, validSog, pickRadius, canvasTolerance, nearbyMarkers, pickTouch, pickLimit, pickMaxHeight,
+  NAV_GROUPS, parseFilter, filterKey, passesFilter, filterCount } = AisLogic;
 
 // Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
 // Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
@@ -350,7 +386,103 @@ const propsOf = mmsi => markers.get(mmsi)?.props || (mmsi === selected && select
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-$('legend-types').innerHTML = TYPES.map(t => `<div><span style="background:${t.color}"></span>${t.label}</div>`).join('');
+// Punto 9: filtri. Legenda con un pulsante per tipo (acceso/spento, aria-pressed) e pannello «Filtri». Il filtro vale
+// sempre nella pagina (passesFilter di ais-logic.js su tutte le fonti unite, anche il Baltico) e, quando è attivo, va
+// anche al server (filterKey nella vista, applicato prima del campione: con lo zoom lontano tutte le petroliere, non un
+// loro campione). La nave selezionata non si filtra mai. Nessun tipo acceso (noTypes, che parseFilter non sa dire): niente
+// vista né Baltico, solo la nave selezionata. Salvato in localStorage come filterKey; nessun tipo = 'types=' davanti.
+const FILTERS_KEY = 'boatradar:filtri';
+const SOG_FROM = [0, 0.5, 1, 3, 5, 10, 15, 20], SOG_TO = [1, 3, 5, 10, 15, 20, 30], SEEN_MIN = [5, 15, 30, 60, 180];
+let filter = null, noTypes = false;
+// testo salvato → { filter, none }; non valido o assente = nessun filtro (parseFilter non lancia mai)
+function readFilter(raw) {
+  const q = new URLSearchParams(typeof raw === 'string' ? raw : ''), types = q.getAll('types');
+  return { filter: parseFilter({ types: types.join(','), status: q.getAll('status').join(','), minSog: q.get('minSog'),
+    maxSog: q.get('maxSog'), seen: q.get('seen'), moving: q.get('moving') }), none: types.length > 0 && types.every(t => !t.trim()) };
+}
+// filtro → parametri di parseFilter (stringhe), da modificare e rileggere
+const queryOf = f => ({ types: f?.types?.join(',') ?? '', status: f?.status?.join(',') ?? '', minSog: f?.minSog ?? '',
+  maxSog: f?.maxSog ?? '', seen: f?.seen ?? '', moving: f?.moving == null ? '' : f.moving ? '1' : '0' });
+const filtersOn = () => noTypes || !!filter;
+// pezzo della riga di stato dopo «N in mappa»
+const filtersNote = (none = noTypes) => none ? ' · nessun tipo di nave selezionato nei filtri' : filtersOn() ? ' · filtri attivi' : '';
+const STATUS_HEAD = /^\d+ in mappa( · filtri attivi| · nessun tipo di nave selezionato nei filtri)?/;
+// true se la nave è nascosta dai filtri (mai quella selezionata); p: properties della posizione, tipo da meta
+const hiddenByFilter = (mmsi, p, now = clock.now()) => mmsi !== selected
+  && (noTypes || !passesFilter({ sog: p?.sog, navStat: p?.navStat, ts: p?.timestampExternal }, meta.get(mmsi), filter, now));
+// Parametri della vista per il server: bbox e, con un filtro attivo, la sua forma canonica (poche varianti in cache)
+const viewQuery = () => `bbox=${viewBox()}${filter ? '&' + filterKey(filter) : ''}`;
+
+const kn = n => String(n).replace('.', ',') + ' kn';
+$('legend-types').innerHTML = TYPES.map(t => `<button type="button" class="ltype" id="lt-${t.key}" data-type="${t.key}" aria-pressed="true">`
+  + `<span class="dot" style="--c:${t.color}" aria-hidden="true"></span>${esc(t.label)}</button>`).join('');
+$('f-min').innerHTML = SOG_FROM.map(v => `<option value="${v}">${v ? kn(v) : 'qualsiasi'}</option>`).join('');
+$('f-max').innerHTML = '<option value="">nessun massimo</option>' + SOG_TO.map(v => `<option value="${v}">${kn(v)}</option>`).join('');
+$('f-seen').innerHTML = '<option value="">sempre</option>'
+  + SEEN_MIN.map(v => `<option value="${v}">${v < 60 ? v + ' min' : v / 60 + ' h'}</option>`).join('');
+$('f-status').innerHTML = NAV_GROUPS.map(g => `<label><input type="checkbox" name="f-status" id="fs-${g.key}" value="${g.key}" checked> ${esc(g.label)}</label>`).join('');
+
+// Controlli allineati al filtro: pulsanti dei tipi, caselle, tendine (fuori dall'intervallo disattivate), conteggio
+function syncFilterControls() {
+  for (const t of TYPES) $('lt-' + t.key)?.setAttribute('aria-pressed', String(!noTypes && (!filter?.types || filter.types.includes(t.key))));
+  for (const g of NAV_GROUPS) { const c = $('fs-' + g.key); if (c) c.checked = !filter?.status || filter.status.includes(g.key); }
+  const mv = filter?.moving ?? null;
+  $('fm-all').checked = mv === null; $('fm-1').checked = mv === true; $('fm-0').checked = mv === false;
+  $('f-min').value = String(filter?.minSog ?? 0);
+  $('f-max').value = filter?.maxSog == null ? '' : String(filter.maxSog);
+  $('f-seen').value = filter?.seen == null ? '' : String(filter.seen);
+  for (const o of $('f-max').options || []) o.disabled = o.value !== '' && filter?.minSog != null && Number(o.value) < filter.minSog;
+  for (const o of $('f-min').options || []) o.disabled = filter?.maxSog != null && Number(o.value) > filter.maxSog;
+  const n = filterCount(filter) + (noTypes ? 1 : 0);
+  $('filter-count').textContent = n ? ` · ${n} ${n === 1 ? 'attivo' : 'attivi'}` : '';
+}
+
+// Nuovo filtro: salvato, controlli aggiornati, via subito le navi che non passano (non la selezionata), poi un giro
+// (dopo 300 ms, come lo spostamento della mappa) con il filtro nella vista
+function setFilter(f, none = false) {
+  noTypes = none;
+  filter = none && f ? parseFilter({ ...queryOf(f), types: '' }) : f;
+  const saved = noTypes ? ['types=', filterKey(filter)].filter(Boolean).join('&') : filterKey(filter);
+  try { saved ? localStorage.setItem(FILTERS_KEY, saved) : localStorage.removeItem(FILTERS_KEY); } catch { /* vale solo in memoria */ }
+  syncFilterControls();
+  const now = clock.now();
+  for (const [mmsi, m] of markers) if (hiddenByFilter(mmsi, m.props, now)) { m.marker.remove(); markers.delete(mmsi); }
+  // inizio della riga di stato subito (il giro può aspettare il Baltico fino a 15 s); il resto lo riscrive il giro
+  const st = $('status').textContent;
+  if (STATUS_HEAD.test(st)) $('status').textContent = st.replace(STATUS_HEAD, `${markers.size} in mappa${filtersNote()}`);
+  scheduleTick();
+}
+
+// Eventi delegati sulla legenda: clic sui tipi e su «Mostra tutte», cambio dei controlli del pannello
+$('legend').addEventListener('click', e => {
+  const b = e.target.closest('[data-type]');
+  if (b) {
+    const on = new Set(noTypes ? [] : filter?.types || TYPES.map(t => t.key));
+    if (on.has(b.dataset.type)) on.delete(b.dataset.type); else on.add(b.dataset.type);
+    const types = TYPES.map(t => t.key).filter(k => on.has(k));
+    setFilter(parseFilter({ ...queryOf(filter), types: types.join(',') }), types.length === 0);
+  } else if (e.target.closest('#f-reset')) setFilter(null);
+});
+$('legend').addEventListener('change', e => {
+  const t = e.target, q = queryOf(filter);
+  if (t.id === 'f-min') q.minSog = t.value;
+  else if (t.id === 'f-max') q.maxSog = t.value;
+  else if (t.id === 'f-seen') q.seen = t.value;
+  else if (t.name === 'f-moving') q.moving = t.value;
+  else if (t.name === 'f-status') {
+    const on = new Set(filter?.status || NAV_GROUPS.map(g => g.key));
+    if (t.checked) on.add(t.value); else on.delete(t.value);
+    if (!on.size) { t.checked = true; return; }   // l'ultima casella accesa resta: senza stati non si vedrebbe nulla
+    q.status = NAV_GROUPS.map(g => g.key).filter(k => on.has(k)).join(',');
+  } else return;
+  setFilter(parseFilter(q), noTypes);
+});
+{
+  const s = readFilter((() => { try { return localStorage.getItem(FILTERS_KEY); } catch { return null; } })());
+  filter = s.none && s.filter ? parseFilter({ ...queryOf(s.filter), types: '' }) : s.filter;
+  noTypes = s.none;
+  syncFilterControls();
+}
 // su telefono la legenda parte chiusa (resta il pulsante «Legenda»), così non copre la mappa
 if (matchMedia('(max-width: 640px)').matches) $('legend').open = false;
 
@@ -420,8 +552,8 @@ async function loadStatus(server) {
 let clockReady = null;
 
 // Ritorno al server principale (punto 86): su un server di riserva, ogni PRIMARY_RECHECK_MS (raddoppiato se la VM
-// oscilla, createFailover) una sola richiesta al primo della stessa vista del giro (/locations?bbox=…, uguale per tutti
-// e servita dalla cache della VM; timeout API_TIMEOUT_MS), anche con la scheda nascosta (una risposta ogni 5 min). Di
+// oscilla, createFailover) una sola richiesta al primo della stessa vista del giro (/locations?bbox=…, con gli stessi
+// filtri del punto 9; uguale per tutti e servita dalla cache della VM; timeout API_TIMEOUT_MS), anche con la scheda nascosta (una risposta ogni 5 min). Di
 // solito a parte dal giro: non tocca vista, orologio né riga di stato. Risposta ok con un elenco di navi → dal giro dopo
 // si torna al primo; un elenco vuoto vale solo se anche /status del primo dice chiave e connessione ad aisstream (una
 // VM appena ripartita, o senza chiave, risponde con zero navi): una richiesta in più solo in quel caso. Altrimenti si
@@ -430,9 +562,9 @@ let clockReady = null;
 // della vista, così se la VM risponde la vista va già alla VM e usa la risposta della prova (niente doppio download).
 // Restituisce la prova in corso, che si risolve con { url, fc } se è andata bene, altrimenti con null.
 let probe = null, probeUrgent = false;
-function recheckPrimary(box, urgent) {
+function recheckPrimary(query, urgent) {
   if (!probe && backends.shouldRecheck(clock.now(), urgent)) {
-    const url = API_LIST[0].url, viewUrl = `${url}/locations?bbox=${box}`;
+    const url = API_LIST[0].url, viewUrl = `${url}/locations?${query}`;
     probeUrgent = urgent;
     probe = fetchFc(viewUrl, fetchApi)
       .then(async fc => {
@@ -470,15 +602,17 @@ window.addEventListener('online', () => {
 // programmato (retryTimer), i giri chiedono solo il Baltico; così anche mentre una vista a Render in avvio aspetta
 // (wakeView). probed: risposta della prova urgente appena riuscita, usata come vista se è la stessa richiesta. Le attese
 // si contano con clock.now() (la regola di test/ais-logic.test.js vuole l'ora del telefono solo per misurare /api/status).
-function worldRequests(probed) {
+// query: parametri della vista (viewQuery, con i filtri); noView: nessun tipo acceso nei filtri, nessuna vista.
+function worldRequests(probed, query, noView) {
   const server = api(), waking = backends.waking(), world = backends.canTry(clock.now()) && !(waking && wakeView);
-  const viewUrl = `${server}/locations?bbox=${viewBox()}`;
+  const viewUrl = `${server}/locations?${query}`;
   const skipped = () => { const p = Promise.reject(new Error('server non raggiungibile')); p.catch(() => {}); return p; };
   // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a parte con
   // include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista
   const ship = selected && $('panel').style.display === 'block' ? includeParam([selected]) : '';
   let view;
-  if (!world) view = skipped();
+  if (noView) { worldTotal = 0; view = Promise.resolve([]); }
+  else if (!world) view = skipped();
   else if (probed?.url === viewUrl) view = Promise.resolve(probed.fc).then(viewFeatures);
   else if (waking) {   // Render in avvio: la vista ha WAKE_TIMEOUT_MS (Render la tiene finché non è pronto), una alla volta
     wakeView = true;
@@ -492,33 +626,38 @@ function worldRequests(probed) {
 async function loadLocations() {
   const urgent = firstRound || visibleAgain;
   firstRound = visibleAgain = false;
-  const probing = recheckPrimary(viewBox(), urgent);
+  // filtri del giro (punto 9): la vista li porta al server; nessun tipo acceso → niente vista né Baltico
+  const query = viewQuery(), noView = noTypes;
+  const probing = recheckPrimary(query, urgent);
   // scheda nascosta su un server di riserva (quota di Render): nessuna richiesta del giro, solo la prova del primo;
   // la mappa resta com'era e alla riapertura (visibilitychange) riparte subito un giro
   if (document.hidden && api() !== API_LIST[0].url) return;
   // la prova urgente si aspetta solo prima delle richieste al server (punto 86): Baltico e attesa dell'orologio partono
   // subito. Il Baltico aspetta l'orologio (al massimo CLOCK_WAIT_MS dal primo giro), perché from= va calcolato con l'ora
   // corretta (anche un tick() chiamato durante l'attesa del primo giro aspetta la stessa promessa)
-  const worldPart = (urgent || probeUrgent ? probing : Promise.resolve(null)).then(worldRequests);
+  const worldPart = (urgent || probeUrgent ? probing : Promise.resolve(null)).then(p => worldRequests(p, query, noView));
   const status = worldPart.then(w => w.status);
   status.catch(() => {});      // l'esito lo legge allSettled qui sotto
   if (!clockReady) clockReady = Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
   const balticGet = u => fetchApi(u, BALTIC_TIMEOUT_MS);
-  const balticReq = clockReady.then(() => features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`, false, balticGet));
+  // con «ricevute negli ultimi» più breve della finestra il Baltico manda solo quelle (risposta più leggera)
+  const balticReq = noView ? Promise.resolve([]) : clockReady.then(() => features(`${BALTIC}/locations?from=${
+    clock.now() - Math.min(WINDOW_MS, filter?.seen != null ? filter.seen * 60000 : Infinity)}`, false, balticGet));
   balticReq.catch(() => {});   // idem; e se worldPart lancia, l'errore del Baltico non resta senza gestione
   const { server, world, view, inc: incReq } = await worldPart;
   const [med, inc, baltic, statusResult] = await Promise.allSettled([view, incReq, balticReq, status]);
   // solo la richiesta della vista decide il passaggio a un altro server; dopo un errore un solo tentativo programmato.
   // Senza rete dalla parte dell'utente (offline, o anche il Baltico fallito con errore di rete) l'errore non conta.
-  if (world && med.status === 'fulfilled') backends.ok(server, clock.now());
-  else if (world) {
+  // (senza vista per i filtri nessun esito: né riuscita né errore)
+  if (world && !noView && med.status === 'fulfilled') backends.ok(server, clock.now());
+  else if (world && !noView) {
     const down = networkDown({ onLine: navigator.onLine, viewNetwork: med.reason?.network === true,
       balticNetwork: baltic.status === 'rejected' && baltic.reason?.network === true, balticOkAt, t: clock.now() });
     backends.fail(server, clock.now(), { counts: !down });
     clearTimeout(retryTimer);
     retryTimer = setTimeout(tick, backends.retryIn(clock.now()) + RETRY_SLACK_MS);
   }
-  if (baltic.status === 'fulfilled') balticOkAt = clock.now();
+  if (baltic.status === 'fulfilled' && !noView) balticOkAt = clock.now();
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
   const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
   if (st) serverLimits = normLimits(st.limits);
@@ -528,6 +667,7 @@ async function loadLocations() {
   // età con l'ora corretta (punto 8): una posizione oltre il suo limite (in moto 30 min, ferma 6 h, o i limiti del
   // server) non entra in mappa
   const now = clock.now();
+  const hidden = new Set();   // marker che i filtri tolgono in questo giro (la loro posizione nuova non passa)
   for (const [mmsi, f] of merged) {
     if (ageOf(f.properties, now).gone) continue;
     const [lon, lat] = f.geometry.coordinates;
@@ -537,6 +677,8 @@ async function loadLocations() {
     let m = markers.get(mmsi);
     // posizione più vecchia di quella già in mappa (es. l'altra fonte è in ritardo): il marker resta dov'è
     if (m && isNewer(m.props?.timestampExternal, f.properties.timestampExternal)) continue;
+    // filtri (punto 9) con il filtro di adesso, anche su una risposta chiesta con il filtro di prima
+    if (hiddenByFilter(mmsi, f.properties, now)) { if (m) hidden.add(mmsi); continue; }
     if (!m) {
       // la nave selezionata (es. scelta dalla ricerca, arrivata con include=) nasce già con il bordo giallo
       const sel = mmsi === selected;
@@ -558,7 +700,9 @@ async function loadLocations() {
   const keep = inc.status === 'rejected' ? selected : null;
   for (const [mmsi, m] of markers) {
     if (mmsi === selected) selectedProps = m.props;   // la scheda le tiene anche se il marker sparisce
-    if ((!merged.has(mmsi) && mmsi !== keep) || ageOf(m.props, now).gone) { m.marker.remove(); markers.delete(mmsi); }
+    if ((!merged.has(mmsi) && mmsi !== keep) || ageOf(m.props, now).gone || hidden.has(mmsi) || hiddenByFilter(mmsi, m.props, now)) {
+      m.marker.remove(); markers.delete(mmsi);
+    }
     else m.marker.setStyle({ ...markerStyle(m.props, mmsi === selected, now), fillColor: typeOf(meta.get(mmsi)?.shipType).color });
   }
   // riga di stato (punto 86): vista non riuscita → server in avvio, prossimo server provato subito, o attesa prima di
@@ -577,7 +721,7 @@ async function loadLocations() {
         + (st.compression?.confirmed === false || (st.compression?.confirmed == null && st.compression?.negotiated === false)
           ? ' · Mondo: connessione non compressa, alcuni messaggi possono essere scartati' : ''))
       + (fromBackup ? ' · ' + backupName(API_LIST.find(b => b.url === server)) : '');
-  $('status').textContent = `${markers.size} in mappa · agg. ${new Date(clock.now()).toLocaleTimeString('it-IT')}${note}`;
+  $('status').textContent = `${markers.size} in mappa${filtersNote(noView)} · agg. ${new Date(clock.now()).toLocaleTimeString('it-IT')}${note}`;
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
   // scheda aggiornata a ogni giro (età), anche senza marker: con le ultime properties dice «posizione scaduta»
@@ -1035,12 +1179,15 @@ async function tick() {
   catch (err) { $('status').textContent = 'Errore dati AIS: ' + err.message; }
 }
 
+// Un giro poco dopo uno spostamento della mappa o un cambio dei filtri (più eventi ravvicinati = un solo giro)
+let moveTimer = null;
+function scheduleTick() { clearTimeout(moveTimer); moveTimer = setTimeout(tick, 300); }
+
 (async () => {
   await loadBalticMeta().catch(err => console.warn(err));
   await tick();
   setInterval(tick, REFRESH_MS);
-  let moveTimer;
-  map.on('moveend', () => { clearTimeout(moveTimer); moveTimer = setTimeout(tick, 300); });
+  map.on('moveend', scheduleTick);
   setInterval(() => loadBalticMeta().catch(() => {}), 10 * 60 * 1000);
 })();
 </script>

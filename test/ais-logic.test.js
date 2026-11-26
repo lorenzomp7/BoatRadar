@@ -388,7 +388,8 @@ test('boatradar.html: legenda dei simboli (anche su telefono), separatore e nome
   const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
   for (const t of ['freccia = in moto', 'freccia corta = ferma o velocità non nota, prua nota', 'pallino = direzione non nota'])
     assert.ok(html.includes(t), t);
-  assert.match(html, /<details id="legend"[^>]*>\s*<summary>Legenda<\/summary>\s*<div id="legend-types"><\/div>\s*(<!--[\s\S]*?-->\s*)?<div class="sym">/,
+  // punto 9: «Legenda e filtri» con il conteggio dei filtri attivi, tipi in un gruppo di pulsanti
+  assert.match(html, /<details id="legend"[^>]*>\s*<summary>Legenda e filtri<span id="filter-count"><\/span><\/summary>\s*(<!--[\s\S]*?-->\s*)?<div id="legend-types" role="group" aria-label="Tipi di nave mostrati"><\/div>\s*(<!--[\s\S]*?-->\s*)?<div class="sym">/,
     'legenda apribile (anche da tastiera), simboli subito dopo i tipi');
   assert.match(html, /#legend-types \+ \.sym \{ border-top:/, 'separatore fra tipi e simboli');
   const mobile = html.slice(html.indexOf('@media (max-width: 640px)'));
