@@ -159,4 +159,5 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | dopo correzioni punti 8 e 62 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.54 | 169.4 | 6000 | 253.1 (1550.5) | 46.4 / 57 | 1427 | 57.3 (366) | 11.6 / 13.7 | v22.23.5 |
 | 2026-11-26 | prima punto 9a | 30000 | 0.54 | 171.1 | 6000 | 253.6 (1550.5) | 0.9 / 2.3 | 1427 | 57.5 (366) | 0.5 / 0.7 | v22.23.5 |
 | 2026-11-26 | dopo punto 9a | 30000 | 0.55 | 170.2 | 6000 | 254.3 (1550.5) | 1.1 / 5.1 | 1427 | 57.6 (366) | 0.8 / 1.2 | v22.23.5 |
+| 2026-11-26 | dopo quota filtrate in cache (punto 9a) | 30000 | 0.55 | 169.7 | 6000 | 254.6 (1550.5) | 0.9 / 1.7 | 1427 | 57.7 (366) | 0.7 / 1.1 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
