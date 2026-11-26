@@ -5,7 +5,7 @@ name: GitHub Pages
 on:
   push:
     branches: [main]
-    paths: [boatradar.html, vesselfinder.html, .github/workflows/pages.yml]
+    paths: [boatradar.html, vesselfinder.html, public/**, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -31,6 +31,7 @@ jobs:
           mkdir _site
           cp boatradar.html _site/index.html
           cp vesselfinder.html _site/
+          mkdir -p _site/public && cp public/ais-logic.js _site/public/
           if [ -z "$API_HOST" ] && [ -n "$VM_HOST" ]; then API_HOST="boatradar.${VM_HOST//./-}.sslip.io"; fi
           if [ -n "$API_HOST" ]; then
             printf 'window.BOATRADAR_API = "https://%s/api";\n' "$API_HOST" > _site/config.js

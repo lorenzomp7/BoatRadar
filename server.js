@@ -224,6 +224,12 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end('// API sullo stesso server della pagina\n');
   }
+  // script della pagina: elenco fisso, nessun altro file di public/ è servito
+  const asset = { '/public/ais-logic.js': 'public/ais-logic.js' }[url];
+  if (asset) {
+    res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+    return fs.createReadStream(path.join(__dirname, asset)).pipe(res);
+  }
   const page = { '/': 'boatradar.html', '/boatradar.html': 'boatradar.html', '/vesselfinder.html': 'vesselfinder.html' }[url];
   if (page) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

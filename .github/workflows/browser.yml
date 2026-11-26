@@ -5,10 +5,10 @@ name: Browser
 on:
   workflow_dispatch:
   pull_request:
-    paths: [boatradar.html, server.js, position-check.js, package.json, package-lock.json, tools/smoke-*, tools/estrai-fixture.js, test/fixtures/**, .github/workflows/browser.yml]
+    paths: [boatradar.html, server.js, position-check.js, public/**, package.json, package-lock.json, tools/smoke-*, tools/estrai-fixture.js, test/fixtures/**, .github/workflows/browser.yml]
   push:
     branches: [main, main_claude]
-    paths: [boatradar.html, server.js, position-check.js, package.json, package-lock.json, tools/smoke-*, tools/estrai-fixture.js, test/fixtures/**, .github/workflows/browser.yml]
+    paths: [boatradar.html, server.js, position-check.js, public/**, package.json, package-lock.json, tools/smoke-*, tools/estrai-fixture.js, test/fixtures/**, .github/workflows/browser.yml]
 
 permissions:
   contents: read

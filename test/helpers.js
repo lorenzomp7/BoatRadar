@@ -50,7 +50,7 @@ async function startServer(env = {}, aisOptions = {}) {
     http.get({ host: '127.0.0.1', port, path: pathname, agent: false }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
     }).on('error', reject);
   });
   const getJson = async p => JSON.parse((await get(p)).body.toString('utf8'));
