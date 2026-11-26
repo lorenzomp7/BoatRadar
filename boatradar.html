@@ -251,7 +251,9 @@ async function loadLocations() {
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
     : st.error ? ' · Mondo: ' + st.error
     : !st.connected ? ' · Mondo: connessione…'
-    : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '');
+    : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '')
+      + (st.compression?.confirmed === false || (st.compression?.confirmed == null && st.compression?.negotiated === false)
+        ? ' · Mondo: connessione non compressa, alcuni messaggi possono essere scartati' : '');
   $('status').textContent = `${markers.size} in mappa · agg. ${new Date().toLocaleTimeString('it-IT')}${note}`;
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);

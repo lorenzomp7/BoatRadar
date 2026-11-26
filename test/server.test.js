@@ -68,6 +68,8 @@ before(async () => {
     // senza variabili di proxy: con NODE_USE_ENV_PROXY=1 server.js passerebbe dal proxy (Diagnosi)
     env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(https?|no|all)_proxy$|^NODE_USE_ENV_PROXY$/i.test(k))),
       PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
+      // cache di /api/locations (punto 84) senza durata minima: ogni messaggio si vede subito
+      LOCATIONS_CACHE_MS: '0',
       AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -105,13 +107,13 @@ test('una posizione compare in /api/locations come Feature GeoJSON [lon, lat]', 
 test('i dati statici arricchiscono la scheda nave (dimensioni, ETA, IMO)', async () => {
   await send({
     MetaData: { MMSI: 247000001 },
-    Message: { ShipStaticData: { Name: 'LAGUNA EXPRESS@@', ImoNumber: 9123456, CallSign: 'IABC@', Type: 60,
+    Message: { ShipStaticData: { Name: 'LAGUNA EXPRESS@@', ImoNumber: 9074729, CallSign: 'IABC@', Type: 60,
       Destination: 'VENEZIA@@@', MaximumStaticDraught: 6.2, Dimension: { A: 100, B: 20, C: 10, D: 8 },
       Eta: { Month: 11, Day: 23, Hour: 24, Minute: 60 } } },
   });
   const v = await getJson('/api/vessel?mmsi=247000001');
   assert.equal(v.name, 'LAGUNA EXPRESS');
-  assert.equal(v.imo, 9123456);
+  assert.equal(v.imo, 9074729);
   assert.equal(v.callSign, 'IABC');
   assert.equal(v.destination, 'VENEZIA');
   assert.equal(v.length, 120, 'lunghezza = A + B');
@@ -122,7 +124,67 @@ test('i dati statici arricchiscono la scheda nave (dimensioni, ETA, IMO)', async
 test('un ETA non valido (mese 0) viene ignorato', async () => {
   await send({ MetaData: { MMSI: 247000002 }, Message: { ShipStaticData: { Name: 'SENZA ETA', Eta: { Month: 0, Day: 0 } } } });
   const v = await getJson('/api/vessel?mmsi=247000002');
-  assert.equal(v.eta, undefined);
+  assert.equal(v.eta, null);
+});
+
+test('IMO e ETA validi compaiono in /api/vessel; IMO 0 ed ETA 0/0/24/60 tornano null', async () => {
+  await send(position(248000010, 43.7, 7.4));
+  await send({ MetaData: { MMSI: 248000010 }, Message: { ShipStaticData: { Name: 'MONACO', ImoNumber: 9074729,
+    Eta: { Month: 12, Day: 1, Hour: 10, Minute: 30 } } } });
+  let v = await getJson('/api/vessel?mmsi=248000010');
+  assert.equal(v.imo, 9074729);
+  assert.deepEqual(v.eta, { month: 12, day: 1, hour: 10, minute: 30 });
+  // un nuovo messaggio con valori «non disponibili» azzera i vecchi dati
+  await send({ MetaData: { MMSI: 248000010 }, Message: { ShipStaticData: { Name: 'MONACO', ImoNumber: 0,
+    Eta: { Month: 0, Day: 0, Hour: 24, Minute: 60 } } } });
+  v = await getJson('/api/vessel?mmsi=248000010');
+  assert.equal(v.imo, null, 'IMO 0 = non disponibile');
+  assert.equal(v.eta, null, 'ETA 0/0/24/60 = non disponibile');
+});
+
+test('un IMO con cifra di controllo sbagliata o di 8 cifre diventa null e non si trova nella ricerca', async () => {
+  await send(position(248000011, 43.7, 7.4));
+  await send({ MetaData: { MMSI: 248000011 }, Message: { ShipStaticData: { Name: 'FALSO IMO', ImoNumber: 9123456 } } });
+  assert.equal((await getJson('/api/vessel?mmsi=248000011')).imo, null, '9123456: cifra di controllo sbagliata');
+  assert.deepEqual(await getJson('/api/search?q=9123'), []);
+  await send({ MetaData: { MMSI: 248000011 }, Message: { ShipStaticData: { Name: 'FALSO IMO', ImoNumber: 12345679 } } });
+  assert.equal((await getJson('/api/vessel?mmsi=248000011')).imo, null, '8 cifre');
+});
+
+test('ETA: mese, giorno, ora e minuto devono essere interi ≥ 0', async () => {
+  const eta = async (mmsi, e) => {
+    await send({ MetaData: { MMSI: mmsi }, Message: { ShipStaticData: { Name: 'ETA', Eta: e } } });
+    return (await getJson('/api/vessel?mmsi=' + mmsi)).eta;
+  };
+  assert.equal(await eta(248000020, { Month: 1.5, Day: 3, Hour: 10, Minute: 0 }), null, 'mese 1,5');
+  assert.equal(await eta(248000021, { Month: 2, Day: 2.5, Hour: 10, Minute: 0 }), null, 'giorno 2,5');
+  assert.deepEqual(await eta(248000022, { Month: 3, Day: 4, Hour: -1, Minute: 30 }), { month: 3, day: 4, hour: null, minute: 30 }, 'ora -1');
+  assert.deepEqual(await eta(248000023, { Month: 3, Day: 4, Hour: 1.5, Minute: -2 }), { month: 3, day: 4, hour: null, minute: null }, 'ora 1,5 e minuto -2');
+  assert.deepEqual(await eta(248000024, { Month: 3, Day: 4, Hour: 0, Minute: 0 }), { month: 3, day: 4, hour: 0, minute: 0 }, 'mezzanotte');
+  assert.deepEqual(await eta(248000025, { Month: 3, Day: 4, Hour: '5', Minute: 7.5 }), { month: 3, day: 4, hour: null, minute: null }, 'non numeri interi');
+});
+
+test('IMO ai limiti: 1000007 e 9999993 validi, 1000000 e 9999999 no', async () => {
+  const imo = async n => {
+    await send({ MetaData: { MMSI: 248000030 }, Message: { ShipStaticData: { Name: 'LIMITI', ImoNumber: n } } });
+    return (await getJson('/api/vessel?mmsi=248000030')).imo;
+  };
+  assert.equal(await imo(1000007), 1000007);
+  assert.equal(await imo(9999993), 9999993);
+  assert.equal(await imo(1000000), null);
+  assert.equal(await imo(9999999), null);
+});
+
+test('StaticDataReport (classe B) non tocca IMO ed ETA', async () => {
+  await send({ MetaData: { MMSI: 248000040 }, Message: { ShipStaticData: { Name: 'CLASSE B', ImoNumber: 9074729,
+    Eta: { Month: 5, Day: 6, Hour: 7, Minute: 8 } } } });
+  await send({ MetaData: { MMSI: 248000040 }, Message: { StaticDataReport: { ReportA: { Name: 'CLASSE B NUOVO' },
+    ReportB: { CallSign: 'IXYZ', ShipType: 37 } } } });
+  const v = await getJson('/api/vessel?mmsi=248000040');
+  assert.equal(v.name, 'CLASSE B NUOVO');
+  assert.equal(v.callSign, 'IXYZ');
+  assert.equal(v.imo, 9074729);
+  assert.deepEqual(v.eta, { month: 5, day: 6, hour: 7, minute: 8 });
 });
 
 test('il filtro bbox gestisce anche l\'antimeridiano', async () => {
@@ -150,7 +212,7 @@ test('la ricerca trova per nome, MMSI e IMO e ignora query troppo corte', async 
   const names = async q => (await getJson('/api/search?q=' + encodeURIComponent(q))).map(v => v.mmsi);
   assert.deepEqual(await names('laguna'), [247000001], 'nome, senza distinzione maiuscole');
   assert.deepEqual(await names('2470000'), [247000001], 'inizio MMSI (247000002 non ha posizione)');
-  assert.deepEqual(await names('9123'), [247000001], 'inizio IMO');
+  assert.deepEqual(await names('9074'), [247000001], 'inizio IMO');
   assert.deepEqual(await names('L'), [], 'meno di 2 caratteri');
 });
 

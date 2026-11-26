@@ -40,6 +40,22 @@ Poi in **Settings → Pages → Build and deployment → Source** scegli **GitHu
 fallo per un progetto alla volta, poi gli altri. Dai push successivi su `main` si
 aggiornano da soli.
 
+## Variabili del server (facoltative)
+
+Oltre a `AISSTREAM_KEY` e `CORS_ORIGIN` (già in `deploy/compose.yml`), `server.js` legge queste
+variabili per la cache di `/api/locations`. I default vanno bene per la VM; per cambiarne una
+aggiungila sotto `environment:` in `deploy/compose.yml`. Un valore non valido (non numerico o
+negativo) vale come il default. Lo stato della cache è in `locationsCache` di `/api/status`
+(`hits`, `misses`, `compressions`, `size`, `bytes`).
+
+| Variabile | Default | Significato |
+|---|---|---|
+| `LOCATIONS_CACHE_MS` | `3000` | ms per cui una risposta si riusa anche se nel frattempo i dati sono cambiati |
+| `LOCATIONS_CACHE_STABLE_MS` | `60000` | ms per cui una risposta si riusa se i dati non sono cambiati |
+| `LOCATIONS_CACHE_SIZE` | `50` | viste tenute al massimo; `0` = cache spenta |
+| `LOCATIONS_CACHE_BYTES` | `33554432` (32 MB) | byte al massimo (JSON più gzip); oltre esce la voce più vecchia |
+| `LOCATIONS_CACHE_CLEANUP_MS` | `60000` | ogni quanti ms si tolgono le voci che non si possono più riusare |
+
 ## Indirizzi
 
 Senza un dominio, ogni server riceve un nome gratuito di [sslip.io](https://sslip.io) che punta

@@ -24,7 +24,8 @@ for (const file of files) {
     try {
       const before = (await s.getJson('/api/status')).messages;
       for (const msg of fixture.messaggi) s.socket.send(JSON.stringify(msg));
-      const expected = fixture.messaggi.filter(m => !m.error).length;
+      // la conferma della sottoscrizione (punto 11) non è un messaggio AIS e non viene contata
+      const expected = fixture.messaggi.filter(m => !m.error && m.MessageType !== 'SubscriptionConfirmation').length;
       await waitFor(async () => (await s.getJson('/api/status')).messages >= before + expected, 'tutti i messaggi elaborati');
 
       // posizione accettata di ogni nave: stessi controlli del server, con i messaggi arrivati a raffica

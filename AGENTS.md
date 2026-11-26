@@ -8,7 +8,8 @@ Lavora su `main_claude` salvo indicazione diversa.
 
 ## Struttura
 
-- `server.js`: connessione aisstream.io (riconnessione, backoff, 429), stato in
+- `server.js`: connessione aisstream.io (riconnessione, backoff che torna a 1 s solo con un vero
+  messaggio AIS, 429), stato in
   memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione con `limit`),
   `/api/vessel`, `/api/search`, `/api/status`.
 - `position-check.js`: funzioni pure usate da `server.js` per scartare posizioni non valide e
@@ -84,7 +85,10 @@ Attenzione:
 - Proxelar toglie l'offerta `permessage-deflate` verso aisstream: via proxy la connessione è
   sempre non compressa, quindi le misure sono sul peso non compresso e la compressione reale non
   si vede da lì. La dice il log di `server.js` collegato diretto:
-  `aisstream.io: connesso (compressione: sì|no)`. Poiché aisstream limita la banda delle
+  `aisstream.io: connesso (compressione: sì|no)` e poi `sottoscrizione confermata (compressione: sì|no)`,
+  e la riporta `compression` in `/api/status` (`negotiated`: accettata all'apertura; `confirmed`:
+  `CompressionEnabled` della conferma di aisstream, `null` finché non arriva). Via Proxelar risulta
+  sempre `negotiated: false` e la pagina mostra l'avviso di connessione non compressa. Poiché aisstream limita la banda delle
   connessioni non compresse, tieni brevi le registrazioni: se il conteggio al secondo è molto
   più basso di quello del server collegato diretto, aisstream sta scartando messaggi.
 - Una sola connessione per chiave: ferma ogni altro `server.js` con la stessa chiave (anche quello in cloud)
