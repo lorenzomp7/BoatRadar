@@ -57,8 +57,8 @@ test('la chiave contiene solo i parametri noti: ordine, parametri sconosciuti e 
   assert.equal((await s.get('/api/locations?limit=10&bbox=59.5,24,60.5,26', GZ)).headers['x-cache'], 'hit', 'ordine diverso');
   assert.equal((await s.get(base + '&limit=10&x=1', GZ)).headers['x-cache'], 'hit', 'parametro sconosciuto ignorato');
   assert.equal((await s.get(base, GZ)).headers['x-cache'], 'miss', 'senza limit = limit 6000, voce diversa da limit=10');
-  for (const l of ['6000', '06000', 'abc', '9999']) {
-    assert.equal((await s.get(`${base}&limit=${l}`, GZ)).headers['x-cache'], 'hit', `limit=${l} = limit effettivo 6000`);
+  for (const l of ['6000', '06000', 'abc', '9999', '-5', '0', '2.5']) {
+    assert.equal((await s.get(`${base}&limit=${l}`, GZ)).headers['x-cache'], 'hit', `limit=${l} = limit effettivo 6000 (negativo, zero o non intero = massimo)`);
   }
   assert.equal((await s.get(`/api/locations?x=1&bbox=59.5,24,60.5,26`, GZ)).headers['x-cache'], 'hit');
 });

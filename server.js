@@ -242,7 +242,9 @@ function inBox(box, p) {
 // sconosciuti non creano voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui (anche nella chiave).
 function locationsParams(query) {
   const box = roundBox(query.get('bbox')?.split(',').map(Number));
-  const limit = Math.min(Number(query.get('limit')) || MAX_FEATURES, MAX_FEATURES);
+  // limit valido: intero da 1 a MAX_FEATURES; negativo, zero o non intero vale come il massimo
+  const asked = Number(query.get('limit'));
+  const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_FEATURES) : MAX_FEATURES;
   return { box, limit, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
 }
 
