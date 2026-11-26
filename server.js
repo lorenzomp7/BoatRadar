@@ -10,12 +10,12 @@ const zlib = require('zlib');
 const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
 const { sampleByImportance, staticImportance } = require('./sample');
+const { DEFAULT_LIMITS, retentionMs } = require('./public/ais-logic');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
 const MAX_FEATURES = 6000; // oltre questo numero la pagina riceve un campione delle navi visibili
 const MAX_INCLUDE = 50;    // navi chieste con include= (selezionata, preferite) aggiunte sempre alla risposta
-const STALE_MS = 30 * 60 * 1000;
 const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
 // Cache di /api/locations (punto 84): una risposta si riusa per LOCATIONS_CACHE_MS, oppure finché i dati
 // non cambiano (al massimo LOCATIONS_CACHE_STABLE_MS, 60 s). LOCATIONS_CACHE_SIZE = numero di viste tenute
@@ -30,6 +30,19 @@ const LOCATIONS_CACHE_SIZE = envNumber('LOCATIONS_CACHE_SIZE', 50);
 const LOCATIONS_CACHE_BYTES = envNumber('LOCATIONS_CACHE_BYTES', 32 * 1024 * 1024);
 const LOCATIONS_CACHE_STABLE_MS = envNumber('LOCATIONS_CACHE_STABLE_MS', 60000);
 const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000) || 60000;
+// Conservazione delle posizioni (punto 8, retentionMs di public/ais-logic.js): navi in moto STALE_MOVING_MS
+// (30 min), ferme, all'ancora o ormeggiate STALE_STILL_MS (6 h); 0 o valori non validi = default. I candidati di
+// position-check.js restano movingMs, i dati statici 48 h. Ogni POSITIONS_CLEANUP_MS (60 s) la pulizia toglie dalla
+// memoria le posizioni scadute; fino ad allora le risposte le escludono già (isLive).
+// LIMITS sono i limiti effettivi, gli stessi riportati in /api/status e usati dalla pagina: una nave ferma si conserva
+// almeno quanto una in moto (stillMs = max(STALE_STILL_MS, STALE_MOVING_MS), come fa retentionMs).
+const envPositive = (name, def) => envNumber(name, def) || def;
+const MOVING_MS = envPositive('STALE_MOVING_MS', DEFAULT_LIMITS.movingMs);
+const LIMITS = Object.freeze({ movingMs: MOVING_MS, stillMs: Math.max(envPositive('STALE_STILL_MS', DEFAULT_LIMITS.stillMs), MOVING_MS) });
+const POSITIONS_CLEANUP_MS = envPositive('POSITIONS_CLEANUP_MS', 60000);
+// Ora in cui la posizione p smette di valere (scade quando now > expiresAt) e se vale ancora all'ora now
+const expiresAt = p => p.ts + retentionMs(p, LIMITS);
+const isLive = (p, now) => now <= expiresAt(p);
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts, classA, staticScore }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
@@ -210,15 +223,15 @@ setInterval(() => {
 }, 30000);
 
 setInterval(() => {
-  const limit = Date.now() - STALE_MS;
+  const now = Date.now();
   let removed = false;
-  for (const [mmsi, p] of positions) if (p.ts < limit) { positions.delete(mmsi); removed = true; }
+  for (const [mmsi, p] of positions) if (!isLive(p, now)) { positions.delete(mmsi); removed = true; }
   if (removed) dataVersion++;
-  pruneOlder(candidates, limit);
+  pruneOlder(candidates, now - LIMITS.movingMs);
   // i dati statici arrivano solo ogni 6 minuti: li conservo 48 ore, così una nave che riappare li ha subito
   const staticLimit = Date.now() - 48 * 3600 * 1000;
   for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) vessels.delete(mmsi);
-}, 60000);
+}, POSITIONS_CLEANUP_MS);
 
 // La pagina può stare su un altro dominio (GitHub Pages): le API sono pubbliche e in sola lettura,
 // quindi di base le può leggere qualunque origine; CORS_ORIGIN la restringe (es. https://lorenzomp7.github.io)
@@ -291,19 +304,31 @@ function shipFeature(mmsi, p) {
       rot: p.rot ?? undefined, navStat: p.navStat, timestampExternal: p.ts } };
 }
 
-function locations({ box, limit }) {
+// Navi nel bbox con una posizione ancora valida (isLive: la pulizia periodica può non averle ancora tolte).
+// Restituisce la FeatureCollection (fc) e expires: l'ora in cui la prima di queste navi scade, cioè fino a quando
+// la risposta resta uguale a dati fermi (la usa la cache, vedi sendLocations).
+function locations({ box, limit }, now = Date.now()) {
   const hits = [];
-  for (const [mmsi, p] of positions) if (inBox(box, p)) hits.push([mmsi, p]);
+  let expires = Infinity;
+  for (const [mmsi, p] of positions) {
+    if (!inBox(box, p)) continue;
+    const end = expiresAt(p);
+    if (now > end) continue;
+    hits.push([mmsi, p]);
+    if (end < expires) expires = end;
+  }
   // campione per importanza (punto 4, sample.js): oltre limit le navi più importanti, con un massimo per cella
-  const shown = sampleByImportance(hits, limit, box, { staticOf: (m, p) => p.staticScore, now: Date.now() });
-  return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) };
+  const shown = sampleByImportance(hits, limit, box, { staticOf: (m, p) => p.staticScore, now });
+  return { fc: { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) }, expires };
 }
 
 // Navi chieste con include= (punto 3: la nave selezionata, più avanti le preferite): solo quelle che hanno una
 // posizione, nell'ordine dato, senza bbox né campione; total = navi trovate. Sempre calcolata al momento, così la
 // nave selezionata è aggiornata anche quando la vista viene dalla cache.
 function included(include) {
-  const features = include.filter(mmsi => positions.has(mmsi)).map(mmsi => shipFeature(mmsi, positions.get(mmsi)));
+  const now = Date.now();
+  const features = include.filter(mmsi => positions.has(mmsi) && isLive(positions.get(mmsi), now))
+    .map(mmsi => shipFeature(mmsi, positions.get(mmsi)));
   return { type: 'FeatureCollection', total: features.length, features };
 }
 
@@ -311,7 +336,7 @@ function included(include) {
 // per comprimere, oppure se la voce è nata da una richiesta senza gzip. Ai client senza gzip una voce che ha
 // solo gz si serve decomprimendola. Tetti: LOCATIONS_CACHE_SIZE voci e LOCATIONS_CACHE_BYTES byte (raw + gz);
 // oltre esce la voce inserita per prima.
-const locationsCache = new Map(); // chiave -> { key, version, t, raw, keepRaw, gz: Promise<Buffer> | null, gzBuf, bytes }
+const locationsCache = new Map(); // chiave -> { key, version, t, expires, raw, keepRaw, gz: Promise<Buffer> | null, gzBuf, bytes }
 const cacheStats = { hits: 0, misses: 0, compressions: 0 };
 let cacheBytes = 0;
 const gzipAsync = require('util').promisify(zlib.gzip);
@@ -362,12 +387,18 @@ function sendLocations(req, res, query) {
   if (params.include) return json(req, res, included(params.include));
   const key = params.key, now = Date.now(), gzip = acceptsGzip(req);
   let entry = LOCATIONS_CACHE_SIZE > 0 ? locationsCache.get(key) : undefined;
+  // a dati fermi la voce vale al massimo 60 s e solo finché nessuna delle sue navi è scaduta (expires): senza
+  // messaggi nuovi dataVersion non cambia, ma le navi oltre il loro limite devono comunque sparire. Entro
+  // LOCATIONS_CACHE_MS (3 s) invece la voce si riusa comunque, come per i dati nuovi: una nave può restare fino a 3 s
+  // oltre il suo limite (legarla anche lì alla prima scadenza spegnerebbe la cache, perché fra decine di migliaia di
+  // navi ne scade una di continuo).
   const hit = !!entry && (now - entry.t < LOCATIONS_CACHE_MS
-    || (entry.version === dataVersion && now - entry.t < LOCATIONS_CACHE_STABLE_MS));
+    || (entry.version === dataVersion && now - entry.t < LOCATIONS_CACHE_STABLE_MS && now <= entry.expires));
   if (hit) cacheStats.hits++;
   else {
     cacheStats.misses++;
-    entry = { key, version: dataVersion, t: now, raw: Buffer.from(JSON.stringify(locations(params))),
+    const { fc, expires } = locations(params, now);
+    entry = { key, version: dataVersion, t: now, expires, raw: Buffer.from(JSON.stringify(fc)),
       keepRaw: !gzip, gz: null, gzBuf: null, bytes: 0 };
     if (LOCATIONS_CACHE_SIZE > 0) {
       cacheRemove(key);   // ricalcolata: torna in fondo all'ordine di inserimento
@@ -400,10 +431,13 @@ function search(q) {
   q = q.trim().toUpperCase();
   const hits = [];
   if (q.length < 2) return hits;
+  const now = Date.now();
   for (const v of vessels.values()) {
     const p = positions.get(v.mmsi);
-    if (p && ((v.name || '').toUpperCase().includes(q) || String(v.mmsi).startsWith(q) || String(v.imo || '').startsWith(q))) {
-      hits.push({ ...v, lat: p.lat, lon: p.lon });
+    if (p && isLive(p, now) && ((v.name || '').toUpperCase().includes(q) || String(v.mmsi).startsWith(q) || String(v.imo || '').startsWith(q))) {
+      // età nei risultati della pagina (punto 62); velocità e stato per decidere, come per /api/locations, se la nave è
+      // ferma (conservata più a lungo) o se la posizione è scaduta
+      hits.push({ ...v, lat: p.lat, lon: p.lon, sog: p.sog, navStat: p.navStat, timestampExternal: p.ts });
       if (hits.length >= 25) break;
     }
   }
@@ -435,7 +469,7 @@ http.createServer((req, res) => {
   // serverTime: ora del server in ms, con cui la pagina corregge l'orologio del telefono (punto 43).
   // Solo qui e non in /api/locations, che può essere servita dalla cache con un'ora vecchia.
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size,
-    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes }, serverTime: Date.now() });
+    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes }, limits: LIMITS, serverTime: Date.now() });
   if (url === '/config.js') {
     // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });

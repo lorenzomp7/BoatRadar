@@ -16,9 +16,13 @@ Lavora su `main_claude` salvo indicazione diversa.
   messaggio AIS, 429), stato in
   memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione per importanza con `limit` (`sample.js`), in cache; con
   `include=mmsi,…`, al massimo 50, solo quelle navi, fuori dalla cache),
-  `/api/vessel`, `/api/search`, `/api/status`.
+  `/api/vessel`, `/api/search`, `/api/status`. Conservazione (punto 8): posizioni di navi in moto 30 min, ferme
+  (`isStill`) 6 h (`STALE_MOVING_MS`, `STALE_STILL_MS`, `limits` effettivi in `/api/status`, usati anche dalla pagina
+  per le navi del server); le risposte escludono le scadute
+  anche prima della pulizia e una voce della cache «a dati fermi» vale solo fino alla prima scadenza delle sue navi.
 - `sample.js`: funzioni pure del campione di `/api/locations` (punto 4): oltre `limit` restano le navi più
-  importanti (classe A, in moto, lunghe, cargo/petroliere/passeggeri, posizione recente), al massimo
+  importanti (classe A, in moto, lunghe, cargo/petroliere/passeggeri, posizione recente: -1 ogni 10 min fino a 30 min,
+  poi -1 per ora o frazione fino a -8), al massimo
   `ceil(limit / 64²)` per cella di una griglia 64 × 64 sul bbox prima di riempire con le altre; la parte statica del
   punteggio (`staticScore`) la calcola `handle()`. Test in `test/sample.test.js` e `test/campione.test.js`. Va nella
   `COPY` del `Dockerfile`, nei `paths` di `deploy-backend.yml` e `browser.yml` e in `node --check` di `test.yml`
@@ -27,9 +31,9 @@ Lavora su `main_claude` salvo indicazione diversa.
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
-- `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale…), modulo UMD
+- `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale, età della posizione…), modulo UMD
   (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js`. server.js lo
-  serve da un elenco fisso; va nella `COPY` del `Dockerfile` e in `pages.yml`, che nella pagina pubblicata
+  usa per i limiti di conservazione (`retentionMs`) e lo serve da un elenco fisso; va nella `COPY` del `Dockerfile` e in `pages.yml`, che nella pagina pubblicata
   aggiunge `?v=<commit>` allo script contro la cache (lo controlla un test).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
@@ -123,7 +127,8 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   `server.js` con la fixture di esempio (`tools/smoke-server.js`, senza chiave), apre la pagina
   a 1280×800 e 390×844, controlla navi in mappa, apertura della scheda con un clic vero del mouse,
   chiusura con un clic vero sulla × (almeno 44×44 px, non coperta dall'header) e con Esc, e assenza di
-  errori JavaScript. Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
+  errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
+  quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
 - Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
 - Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
   registro npm. Senza tile la mappa resta scura: è normale.

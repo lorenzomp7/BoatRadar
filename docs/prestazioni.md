@@ -142,4 +142,10 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | dopo punto 4 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 171.1 | 6000 | 255.7 (1614.9) | 43.1 / 58.1 | 1427 | 58.3 (381.3) | 11 / 14.4 | v22.23.5 |
 | 2026-11-26 | dopo correzioni punto 4 (ordinamento semplice) | 30000 | 0.55 | 169.7 | 6000 | 255.3 (1614.9) | 1 / 4.1 | 1427 | 58.2 (381.3) | 0.9 / 1.2 | v22.23.5 |
 | 2026-11-26 | dopo correzioni punto 4 (ordinamento semplice) con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 171.4 | 6000 | 255.4 (1614.9) | 53.7 / 66.1 | 1427 | 58.2 (381.3) | 13.9 / 36 | v22.23.5 |
+| 2026-11-26 | prima punto 8 | 30000 | 0.55 | 170 | 6000 | 254.3 (1550.5) | 1.3 / 2.5 | 1427 | 57.6 (366) | 0.7 / 1 | v22.23.5 |
+| 2026-11-26 | prima punto 8 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 169.6 | 6000 | 254.6 (1550.5) | 52.3 / 66.2 | 1427 | 57.8 (366) | 12.6 / 16.6 | v22.23.5 |
+| 2026-11-26 | dopo punto 8 | 30000 | 0.54 | 171.4 | 6000 | 253.7 (1550.5) | 1.1 / 1.9 | 1427 | 57.5 (366) | 0.6 / 1.4 | v22.23.5 |
+| 2026-11-26 | dopo punto 8 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 171.6 | 6000 | 254.5 (1550.5) | 49.1 / 63.6 | 1427 | 57.7 (366) | 10.3 / 12.8 | v22.23.5 |
+| 2026-11-26 | dopo correzioni punti 8 e 62 (penalità d'età fino a -8) | 30000 | 0.55 | 171.7 | 6000 | 254.3 (1550.5) | 1.3 / 2 | 1427 | 57.6 (366) | 0.8 / 0.9 | v22.23.5 |
+| 2026-11-26 | dopo correzioni punti 8 e 62 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.54 | 169.4 | 6000 | 253.1 (1550.5) | 46.4 / 57 | 1427 | 57.3 (366) | 11.6 / 13.7 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->

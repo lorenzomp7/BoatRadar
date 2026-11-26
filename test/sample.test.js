@@ -29,15 +29,37 @@ test('importance: petroliera in moto batte barca ferma; ogni criterio pesa come 
   for (const t of [59, 90, 37, undefined]) assert.equal(importance({ ts: NOW }, { shipType: t }, NOW), 0, `tipo ${t}`);
 });
 
-test('importance: penalità per l\'età della posizione, a gradini di 10 min, al massimo 3', () => {
+test('importance: penalità per l\'età della posizione, -1 ogni 10 min fino a 30 min, poi -1 per ora (o frazione) fino a -8', () => {
+  const H = 60 * MIN;
   const at = ago => importance({ ts: NOW - ago, classA: true, sog: 5 }, {}, NOW);
   assert.equal(at(0), 4);
   assert.equal(at(9 * MIN), 4);
   assert.equal(at(10 * MIN), 3);
   assert.equal(at(25 * MIN), 2);
-  assert.equal(at(5 * 3600 * 1000), 1, 'al massimo -3');
+  assert.equal(at(30 * MIN), 1, '30 min esatti: -3, come prima');
+  assert.equal(at(30 * MIN + 1), 0, 'oltre il limite delle navi in moto: subito -4');
+  assert.equal(at(90 * MIN), 0, '1 h oltre i 30 min: -4');
+  assert.equal(at(90 * MIN + 1), -1, '-5');
+  assert.equal(at(3 * H), -2, '3 h: -6');
+  assert.equal(at(4 * H + 30 * MIN), -3, '-7');
+  assert.equal(at(4 * H + 30 * MIN + 1), -4, '-8');
+  assert.equal(at(6 * H), -4, 'al massimo -8');
+  assert.equal(at(48 * H), -4);
   assert.equal(at(-5 * MIN), 4, 'posizione «nel futuro»: nessuna penalità');
-  assert.equal(importance({ classA: true }, {}, NOW), -1, 'ts mancante: penalità massima, mai NaN');
+  assert.equal(importance({ classA: true }, {}, NOW), -6, 'ts mancante: penalità massima, mai NaN');
+});
+
+test('limit 1: petroliera ferma di classe A (200 m) vista 3 h fa contro barca di classe B fresca in moto: resta la barca', () => {
+  const H = 60 * MIN;
+  const oldTanker = { lat: 44, lon: 9, sog: 0, navStat: 5, classA: true, ts: NOW - 3 * H };
+  const freshBoat = { lat: 44.01, lon: 9.01, sog: 6, classA: false, ts: NOW };
+  const vessels = new Map([[1, { length: 200, shipType: 80 }], [2, { length: 8, shipType: 37 }]]);
+  // MMSI più basso alla petroliera: a parità vincerebbe lei
+  const got = sampleByImportance([hit(1, oldTanker), hit(2, freshBoat)], 1, null, { vesselOf: vesselsOf(vessels), now: NOW });
+  assert.deepEqual(got.map(([m]) => m), [2]);
+  // la stessa petroliera vista 25 min fa batte ancora la barca
+  const recent = sampleByImportance([hit(1, { ...oldTanker, ts: NOW - 25 * MIN }), hit(2, freshBoat)], 1, null, { vesselOf: vesselsOf(vessels), now: NOW });
+  assert.deepEqual(recent.map(([m]) => m), [1]);
 });
 
 const hit = (mmsi, p) => [mmsi, p];
@@ -160,9 +182,9 @@ test('pari matematici con errori di arrotondamento float contano come pari: 172 
 });
 
 test('punteggi negativi: navi ferme di classe B senza dati statici, età 0, 15 e 35 min', () => {
-  // punteggi 0, -1 e -3; MMSI in ordine inverso rispetto all'importanza
+  // punteggi 0, -1 e -4 (35 min: oltre il limite delle navi in moto); MMSI in ordine inverso rispetto all'importanza
   const at = ago => ({ lat: 0, lon: 0, sog: 0, classA: false, ts: NOW - ago * MIN });
-  assert.deepEqual([0, 15, 35].map(a => importance(at(a), undefined, NOW)), [0, -1, -3]);
+  assert.deepEqual([0, 15, 35].map(a => importance(at(a), undefined, NOW)), [0, -1, -4]);
   const hits = [hit(30, at(0)), hit(20, at(15)), hit(10, at(35))];
   assert.deepEqual(sampleByImportance(hits, 2, null, { now: NOW, grid: 1 }).map(([m]) => m), [30, 20]);
   // limit 1 fra 15 e 35 min, con l'MMSI più basso alla nave di 35 min: vince quella di 15
@@ -190,11 +212,11 @@ test('sample.js è nell\'immagine Docker, nei paths dei workflow e controllato d
 });
 
 test('contratto dei pari: per lunghezze intere 10-320 m il confronto a 1e-9 coincide con quello esatto in interi', () => {
-  // punteggio = log2(L / 10) + k con k intero fra -3 e +5: uguale in matematica se e solo se L · 2^(k+3) è uguale.
+  // punteggio = log2(L / 10) + k con k intero fra -8 e +5: uguale in matematica se e solo se L · 2^(k+8) è uguale.
   // Stesso calcolo di sampleByImportance: parte dinamica intera + staticImportance, poi Math.round(· 1e9).
   const byExact = new Map(), byRounded = new Map();
-  for (let L = 10; L <= 320; L++) for (const type of [undefined, 80]) for (let dyn = -3; dyn <= 4; dyn++) {
-    const k = dyn + (type ? 1 : 0), exact = L * 2 ** (k + 3);
+  for (let L = 10; L <= 320; L++) for (const type of [undefined, 80]) for (let dyn = -8; dyn <= 4; dyn++) {
+    const k = dyn + (type ? 1 : 0), exact = L * 2 ** (k + 8);
     const rounded = Math.round((dyn + staticImportance({ length: L, shipType: type })) * 1e9);
     if (byExact.has(exact)) assert.equal(byExact.get(exact), rounded, `L ${L}, k ${k}: pari separati`);
     else byExact.set(exact, rounded);

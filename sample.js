@@ -6,12 +6,16 @@
 
 const SAMPLE_GRID = 64;                 // griglia SAMPLE_GRID × SAMPLE_GRID sul bbox
 const AGE_STEP_MS = 10 * 60 * 1000;     // un punto in meno ogni 10 min di età della posizione...
-const AGE_MAX_PENALTY = 3;              // ...fino a 3
+const AGE_MAX_PENALTY = 3;              // ...fino a 3 (30 min, il limite delle navi in moto);
+const AGE_OLD_MS = AGE_STEP_MS * AGE_MAX_PENALTY;
+const AGE_HOUR_MS = 60 * 60 * 1000;     // oltre (solo navi ferme, conservate fino a 6 h) uno in meno per ogni ora o
+const AGE_OLD_MAX_PENALTY = 8;          // frazione d'ora in più, fino a 8 in tutto
 const WORLD = [-180, -90, 180, 90];
 
 // Punteggio di una nave: p = posizione (classA, sog, ts), v = dati statici (length, shipType), now in ms.
 // Classe A +2; in moto +2 (oltre 0,5 kn; 102,3 = non disponibile); lunghezza log2(m / 10), da 0 a 5;
-// cargo, petroliera, passeggeri, alta velocità, rimorchiatori e simili (tipi 60-89) +1; età: -1 ogni 10 min, al massimo -3.
+// cargo, petroliera, passeggeri, alta velocità, rimorchiatori e simili (tipi 60-89) +1; età: -1 ogni 10 min fino a -3
+// (30 min), poi -1 per ogni ora o frazione in più fino a -8 (agePenalty): una posizione di ore fa passa dopo le navi fresche.
 function importance(p, v, now) {
   return dynamicImportance(p, now) + staticImportance(v);
 }
@@ -35,13 +39,18 @@ function dynamicImportance(p, now) {
   if (p.classA) s += 2;
   if (Number.isFinite(p.sog) && p.sog > 0.5 && p.sog < 102.3) s += 2;
   const age = Number.isFinite(p.ts) ? Math.max(0, now - p.ts) : Infinity;
-  s -= Math.min(AGE_MAX_PENALTY, Math.floor(age / AGE_STEP_MS));
-  return s;
+  return s - agePenalty(age);
+}
+
+// Penalità (intera, 0-8) per l'età in ms: 30 min esatti = 3, 30 min + 1 ms = 4, 1 h 30 min + 1 ms = 5… Infinity = 8
+function agePenalty(age) {
+  if (age <= AGE_OLD_MS) return Math.floor(age / AGE_STEP_MS);
+  return Math.min(AGE_OLD_MAX_PENALTY, AGE_MAX_PENALTY + Math.ceil((age - AGE_OLD_MS) / AGE_HOUR_MS));
 }
 
 // Pari quasi uguali: i punteggi si confrontano in unità di 1e-9 (Math.round(score · SCORE_UNITS), un intero
 // esatto in un Float64). Due punteggi uguali in matematica ma diversi nell'ultimo bit del float (log2(17,2) e
-// log2(8,6) + 1) diventano lo stesso intero. Con lunghezze intere fra 10 e 320 m e parte intera fra -3 e +5 due
+// log2(8,6) + 1) diventano lo stesso intero. Con lunghezze intere fra 10 e 320 m e parte intera fra -8 e +5 due
 // punteggi diversi distano almeno 1,7e-5 e nessuno cade a meno di 8e-5 unità da un bordo di arrotondamento
 // (test in test/sample.test.js): l'arrotondamento non separa mai due pari né unisce due punteggi diversi.
 const SCORE_UNITS = 1e9;
@@ -86,4 +95,5 @@ function sampleByImportance(hits, limit, box, { vesselOf = () => undefined, stat
   return out;
 }
 
-module.exports = { importance, staticImportance, dynamicImportance, sampleByImportance, SAMPLE_GRID, AGE_STEP_MS, AGE_MAX_PENALTY };
+module.exports = { importance, staticImportance, dynamicImportance, agePenalty, sampleByImportance, SAMPLE_GRID, AGE_STEP_MS, AGE_MAX_PENALTY,
+  AGE_OLD_MAX_PENALTY };

@@ -20,6 +20,13 @@
     border-radius:10px; max-height:300px; overflow:auto; width:330px; max-width:calc(100vw - 72px); display:none; }
   #results div { padding:7px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--line); }
   #results div:hover { background:#1f2c3b; }
+  /* punto 62: pallino dell'età della posizione (sempre con il testo accanto). Tre luminanze diverse, dal più chiaro
+     (fresca) al più scuro (vecchia), così si distinguono anche senza vedere la tinta; tutti ≥ 3:1 sul pannello #17212d
+     (8,4 · 6,4 · 3,5) e sul risultato evidenziato #1f2c3b; fra vicini 1,31 e 1,82 (test in test/ais-logic.test.js) */
+  .age { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; }
+  .age-verde { background:#56d364; }
+  .age-arancio { background:#f0883e; }
+  .age-rosso { background:#da3633; }
   #panel { position:absolute; top:12px; right:12px; bottom:12px; width:340px; max-width:calc(100% - 24px); z-index:1000;
     background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; overflow:auto; display:none; }
   #panel h2 { margin:0 0 2px; padding-right:32px; font-size:20px; }   /* spazio per la × */
@@ -46,6 +53,8 @@
   #legend .sym { display:flex; align-items:center; gap:6px; margin-top:4px; }
   #legend-types + .sym { border-top:1px solid var(--line); padding-top:6px; }   /* separatore fra tipi e simboli */
   #legend svg { width:12px; height:16px; flex:none; fill:var(--text); stroke:#0b1118; stroke-width:1; }
+  #legend svg .old { fill-opacity:.2; stroke:#c9d4e0; stroke-width:1.5; stroke-dasharray:3 2; }
+  #legend svg .fading { fill-opacity:.5; stroke:#c9d4e0; stroke-width:1; }
   /* scheda aperta (desktop): l'header (z-index 1100) non si allarga sopra la scheda (destra 12 px + 340 px) e va
      a capo; prima con una riga di stato lunga copriva la × e il clic arrivava al pulsante VesselFinder */
   @media (min-width: 641px) {
@@ -115,6 +124,10 @@
        (fino a 0,5 kn) o con la velocità non nota; «ferma» nel tooltip invece solo con la velocità nota (stopped) -->
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-5.2L4.4,3.9L0,2.34L-4.4,3.9Z"/></svg>freccia corta = ferma o velocità non nota, prua nota</div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4"/></svg>pallino = direzione non nota</div>
+  <!-- punto 8: le navi sbiadiscono con l'età della posizione (bordo chiaro dopo 2 min); le ferme restano fino a 6 h,
+       tratteggiate dopo 30 min -->
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="fading"/></svg>sbiadita, bordo chiaro = posizione di qualche minuto fa</div>
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="old"/></svg>sbiadita, tratteggiata = posizione vecchia (ferma)</div>
 </details>
 <aside id="panel"><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
@@ -128,7 +141,11 @@
 const API = (window.BOATRADAR_API || '/api').replace(/\/$/, '');
 const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
-const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
+// Baltico: solo navi viste negli ultimi 30 minuti. Resta 30 min anche dopo il punto 8 (navi ferme fino a 6 h in
+// mappa): con 6 h la risposta di Digitraffic, che arriva intera a ogni giro, diventerebbe molto più pesante e non è
+// stata misurata (Digitraffic non era raggiungibile dalla sessione di sviluppo). Nel Baltico le navi ferme da più
+// di 30 min si vedono solo se arrivano anche da aisstream.
+const WINDOW_MS = 30 * 60 * 1000;
 const CLOCK_WAIT_MS = 3000;       // primo aggiornamento: attesa massima di /api/status prima di chiedere il Baltico
 
 // Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
@@ -139,7 +156,7 @@ if (!window.AisLogic) {
   throw new Error(msg);
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
-  clockSample, createClock, includeParam } = AisLogic;
+  clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits } = AisLogic;
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
@@ -214,9 +231,69 @@ new ResizeObserver(() => map.invalidateSize()).observe($('map'));
 const meta = new Map();     // mmsi -> dati statici (nome, IMO, tipo…)
 const markers = new Map();  // mmsi -> { marker, props }
 let selected = null;
+// ultime properties della nave selezionata (punto 8): la scheda resta aggiornata anche quando il marker manca (posizione
+// scaduta, nave scelta dalla ricerca non ancora arrivata)
+let selectedProps = null;
 let worldTotal = 0;
+// Limiti di conservazione del server (limits di /api/status, normLimits): valgono per le navi di aisstream; quelle del
+// Baltico (Digitraffic) usano i limiti normali. Una risposta senza limiti validi riporta ai normali; se /api/status non
+// risponde restano gli ultimi ricevuti.
+let serverLimits = DEFAULT_LIMITS;
+const limitsOf = p => (p?.source === 'digitraffic' ? DEFAULT_LIMITS : serverLimits);
+const ageOf = (p, now = clock.now()) => ageStyle(p || {}, now, limitsOf(p));
 // Bordo dei marker: normale e nave selezionata (giallo, più grande)
 const STYLE = { normal: { radius:4, color:'#0b1118', weight:1 }, selected: { radius:8, color:'#ffc83d', weight:3 } };
+// Punto 8: posizione più vecchia del limite delle navi in moto (solo le ferme restano in mappa così a lungo):
+// bordo chiaro tratteggiato, perché il bordo normale scuro non si vedrebbe sulla mappa scura
+const AGE_DASH = { color:'#c9d4e0', weight:1.5, dashArray:'3 2' };
+
+// Opacità per età (dopo la revisione del QA): riempimento 0,95 appena ricevuta, poi segue fadeOpacity fino a 0,35 a
+// 30 min; le ferme oltre 30 min (tratteggiate, con il bordo chiaro) 0,2. Il bordo scuro normale sulla mappa scura ha
+// contrasto ~1:1, quindi una nave in moto che sbiadisce (oltre 2 min) prende un bordo chiaro pieno mai sotto lo 0,55:
+// almeno 3:1 su terra, mare, bosco e mappa senza tile (con il filtro di .tiles; test in test/pagina-vm.test.js).
+const FADE = { fill: 0.95, oldFill: 0.2, selectedFill: 0.6, border: '#c9d4e0', borderMin: 0.55 };
+
+// Stile del marker: STYLE (normale o selezionata) combinato con l'età della posizione (ageOf: ora corretta e limiti
+// della sua fonte). La nave selezionata tiene il bordo giallo pieno e il riempimento almeno al 60 %.
+function markerStyle(props, sel, now = clock.now()) {
+  const a = ageOf(props, now), fill = Math.min(FADE.fill, a.opacity);
+  if (sel) return { ...STYLE.selected, opacity: 1, fillOpacity: Math.max(fill, FADE.selectedFill), dashArray: a.dashed ? '6 3' : null };
+  if (a.dashed) return { ...STYLE.normal, ...AGE_DASH, opacity: 0.9, fillOpacity: FADE.oldFill };
+  if (a.opacity < 1) return { ...STYLE.normal, color: FADE.border, opacity: Math.max(a.opacity, FADE.borderMin), fillOpacity: fill, dashArray: null };
+  return { ...STYLE.normal, opacity: 1, fillOpacity: FADE.fill, dashArray: null };
+}
+
+// Età della posizione in parole, uguale in tooltip, scheda e ricerca: «12 min fa», oltre il limite delle navi in moto
+// (tratteggiata) «posizione di 3 h fa», oltre la sua conservazione «posizione scaduta»; null senza orario
+function ageWords(props, now = clock.now()) {
+  const a = ageOf(props, now), age = formatAge(a.age);
+  if (!age) return null;
+  return a.gone ? 'posizione scaduta' : (a.dashed ? 'posizione di ' : '') + age;
+}
+
+// Per la scheda, con l'ora: «12 min fa (08:41:03)», «posizione di 3 h fa (05:41:03)», «posizione scaduta (ultima: 05:41:03)»
+function ageText(props, now = clock.now()) {
+  const words = ageWords(props, now);
+  if (!words) return null;
+  const time = new Date(toMs(props.timestampExternal)).toLocaleTimeString('it-IT');
+  return ageOf(props, now).gone ? `posizione scaduta (ultima: ${time})` : `${words} (${time})`;
+}
+
+// Punto 62: pallino colorato dell'età (verde < 5 min, arancio < 15 min, rosso; rosso anche se scaduta), decorativo: il
+// testo accanto dice sempre l'età, quindi per i lettori di schermo è nascosto. '' senza orario.
+function ageDot(props, now = clock.now()) {
+  const a = ageOf(props, now);
+  return Number.isFinite(a.age) ? `<span class="age age-${a.gone ? 'rosso' : ageClass(a.age)}" aria-hidden="true"></span>` : '';
+}
+
+// Tooltip: nome, «ferma» e età (senza l'ora), calcolati quando compare
+function tooltipText(mmsi) {
+  const p = markers.get(mmsi)?.props || {}, words = ageWords(p);
+  return (meta.get(mmsi)?.name || String(mmsi)) + (stopped(p) ? ' · ferma' : '') + (words ? ' · ' + words : '');
+}
+
+// Properties della posizione di una nave: dal marker, o le ultime della nave selezionata se il marker manca
+const propsOf = mmsi => markers.get(mmsi)?.props || (mmsi === selected && selectedProps) || {};
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -282,10 +359,16 @@ async function loadLocations() {
     features(`${API}/locations?bbox=${viewBox()}`, true), ship ? features(`${API}/locations?${ship}`) : [],
     clockReady.then(() => features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`)), status]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
+  const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
+  if (st) serverLimits = normLimits(st.limits);
   // stessa nave in più fonti: tengo la posizione più recente (properties.source dice da dove viene); la nave
   // inclusa vince sulla vista (forse dalla cache) se è più recente
   const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }, { source: 'aisstream', features: inc.value }]);
+  // età con l'ora corretta (punto 8): una posizione oltre il suo limite (in moto 30 min, ferma 6 h, o i limiti del
+  // server) non entra in mappa
+  const now = clock.now();
   for (const [mmsi, f] of merged) {
+    if (ageOf(f.properties, now).gone) continue;
     const [lon, lat] = f.geometry.coordinates;
     const { name, shipType } = f.properties;
     if (name || shipType != null) meta.set(mmsi, { ...meta.get(mmsi), ...(name && { name }), ...(shipType != null && { shipType }) });
@@ -296,25 +379,28 @@ async function loadLocations() {
     if (!m) {
       // la nave selezionata (es. scelta dalla ricerca, arrivata con include=) nasce già con il bordo giallo
       const sel = mmsi === selected;
-      const marker = new ShipMarker([lat, lon], { renderer, ...(sel ? STYLE.selected : STYLE.normal), fillColor:color,
-        fillOpacity:.95, ...symbol(f.properties) })
+      const marker = new ShipMarker([lat, lon], { renderer, ...markerStyle(f.properties, sel, now), fillColor:color,
+        ...symbol(f.properties) })
         .on('click', () => select(mmsi)).addTo(map);
       if (sel) marker.bringToFront();
-      marker.bindTooltip(() => (meta.get(mmsi)?.name || String(mmsi)) + (stopped(markers.get(mmsi)?.props || {}) ? ' · ferma' : ''),
-        { direction:'top' });
+      marker.bindTooltip(() => tooltipText(mmsi), { direction:'top' });
       m = { marker };
       markers.set(mmsi, m);
     } else {
       m.marker.setLatLng([lat, lon]);
-      m.marker.setSymbol(symbol(f.properties));
-      m.marker.setStyle({ fillColor: color });
+      m.marker.setSymbol(symbol(f.properties));   // colore, opacità e tratteggio dopo il ciclo, con un solo setStyle
     }
     m.props = f.properties;
   }
   // se è fallita la richiesta include=, la nave selezionata non è sparita: manca solo la risposta, resta dov'è
+  // (ma non oltre il limite della sua posizione). Ogni marker rimasto prende lo stile della sua età di adesso,
+  // anche se in questo giro non si è spostato (un solo setStyle per marker: colore del tipo e stile dell'età).
   const keep = inc.status === 'rejected' ? selected : null;
-  for (const [mmsi, m] of markers) if (!merged.has(mmsi) && mmsi !== keep) { m.marker.remove(); markers.delete(mmsi); }
-  const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
+  for (const [mmsi, m] of markers) {
+    if (mmsi === selected) selectedProps = m.props;   // la scheda le tiene anche se il marker sparisce
+    if ((!merged.has(mmsi) && mmsi !== keep) || ageOf(m.props, now).gone) { m.marker.remove(); markers.delete(mmsi); }
+    else m.marker.setStyle({ ...markerStyle(m.props, mmsi === selected, now), fillColor: typeOf(meta.get(mmsi)?.shipType).color });
+  }
   const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
     : st.error ? ' · Mondo: ' + st.error
@@ -325,13 +411,15 @@ async function loadLocations() {
   $('status').textContent = `${markers.size} in mappa · agg. ${new Date(clock.now()).toLocaleTimeString('it-IT')}${note}`;
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
-  if (selected && markers.has(selected)) render(selected);
+  // scheda aggiornata a ogni giro (età), anche senza marker: con le ultime properties dice «posizione scaduta»
+  if (selected) render(selected);
 }
 
 // Nessuna nave scelta: tolgo il bordo giallo; senza selected la pagina non chiede più la nave con include=
 function deselect() {
-  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle(STYLE.normal);
+  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle(markerStyle(markers.get(selected).props, false));
   selected = null;
+  selectedProps = null;
 }
 
 // Scheda aperta e chiusa. La classe panel-open tiene l'header fuori dalla scheda su desktop (CSS). Alla chiusura il
@@ -352,11 +440,13 @@ function closePanel() {
   back.focus();
 }
 
-function select(mmsi) {
+// props: posizione nota se la nave non ha (ancora) un marker, es. un risultato di ricerca del server
+function select(mmsi, props) {
   deselect();
   selected = mmsi;
   const m = markers.get(mmsi);
-  if (m) { m.marker.setStyle(STYLE.selected).bringToFront(); }
+  selectedProps = m?.props || props || null;
+  if (m) { m.marker.setStyle(markerStyle(m.props, true)).bringToFront(); }
   render(mmsi);
   openPanel();
   if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
@@ -370,7 +460,7 @@ function saveOwner(mmsi, name) {
 
 function facts(mmsi) {
   const v = meta.get(mmsi) || {};
-  const p = markers.get(mmsi)?.props || {};
+  const p = propsOf(mmsi);
   const imo = v.imo && v.imo > 0 ? v.imo : null;
   const two = n => String(n).padStart(2, '0');
   const MONTHS = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
@@ -395,7 +485,7 @@ function facts(mmsi) {
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
-      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}
+      <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : '—'}</td></tr>
       ${row('Fonte', SOURCE_LABEL[p.source])}`;
 }
 
@@ -618,6 +708,7 @@ $('mode').onclick = () => setMode(!document.body.classList.contains('vf'));
 $('registries').onclick = () => { setMode(false); showRegistries(); };
 
 const found = new Map(); // mmsi -> [lat, lon] dei risultati di ricerca
+const foundProps = new Map(); // mmsi -> properties della posizione (orario, velocità, stato) dei risultati
 
 $('q').addEventListener('input', async e => {
   const q = e.target.value.trim().toUpperCase();
@@ -626,11 +717,16 @@ $('q').addEventListener('input', async e => {
   const remote = await fetch(`${API}/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => []);
   if (q !== $('q').value.trim().toUpperCase()) return; // nel frattempo l'utente ha scritto altro
   found.clear();
+  foundProps.clear();
   const hits = [];
   for (const v of remote) {
-    meta.set(v.mmsi, { ...meta.get(v.mmsi), ...v });
+    // orario, velocità e stato sono della posizione, non dei dati statici: servono per età e scadenza (limiti del server)
+    const { timestampExternal, sog, navStat, ...data } = v;
+    meta.set(v.mmsi, { ...meta.get(v.mmsi), ...data });
     found.set(v.mmsi, [v.lat, v.lon]);
-    hits.push({ mmsi: v.mmsi, v });
+    const props = { mmsi: v.mmsi, timestampExternal, sog, navStat, source: 'aisstream' };
+    foundProps.set(v.mmsi, props);
+    hits.push({ mmsi: v.mmsi, v, props });
   }
   for (const [mmsi, m] of markers) {
     if (hits.length >= 25) break;
@@ -638,11 +734,16 @@ $('q').addEventListener('input', async e => {
     if (found.has(mmsi)) continue;
     if (matchesQuery(v, mmsi, q)) {
       found.set(mmsi, m.marker.getLatLng());
-      hits.push({ mmsi, v });
+      foundProps.set(mmsi, m.props);
+      hits.push({ mmsi, v, props: m.props });
     }
   }
+  // pallino e testo dell'età della posizione (punto 62), con l'ora corretta e le stesse parole di tooltip e scheda: un
+  // risultato del server che la pagina considera scaduto resta nell'elenco come «posizione scaduta»
+  const now = clock.now();
+  const words = props => { const t = ageWords(props, now); return t ? ' · ' + t : ''; };
   box.innerHTML = hits.length
-    ? hits.map(h => `<div data-mmsi="${h.mmsi}">${esc(h.v.name || 'Senza nome')} <span style="color:var(--muted)">· ${h.mmsi}</span></div>`).join('')
+    ? hits.map(h => `<div data-mmsi="${h.mmsi}">${ageDot(h.props, now)}${esc(h.v.name || 'Senza nome')} <span style="color:var(--muted)">· ${h.mmsi}${esc(words(h.props))}</span></div>`).join('')
     : '<div>Nessun risultato</div>';
   box.style.display = 'block';
 });
@@ -653,7 +754,7 @@ $('results').addEventListener('click', async e => {
   $('results').style.display = 'none';
   map.setView(found.get(mmsi), Math.max(map.getZoom(), 11), { animate:false });
   await tick();
-  select(mmsi);
+  select(mmsi, foundProps.get(mmsi));   // senza marker (es. posizione scaduta) la scheda usa la posizione del risultato
 });
 
 async function tick() {
