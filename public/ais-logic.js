@@ -33,8 +33,16 @@
     return null;
   }
 
-  // Direzione della freccia: la rotta, solo per navi in movimento (sog 102.3 = n.d., cog 360 = n.d.)
-  const heading = p => p.sog > 0.5 && p.sog < 102.3 && p.cog != null && p.cog < 360 ? p.cog : null;
+  // Prua vera (TrueHeading, anche properties.heading di Digitraffic): interi 0-359, altrimenti null
+  // (511 = non disponibile; 0 = nord è una prua valida)
+  const validHeading = h => Number.isInteger(h) && h >= 0 && h <= 359 ? h : null;
+  // In movimento: oltre 0,5 kn (sog 102.3 = non disponibile)
+  const moving = p => p.sog > 0.5 && p.sog < 102.3;
+  // Direzione della freccia: la prua vera se c'è, altrimenti la rotta solo per navi in movimento (cog 360 = n.d.)
+  const heading = p => validHeading(p.heading) ?? (moving(p) && p.cog != null && p.cog < 360 ? p.cog : null);
+  // Simbolo della nave: heading null = pallino; short = freccia corta, per una nave ferma con la prua nota
+  // (all'ancora o ormeggiata), così non sembra in moto
+  const symbol = p => ({ heading: heading(p), short: validHeading(p.heading) != null && !moving(p) });
 
   // ETA di Digitraffic, un intero: mese << 16 | giorno << 11 | ora << 6 | minuto (UTC, senza anno).
   // Mese 0 o giorno 0 = non disponibile; ora 24 e minuto 60 = non disponibili.
@@ -133,6 +141,6 @@
     };
   }
 
-  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
+  return { TYPES, typeOf, typeName, validHeading, heading, symbol, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock };
 });

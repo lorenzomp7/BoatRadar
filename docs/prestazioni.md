@@ -85,6 +85,12 @@ fra 1/64° e 0,25°); `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenu
   la ricezione AIS e le altre richieste vanno avanti durante la compressione (questo il carico
   sequenziale non lo misura). Un `chunkSize` più grande per `zlib.gzip` non cambia i tempi.
 
+Punto 5 (26/11/2026, `heading` e `rot` nelle properties di `/api/locations`): con le navi di
+`tools/carico.js` (tutte con TrueHeading, nessuna con RateOfTurn, quindi `"rot":null`) la vista mondo
+passa da 227,2 a 247,6 KB gzip (+9%; 1459,5 → 1603,7 KB non compressi) e la vista porto da 53,1 a
+58 KB. Tempi a cache spenta (`LOCATIONS_CACHE_SIZE=0`, non registrati in tabella), stessa sessione:
+mondo 36 / 44,4 ms prima e 36 / 46,7 ms dopo, porto 9,8 / 15,3 e 10 / 14,1 ms (mediana / p95).
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |
@@ -94,4 +100,6 @@ fra 1/64° e 0,25°); `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenu
 | 2026-11-26 | dopo punto 84 (cache /api/locations, caso migliore: vista ripetuta senza messaggi) | 30000 | 0.5 | 168.9 | 5979 | 227.8 (1459.5) | 0.9 / 1.5 | 1427 | 53.3 (346.9) | 0.5 / 0.8 | v22.23.5 |
 | 2026-11-26 | dopo punto 84 con LOCATIONS_CACHE_SIZE=0 (cache spenta, gzip asincrono) | 30000 | 0.5 | 167.7 | 5979 | 227.3 (1459.5) | 34.5 / 40.6 | 1427 | 53.1 (346.9) | 11.5 / 16.2 | v22.23.5 |
 | 2026-11-26 | dopo correzioni revisione/QA punti 7, 11, 84 (caso migliore: vista ripetuta) | 30000 | 0.5 | 167.5 | 5979 | 227.5 (1459.5) | 1.1 / 1.8 | 1427 | 53.2 (346.9) | 0.5 / 0.8 | v22.23.5 |
+| 2026-11-26 | prima punto 5 (prua vera), con punto 43 | 30000 | 0.5 | 168.9 | 5979 | 227.2 (1459.5) | 1 / 1.9 | 1427 | 53.1 (346.9) | 0.7 / 0.9 | v22.23.5 |
+| 2026-11-26 | dopo punto 5 (heading e rot in /api/locations) | 30000 | 0.51 | 168.3 | 5979 | 247.6 (1603.7) | 0.9 / 5.5 | 1427 | 58 (381.3) | 0.6 / 2.8 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->

@@ -113,7 +113,7 @@ if (!window.AisLogic) {
   document.getElementById('status').textContent = msg;
   throw new Error(msg);
 }
-const { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
+const { TYPES, typeOf, typeName, validHeading, symbol, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
   clockSample, createClock } = AisLogic;
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
@@ -164,19 +164,22 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 const renderer = L.canvas({ padding: 0.5 });
 
-// Nave in movimento: freccia orientata sulla rotta. Ferma o senza rotta: pallino.
+// Freccia orientata sulla prua (o sulla rotta, se la prua manca e la nave è in moto). Nave ferma con la prua
+// nota: freccia corta (options.short). Senza direzione: pallino. Simbolo scelto da symbol() di ais-logic.js.
 const ShipMarker = L.CircleMarker.extend({
-  setHeading(h) { this.options.heading = h; return this.redraw(); },
+  setSymbol({ heading, short }) { this.options.heading = heading; this.options.short = short; return this.redraw(); },
   _updatePath() {
     const r = this._renderer, h = this.options.heading;
     if (h == null) return r._updateCircle(this);
     if (!r._drawing || this._empty()) return;
-    const ctx = r._ctx, p = this._point, s = this.options.radius;
+    const ctx = r._ctx, p = this._point, s = this.options.radius, k = this.options.short ? 0.65 : 1;
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(h * Math.PI / 180);
     ctx.beginPath();
-    ctx.moveTo(0, -s * 2); ctx.lineTo(s * 1.1, s * 1.5); ctx.lineTo(0, s * 0.9); ctx.lineTo(-s * 1.1, s * 1.5); ctx.closePath();
+    // freccia corta: stessa larghezza, lunghezza (prua-poppa) ridotta al 65%
+    ctx.moveTo(0, -s * 2 * k); ctx.lineTo(s * 1.1, s * 1.5 * k); ctx.lineTo(0, s * 0.9 * k); ctx.lineTo(-s * 1.1, s * 1.5 * k);
+    ctx.closePath();
     ctx.restore();
     r._fillStroke(ctx, this);
   },
@@ -248,14 +251,14 @@ async function loadLocations() {
     if (m && isNewer(m.props?.timestampExternal, f.properties.timestampExternal)) continue;
     if (!m) {
       const marker = new ShipMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95,
-        heading: heading(f.properties) })
+        ...symbol(f.properties) })
         .on('click', () => select(mmsi)).addTo(map);
       marker.bindTooltip(() => meta.get(mmsi)?.name || String(mmsi), { direction:'top' });
       m = { marker };
       markers.set(mmsi, m);
     } else {
       m.marker.setLatLng([lat, lon]);
-      m.marker.options.heading = heading(f.properties);
+      Object.assign(m.marker.options, symbol(f.properties));
       m.marker.setStyle({ fillColor: color });
     }
     m.props = f.properties;
@@ -300,6 +303,7 @@ function facts(mmsi) {
   const eta = v.eta ? `${two(v.eta.day)} ${MONTHS[v.eta.month - 1]}` + (v.eta.hour != null ? `, ${two(v.eta.hour)}:${two(v.eta.minute ?? 0)} UTC` : '') : null;
   const sog = p.sog != null && p.sog < 102.3 ? p.sog.toFixed(1) + ' kn' : null;
   const cog = p.cog != null && p.cog < 360 ? p.cog.toFixed(1) + '°' : null;
+  const hdg = validHeading(p.heading);
   const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? '—' : val)}</td></tr>`;
   const waiting = !v.staticTs && !imo && !v.callSign && v.shipType == null;
   return `
@@ -313,6 +317,7 @@ function facts(mmsi) {
       ${row('Prossimo porto', v.destination)}
       ${row('ETA', eta)}
       ${row('Velocità / Rotta', sog || cog ? `${sog || '—'} / ${cog || '—'}` : null)}
+      ${row('Prua', hdg != null ? hdg + '°' : null)}
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}

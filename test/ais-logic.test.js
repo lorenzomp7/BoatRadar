@@ -331,3 +331,35 @@ test('boatradar.html: età e finestre con clock.now(); Date.now() solo per misur
   const uses = [...code.matchAll(/Date\.now\(\)/g)].length;
   assert.equal(uses, 2, 'Date.now() solo per t0 e t1 della misura di /api/status');
 });
+
+// --- Punto 5: prua vera --------------------------------------------------------------------------------
+test('validHeading: interi 0-359, il resto null', () => {
+  for (const h of [0, 45, 359]) assert.equal(AL.validHeading(h), h);
+  for (const h of [511, 496, 360, -1, 45.5, null, undefined, '45', NaN]) assert.equal(AL.validHeading(h), null, String(h));
+});
+
+test('heading: prua vera se c\'è, altrimenti la rotta solo per navi in movimento', () => {
+  assert.equal(AL.heading({ heading: 45, sog: 0 }), 45, 'nave ferma con prua');
+  assert.equal(AL.heading({ heading: 45, sog: 10, cog: 90 }), 45, 'la prua vince sulla rotta');
+  assert.equal(AL.heading({ heading: 511, sog: 10, cog: 90 }), 90, 'prua n.d.: rotta');
+  assert.equal(AL.heading({ heading: 511, sog: 0.3, cog: 90 }), null, 'prua n.d. e nave ferma: pallino');
+  assert.equal(AL.heading({ heading: 0, sog: 0 }), 0, 'prua 0 (nord) è valida');
+  assert.equal(AL.heading({ heading: 511, sog: 102.3, cog: 90 }), null, 'velocità n.d.');
+});
+
+test('symbol: freccia corta per le navi ferme con prua, normale in moto, pallino senza direzione', () => {
+  assert.deepEqual(AL.symbol({ heading: 45, sog: 0 }), { heading: 45, short: true });
+  assert.deepEqual(AL.symbol({ heading: 0, sog: 0.5 }), { heading: 0, short: true }, '0,5 kn conta come ferma');
+  assert.deepEqual(AL.symbol({ heading: 45, sog: 102.3 }), { heading: 45, short: true }, 'velocità n.d.: non in moto');
+  assert.deepEqual(AL.symbol({ heading: 45, sog: 10, cog: 90 }), { heading: 45, short: false });
+  assert.deepEqual(AL.symbol({ heading: 511, sog: 10, cog: 90 }), { heading: 90, short: false });
+  assert.deepEqual(AL.symbol({ heading: 511, sog: 0 }), { heading: null, short: false });
+  assert.deepEqual(AL.symbol({}), { heading: null, short: false });
+});
+
+test('boatradar.html: simbolo da symbol(), freccia corta e riga «Prua» nella scheda', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  assert.match(html, /symbol\(f\.properties\)/);
+  assert.match(html, /options\.short/);
+  assert.match(html, /row\('Prua'/);
+});

@@ -29,7 +29,7 @@ const LOCATIONS_CACHE_BYTES = envNumber('LOCATIONS_CACHE_BYTES', 32 * 1024 * 102
 const LOCATIONS_CACHE_STABLE_MS = envNumber('LOCATIONS_CACHE_STABLE_MS', 60000);
 const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000) || 60000;
 
-const positions = new Map(); // mmsi -> { lat, lon, sog, cog, navStat, ts }
+const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
 const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
 const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
@@ -71,6 +71,11 @@ function isIMO(n) {
   return sum % 10 === d[6];
 }
 
+// Prua vera AIS (TrueHeading, 9 bit): 0-359 gradi; 511 = non disponibile, gli altri valori (es. 496) non sono una prua
+const hdg = h => Number.isInteger(h) && h >= 0 && h <= 359 ? h : null;
+// Velocità di accostata AIS (RateOfTurn, da -127 a 127): -128 = non disponibile. La classe B non la trasmette.
+const rotOf = r => Number.isInteger(r) && r >= -127 && r <= 127 ? r : null;
+
 function vessel(mmsi) {
   let v = vessels.get(mmsi);
   if (!v) { v = { mmsi }; vessels.set(mmsi, v); }
@@ -98,8 +103,9 @@ function handle(msg) {
   const pos = m.PositionReport || m.StandardClassBPositionReport || m.ExtendedClassBPositionReport;
   if (pos) {
     if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; setDimensions(v, pos.Dimension); }
+    // heading e rot fanno parte del fix: passano anche per candidato e conferma di position-check.js
     const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
-      navStat: pos.NavigationalStatus, ts: Date.now() };
+      heading: hdg(pos.TrueHeading), rot: rotOf(pos.RateOfTurn), navStat: pos.NavigationalStatus, ts: Date.now() };
     // scarto posizioni non valide e salti impossibili (un salto confermato due volte è accettato)
     if (!isValidFix(pos)) status.rejected++;
     else {
@@ -274,7 +280,7 @@ function locations({ box, limit }) {
   return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => {
     const v = vessels.get(mmsi) || {};
     return { type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
-      properties: { mmsi, name: v.name, shipType: v.shipType, sog: p.sog, cog: p.cog, navStat: p.navStat,
+      properties: { mmsi, name: v.name, shipType: v.shipType, sog: p.sog, cog: p.cog, heading: p.heading, rot: p.rot, navStat: p.navStat,
         timestampExternal: p.ts } };
   }) };
 }
