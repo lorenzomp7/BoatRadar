@@ -402,8 +402,10 @@ http.createServer((req, res) => {
   if (url === '/api/locations') return sendLocations(req, res, query);
   if (url === '/api/vessel') return json(req, res, vessels.get(Number(query.get('mmsi'))) || null);
   if (url === '/api/search') return json(req, res, search(query.get('q') || ''));
+  // serverTime: ora del server in ms, con cui la pagina corregge l'orologio del telefono (punto 43).
+  // Solo qui e non in /api/locations, che può essere servita dalla cache con un'ora vecchia.
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size,
-    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes } });
+    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes }, serverTime: Date.now() });
   if (url === '/config.js') {
     // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });

@@ -104,5 +104,35 @@
     return out;
   }
 
-  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures };
+  // Punto 43: orologio del telefono corretto con l'ora del server (serverTime di /api/status).
+  // Campione da una richiesta: t0 e t1 = ora del telefono a inizio e fine, serverTime = ora del server
+  // nella risposta. offset = quanto il telefono è avanti (ms), rtt = durata della richiesta.
+  // null se serverTime non è un numero finito o se l'orologio è andato indietro durante la richiesta.
+  function clockSample(t0, t1, serverTime) {
+    if (![t0, t1, serverTime].every(x => typeof x === 'number' && Number.isFinite(x)) || t1 < t0) return null;
+    return { offset: (t0 + t1) / 2 - serverTime, rtt: t1 - t0 };
+  }
+
+  // Orologio corretto: offset = mediana degli ultimi keep campioni con rtt ≤ maxRtt (le risposte lente
+  // misurano male), 0 senza campioni. now() = ora del telefono − offset, letta a ogni chiamata.
+  function createClock({ now = () => Date.now(), keep = 5, maxRtt = 2000 } = {}) {
+    const samples = [];
+    const offset = () => {
+      if (!samples.length) return 0;
+      const s = [...samples].sort((a, b) => a - b), mid = s.length >> 1;
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    };
+    return {
+      add(sample) {
+        if (!sample || !(sample.rtt <= maxRtt) || !Number.isFinite(sample.offset)) return;
+        samples.push(sample.offset);
+        if (samples.length > keep) samples.shift();
+      },
+      offset,
+      now: () => now() - offset(),
+    };
+  }
+
+  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
+    clockSample, createClock };
 });

@@ -273,3 +273,61 @@ test('typeOf e typeName per 0-99 come in test/fixtures/tipi-nave.json', () => {
     assert.equal(AL.typeName(code), typeName, `typeName(${code})`);
   }
 });
+
+// --- Punto 43: orologio del telefono corretto con l'ora del server ---------------------------------
+test('clockSample: scarto = metà della richiesta − ora del server; rtt = durata', () => {
+  assert.deepEqual(AL.clockSample(1000, 1200, 500), { offset: 600, rtt: 200 });
+  assert.deepEqual(AL.clockSample(1000, 1000, 1000), { offset: 0, rtt: 0 });
+  for (const bad of [undefined, null, NaN, Infinity, '500', {}]) assert.equal(AL.clockSample(1000, 1200, bad), null, String(bad));
+  assert.equal(AL.clockSample(NaN, 1200, 500), null, 't0 non numerico');
+  assert.equal(AL.clockSample(1200, 1000, 500), null, 'fine prima dell\'inizio (orologio spostato durante la richiesta)');
+});
+
+test('createClock: telefono avanti di 5 min → now() dà l\'ora vera; senza campioni scarto 0', () => {
+  let real = Date.parse('2026-11-26T08:00:00Z');
+  const phone = () => real + 300000;   // orologio del telefono avanti di 5 minuti
+  const clock = AL.createClock({ now: phone });
+  assert.equal(clock.offset(), 0, 'senza campioni nessuna correzione');
+  assert.equal(clock.now(), phone());
+  for (let i = 0; i < 3; i++) {
+    const t0 = phone(); real += 40; const serverTime = real; real += 40;   // 80 ms di andata e ritorno
+    clock.add(AL.clockSample(t0, phone(), serverTime));
+  }
+  assert.equal(clock.offset(), 300000);
+  assert.ok(Math.abs(clock.now() - real) <= 1, `now() ${clock.now()} contro ora vera ${real}`);
+  real += 60000;   // now() chiama l'orologio a ogni uso, non lo memorizza
+  assert.ok(Math.abs(clock.now() - real) <= 1);
+});
+
+test('createClock: mediana degli ultimi 5 campioni, risposte lente e campioni null ignorati', () => {
+  const sample = (offset, rtt = 100) => ({ offset, rtt });
+  let c = AL.createClock({ now: () => 0 });
+  for (const o of [300000, 300000, 310000]) c.add(sample(o));
+  assert.equal(c.offset(), 300000, 'mediana, non media');
+  c.add(sample(999999, 5000));   // risposta lenta (oltre maxRtt 2000 ms): non conta
+  c.add(null);                   // risposta senza serverTime
+  assert.equal(c.offset(), 300000);
+  c = AL.createClock({ now: () => 0 });
+  for (const o of [100, 200]) c.add(sample(o));
+  assert.equal(c.offset(), 150, 'numero pari: media dei due centrali');
+  c = AL.createClock({ now: () => 0 });
+  for (const o of [1000, 1000, 1000, 0, 0, 0]) c.add(sample(o));
+  assert.equal(c.offset(), 0, 'dopo 6 campioni contano solo gli ultimi 5 (1000, 1000, 0, 0, 0)');
+  c = AL.createClock({ now: () => 0, keep: 2, maxRtt: 50 });
+  for (const o of [5, 7, 9]) c.add(sample(o, 10));
+  c.add(sample(1, 60));
+  assert.equal(c.offset(), 8, 'keep e maxRtt configurabili');
+  assert.equal(AL.createClock().now() <= Date.now(), true, 'senza opzioni usa Date.now');
+});
+
+test('boatradar.html: età e finestre con clock.now(); Date.now() solo per misurare /api/status', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  const code = html.split('<script src="public/ais-logic.js"></script>')[1];
+  assert.match(code, /const clock = createClock\(\)/);
+  assert.match(code, /clock\.add\(clockSample\(/);
+  assert.match(code, /from=\$\{clock\.now\(\) - WINDOW_MS\}/, 'finestra del Baltico con l\'ora corretta');
+  assert.match(code, /new Date\(clock\.now\(\)\)\.toLocaleTimeString/, 'ora di aggiornamento con l\'ora corretta');
+  assert.doesNotMatch(code, /new Date\(\)/, 'nessun new Date() senza argomenti (ora del telefono)');
+  const uses = [...code.matchAll(/Date\.now\(\)/g)].length;
+  assert.equal(uses, 2, 'Date.now() solo per t0 e t1 della misura di /api/status');
+});

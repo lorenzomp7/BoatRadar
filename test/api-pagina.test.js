@@ -40,3 +40,16 @@ test('file statico illeggibile: risposta 500 e il server resta in piedi', async 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('/api/status riporta serverTime: l\'ora del server in millisecondi (punto 43)', async () => {
+  const before = Date.now();
+  const st = await srv.getJson('/api/status');
+  const after = Date.now();
+  assert.equal(typeof st.serverTime, 'number');
+  assert.ok(st.serverTime >= before && st.serverTime <= after, `${st.serverTime} fra ${before} e ${after}`);
+});
+
+test('/api/locations non contiene serverTime: la risposta può venire dalla cache (punto 84)', async () => {
+  const fc = await srv.getJson('/api/locations');
+  assert.equal(fc.serverTime, undefined);
+});
