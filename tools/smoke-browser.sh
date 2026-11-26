@@ -7,13 +7,17 @@
 #      o Esc la chiudano, lasciando il focus su un elemento visibile;
 #   3. la pagina non abbia errori JavaScript né messaggi console.error;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
-#      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda.
+#      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
+#   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
+#      secondo quello di prova, la pagina passi al secondo: navi in mappa e «server di riserva (Render)» nella riga di
+#      stato, a desktop e telefono; con il primo buono resti sul primo senza chiedere nulla al secondo.
 # Esce con 0 se tutto va bene, con 1 al primo controllo fallito. Screenshot in diagnosi/smoke/.
 #
 #   bash tools/smoke-browser.sh                 # server locale con la fixture di esempio
 #   SMOKE_URL=https://.../ bash tools/smoke-browser.sh   # pagina già pubblicata (nessun server locale)
 #
-# Variabili: SMOKE_PORT (8799), SMOKE_FIXTURE, SMOKE_URL, SMOKE_LEAFLET_LOCAL=1 per caricare Leaflet dal
+# Variabili: SMOKE_PORT (8799), SMOKE_FIXTURE, SMOKE_URL, SMOKE_APIS (JSON di window.BOATRADAR_APIS per il controllo 5:
+# primo server morto, secondo buono; di solito non serve), SMOKE_LEAFLET_LOCAL=1 per caricare Leaflet dal
 # registro npm quando unpkg.com non è raggiungibile (ambienti con rete limitata), AGENT_BROWSER_EXECUTABLE_PATH
 # per usare un Chrome già installato invece di quello scaricato da «agent-browser install».
 set -euo pipefail
@@ -31,6 +35,7 @@ TMP="$(mktemp -d)"
 cleanup() {
   agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
   agent-browser --session "$SESSION-40min" close >/dev/null 2>&1 || true
+  for s in riserva-desktop riserva-telefono primo-buono; do agent-browser --session "$SESSION-$s" close >/dev/null 2>&1 || true; done
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
@@ -232,5 +237,70 @@ JS
     process.stdout.write(out.join("\n"));')
   [ -z "$problems" ] || fail "40 min: $problems"
   ok "40 min: nessun errore JavaScript"
+fi
+
+# --- server di riserva (punto 86) ------------------------------------------
+# Un init script scrive window.BOATRADAR_APIS come config.js di Pages (in locale server.js serve config.js vuoto),
+# svuota sessionStorage (scheda nuova) e annota le richieste. Il primo server è 127.0.0.1:9, dove non risponde nessuno
+# (Chrome lo rifiuta subito), il secondo è il server di prova. Gli errori di rete verso 127.0.0.1:9 sono attesi.
+if [ -z "${SMOKE_URL:-}" ]; then
+  DEAD_API="http://127.0.0.1:9/api" GOOD_API="http://127.0.0.1:$PORT/api"
+  apis_init() {   # $1 = file, $2 = JSON dei server
+    node -e '
+      const [file, apis] = process.argv.slice(1);
+      JSON.parse(apis);   // JSON non valido: errore subito, non nella pagina
+      require("fs").writeFileSync(file, "(function(){if(window.top!==window)return;window.BOATRADAR_APIS=" + apis + ";" +
+        "try{sessionStorage.removeItem(\"boatradar:api\")}catch(e){}" +
+        "var f=window.fetch;window.__smokeFetched=[];window.fetch=function(i){window.__smokeFetched.push(String(i&&i.url||i));" +
+        "return f.apply(this,arguments)};})();");
+    ' "$1" "$2" || fail "SMOKE_APIS non è JSON valido: $2"
+  }
+  # errori JavaScript e console.error, tranne le richieste fallite verso il server morto
+  page_problems() {
+    { "${AB[@]}" errors --json; echo; "${AB[@]}" console --json; } | node -e '
+      const lines = require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+      const expected = t => /127\.0\.0\.1:9\b|ERR_UNSAFE_PORT|ERR_CONNECTION_REFUSED|Failed to load resource/.test(t);
+      const out = [];
+      for (const e of lines[0].data.errors || []) out.push("errore JS: " + (e.text || e.message || JSON.stringify(e)).split("\n")[0]);
+      for (const m of lines[1].data.messages || []) if (m.type === "error" && !expected(String(m.text))) out.push("console.error: " + String(m.text).split("\n")[0]);
+      process.stdout.write(out.join("\n"));'
+  }
+  DEFAULT_APIS="[{\"url\":\"$DEAD_API\",\"name\":\"VM Oracle\",\"sleeps\":false},{\"url\":\"$GOOD_API\",\"name\":\"Render\",\"sleeps\":true}]"
+  apis_init "$TMP/riserva.js" "${SMOKE_APIS:-$DEFAULT_APIS}"
+  for size in "desktop 1280 800" "telefono 390 844"; do
+    set -- $size
+    AB=(agent-browser --session "$SESSION-riserva-$1" "${INIT[@]}" --init-script "$TMP/riserva.js")
+    "${AB[@]}" set viewport "$2" "$3" >/dev/null
+    "${AB[@]}" open "$URL" >/dev/null || fail "riserva $1: la pagina non si apre"
+    "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0
+      && / · server di riserva \(Render\)$/.test(document.getElementById('status').textContent)" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/riserva-$1-errore.png" >/dev/null || true
+           fail "riserva $1: niente navi dal secondo server · stato: $(js "document.getElementById('status')?.textContent")"; }
+    tried=$(js "window.__smokeFetched.some(u => u.startsWith('$DEAD_API/locations?bbox='))")
+    [ "$tried" = true ] || fail "riserva $1: la pagina non ha provato prima il server morto"
+    saved=$(js "sessionStorage.getItem('boatradar:api')" | tr -d '"')
+    [ "$saved" = "$GOOD_API" ] || fail "riserva $1: sessionStorage ricorda «$saved», non $GOOD_API"
+    ok "riserva $1: $(js "markers.size") navi dal secondo server · stato «$(js "document.getElementById('status').textContent" | tr -d '"')»"
+    "${AB[@]}" screenshot "$OUT/riserva-$1.png" >/dev/null
+    problems=$(page_problems)
+    [ -z "$problems" ] || fail "riserva $1: $problems"
+    ok "riserva $1: nessun errore JavaScript (a parte le richieste al server morto)"
+  done
+
+  # primo server buono: resta sul primo, al secondo (qui morto) non arriva nessuna richiesta, neanche al giro dopo
+  apis_init "$TMP/primo-buono.js" "[{\"url\":\"$GOOD_API\",\"name\":\"VM Oracle\",\"sleeps\":false},{\"url\":\"$DEAD_API\",\"name\":\"Render\",\"sleeps\":true}]"
+  AB=(agent-browser --session "$SESSION-primo-buono" "${INIT[@]}" --init-script "$TMP/primo-buono.js")
+  "${AB[@]}" set viewport 1280 800 >/dev/null
+  "${AB[@]}" open "$URL" >/dev/null || fail "primo buono: la pagina non si apre"
+  "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0" >/dev/null \
+    || fail "primo buono: nessuna nave · stato: $(js "document.getElementById('status')?.textContent")"
+  js "tick().then(() => true)" >/dev/null
+  status=$(js "document.getElementById('status').textContent" | tr -d '"')
+  case "$status" in *riserva*) fail "primo buono: la riga di stato parla del server di riserva: «$status»" ;; esac
+  second=$(js "window.__smokeFetched.filter(u => u.startsWith('$DEAD_API')).length")
+  [ "$second" = 0 ] || fail "primo buono: $second richieste al secondo server"
+  ok "primo buono: resta sul primo, nessuna richiesta al secondo · stato «$status»"
+  problems=$(page_problems)
+  [ -z "$problems" ] || fail "primo buono: $problems"
 fi
 echo "Verifica nel browser riuscita · screenshot in $OUT/"

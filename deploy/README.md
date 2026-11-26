@@ -94,13 +94,39 @@ window.BOATRADAR_APIS = [{"url":"https://boatradar.130-61-10-20.sslip.io/api","n
 window.BOATRADAR_API = window.BOATRADAR_APIS[0].url;
 ```
 
-Per ora la pagina usa solo il primo indirizzo (`window.BOATRADAR_API`). Il passaggio automatico al
-secondo, quando il primo non risponde, non c'è ancora. Senza nessuna variabile `config.js` resta un
+La pagina usa il primo indirizzo e passa da sola al successivo quando il primo non risponde (vedi
+«Passaggio automatico nella pagina» qui sotto). Senza nessuna variabile `config.js` resta un
 commento e la pagina mostra solo il Baltico. Se `API_HOST` (o il nome sslip.io di `VM_HOST`) e
 `RENDER_HOST` sono lo stesso indirizzo, in `config.js` resta una sola voce, quella della VM. Un valore
 che non è un nome di host (per esempio con spazi o virgolette, una porta fuori da 1-65535, o
 `https://` in `VM_HOST`, che *Deploy backend* usa per ssh così com'è) fa fallire il workflow
 *GitHub Pages* con un messaggio che riporta il valore inserito, invece di finire nella pagina.
+
+### Passaggio automatico nella pagina
+
+`boatradar.html` legge l'elenco con `apiList` e sceglie il server con `createFailover` (entrambe in
+`public/ais-logic.js`, test in `test/backend-pagina.test.js` e `test/pagina-backend.test.js`):
+
+- Decide **solo la richiesta della vista** (`/api/locations?bbox=…`): errore di rete, risposta non ok
+  (per esempio 503) o nessuna risposta entro 8 s. `/api/status`, `include=`, `/api/vessel` e la ricerca
+  vanno al server attivo, ma un loro errore non fa cambiare server.
+- Dopo un errore la pagina riprova lo stesso server dopo 5 s, poi 10, 20, 40 e al massimo 60 s; nel
+  frattempo mostra solo il Baltico e la riga di stato dice «Mondo: server non raggiungibile, riprovo tra
+  N s (ora solo Baltico)». Con due server passa invece subito all'altro.
+- Render che si sveglia: finché non ha mai risposto, per 90 s dal suo primo errore la pagina resta su di
+  lui (riga di stato «Mondo: server di riserva in avvio, circa un minuto…»). Dopo, se non ha ancora
+  risposto, torna a provare la VM.
+- Quando il server attivo non è il primo dell'elenco, la riga di stato finisce con «server di riserva
+  (Render)».
+- Il server attivo resta per la **sessione della scheda** (`sessionStorage`, chiave `boatradar:api`):
+  ricaricando la scheda si riparte da lì, una scheda nuova riparte dalla VM.
+
+**Quota di Render.** Una VM che risponde non fa mai passare la pagina a Render: si cambia solo dopo un
+errore della vista. Una scheda passata a Render però **non torna da sola alla VM**, neanche quando la VM
+è di nuovo in linea: resta su Render finché Render risponde o finché la scheda non viene chiusa (scelta
+del piano, per non rimbalzare fra i due server). Con la quota di 5 GB al mese (sotto), dopo un guasto
+della VM chiudi le schede rimaste aperte e riaprile, così ripartono dalla VM. Per tornare alla VM senza
+chiudere la scheda: dalla console del browser `sessionStorage.removeItem('boatradar:api')` e ricarica.
 
 ### Costi e quote di Render
 
@@ -166,7 +192,8 @@ Dopo, Render si aggiorna da solo a ogni push su `main` che tocca un file dell'im
   connessione aisstream.
 
 Un server che risponde ma non ha la chiave (`"hasKey":false` in `/api/status`) conta come
-funzionante. La pagina resta su quel server e mostra solo il Baltico, senza passare all'altro.
+funzionante: la richiesta della vista riesce (senza navi). La pagina resta su quel server e mostra solo
+il Baltico, senza passare all'altro.
 In quel caso sistema la chiave di quel server, oppure toglilo come sopra.
 
 ## Comandi utili sulla VM

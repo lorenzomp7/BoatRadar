@@ -352,7 +352,78 @@
     return w <= e ? lon >= w && lon <= e : lon >= w || lon <= e;
   }
 
+  // Punto 86: server della pagina da config.js (cfg = window). BOATRADAR_APIS = [{url, name, sleeps}] o stringhe, nell'ordine
+  // di preferenza (prima la VM, poi Render che si addormenta); se non dà nessun indirizzo valido BOATRADAR_API, poi '/api'
+  // (server.js della pagina stessa). Indirizzi senza / finale, doppioni e voci non valide (né http(s):// né /percorso,
+  // spazi o virgolette) scartati; name null se manca, sleeps solo se true.
+  const API_URL_RE = /^(https?:\/\/[^\s"'<>\\`]+|\/[^\s"'<>\\`]+)$/i;
+  function apiList(cfg) {
+    const read = raw => {
+      const out = [];
+      for (const x of Array.isArray(raw) ? raw : []) {
+        const o = typeof x === 'string' ? { url: x } : x && typeof x === 'object' ? x : null;
+        const url = typeof o?.url === 'string' ? o.url.trim().replace(/\/+$/, '') : '';
+        if (!API_URL_RE.test(url) || out.some(b => b.url.toLowerCase() === url.toLowerCase())) continue;
+        out.push({ url, name: typeof o.name === 'string' && o.name.trim() ? o.name.trim() : null, sleeps: o.sleeps === true });
+      }
+      return out;
+    };
+    const list = read(cfg?.BOATRADAR_APIS);
+    if (list.length) return list;
+    const one = read([cfg?.BOATRADAR_API]);
+    return one.length ? one : [{ url: '/api', name: null, sleeps: false }];
+  }
+
+  // Passaggio automatico fra i server di list (apiList). Lo decide solo la richiesta della vista: fail(url, t) dopo un
+  // errore (t = ora in ms), ok(url) dopo una risposta. Dopo un errore il server si riprova solo da t + baseMs·2^(errori−1),
+  // al massimo maxMs (canTry, retryIn). Un server che dorme (sleeps, Render) e non ha ancora risposto da quando è attivo
+  // resta attivo per wakeGraceMs dal primo errore (waking: «in avvio»); altrimenti si passa al successivo, in giro, che
+  // si possa già riprovare, e se nessuno si può riprovare si resta su quello pronto per primo. Nessun ritorno automatico
+  // al primo: si cambia solo dopo un errore, e una risposta (anche tardiva) di un altro server non sposta l'attivo.
+  // Errori di un server non più attivo, o arrivati durante l'attesa (richieste partite prima dell'errore precedente),
+  // sono ignorati: due richieste fallite insieme contano una volta. onChange(server) ai cambi.
+  function createFailover(list, { saved = null, onChange = () => {}, baseMs = 5000, maxMs = 60000, wakeGraceMs = 90000 } = {}) {
+    const st = list.map(() => ({ failures: 0, retryAt: 0, firstErrorAt: null, answered: false }));
+    let idx = Math.max(0, list.findIndex(b => b.url === saved));
+    let wakingNow = false;
+    const indexOf = url => list.findIndex(b => b.url === url);
+    function fail(url, t) {
+      if (indexOf(url) !== idx || t < st[idx].retryAt) return;
+      const s = st[idx];
+      s.failures++;
+      s.retryAt = t + Math.min(maxMs, baseMs * 2 ** (s.failures - 1));
+      if (s.firstErrorAt == null) s.firstErrorAt = t;
+      wakingNow = list[idx].sleeps && !s.answered && t - s.firstErrorAt < wakeGraceMs;
+      if (wakingNow) return;
+      let next = -1;
+      for (let k = 1; k < list.length && next < 0; k++) { const j = (idx + k) % list.length; if (st[j].retryAt <= t) next = j; }
+      if (next < 0) for (let k = 0; k < list.length; k++) {
+        const j = (idx + k) % list.length;
+        if (next < 0 || st[j].retryAt < st[next].retryAt) next = j;
+      }
+      if (next === idx) return;
+      idx = next;
+      // appena attivo: un server che dorme può essersi riaddormentato, l'attesa di avvio riparte dal suo prossimo errore
+      st[idx].firstErrorAt = null; st[idx].answered = false;
+      onChange(list[idx]);
+    }
+    function ok(url) {
+      const i = indexOf(url);
+      if (i < 0) return;
+      Object.assign(st[i], { failures: 0, retryAt: 0, firstErrorAt: null, answered: true });
+      if (i === idx) wakingNow = false;
+    }
+    return {
+      current: () => list[idx],
+      canTry: t => t >= st[idx].retryAt,
+      retryIn: t => Math.max(0, st[idx].retryAt - t),
+      waking: () => wakingNow,
+      ok, fail,
+    };
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
-    KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox };
+    KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
+    apiList, createFailover };
 });

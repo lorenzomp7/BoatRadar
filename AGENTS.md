@@ -38,8 +38,12 @@ Lavora su `main_claude` salvo indicazione diversa.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
-  (`{url, name, sleeps}`, prima la VM poi Render) e il primo in `window.BOATRADAR_API`, l'unico che la
-  pagina usa per ora. Servito vuoto da `server.js` in locale. Test in `test/backend.test.js`.
+  (`{url, name, sleeps}`, prima la VM poi Render) e il primo in `window.BOATRADAR_API`. Servito vuoto da
+  `server.js` in locale. Test in `test/backend.test.js`. La pagina (punto 86) parte dal primo e passa al
+  successivo solo quando sbaglia la richiesta della vista (`apiList` e `createFailover` di `public/ais-logic.js`,
+  test in `test/backend-pagina.test.js` e `test/pagina-backend.test.js`, che usa `test/pagina-helpers.js`);
+  non torna da sola alla VM e ricorda il server per la sessione della scheda (`sessionStorage`): per la quota di
+  Render vedi `deploy/README.md`, «Passaggio automatico nella pagina».
 - `Dockerfile`, `deploy/`: immagine e avvio sulla VM; `deploy/README.md` spiega la configurazione.
 - `render.yaml`: Blueprint del servizio Render (Docker, piano Free, `AISSTREAM_KEY` con `sync: false`,
   da impostare solo su Render). Ogni file nelle `COPY` del `Dockerfile` va nei `paths` di
@@ -128,7 +132,10 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   a 1280×800 e 390×844, controlla navi in mappa, apertura della scheda con un clic vero del mouse,
   chiusura con un clic vero sulla × (almeno 44×44 px, non coperta dall'header) e con Esc, e assenza di
   errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
-  quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
+  quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
+  di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
+  passi al secondo con «server di riserva (Render)» nella riga di stato, e che con il primo buono non chieda nulla al
+  secondo (punto 86). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
 - Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
 - Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
   registro npm. Senza tile la mappa resta scura: è normale.
