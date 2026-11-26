@@ -13,7 +13,7 @@ services:
     autoDeployTrigger: commit
     # nuovo deploy solo se cambia un file dell'immagine (le righe COPY del Dockerfile: lo controlla un test)
     buildFilter:
-      paths: [server.js, position-check.js, boatradar.html, vesselfinder.html, public/**, package.json, package-lock.json, Dockerfile, render.yaml]
+      paths: [server.js, position-check.js, sample.js, boatradar.html, vesselfinder.html, public/**, package.json, package-lock.json, Dockerfile, render.yaml]
     envVars:
       # chiave aisstream diversa da quella della VM: con la stessa chiave le due connessioni si ostacolano.
       # Render la chiede alla creazione del Blueprint; non va mai scritta qui.

@@ -36,7 +36,7 @@ test('file statico illeggibile: risposta 500 e il server resta in piedi', async 
   // copia di server.js senza pagine né public/: ogni file statico manca
   const ROOT = path.join(__dirname, '..');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-statici-'));
-  for (const f of ['server.js', 'position-check.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
+  for (const f of ['server.js', 'position-check.js', 'sample.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
   const solo = await startServer({ NODE_PATH: path.join(ROOT, 'node_modules') }, {}, { cwd: dir });
   try {
     for (const p of ['/public/ais-logic.js', '/', '/vesselfinder.html']) {

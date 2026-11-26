@@ -9,6 +9,7 @@ const path = require('path');
 const zlib = require('zlib');
 const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
+const { sampleByImportance, staticImportance } = require('./sample');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -30,7 +31,7 @@ const LOCATIONS_CACHE_BYTES = envNumber('LOCATIONS_CACHE_BYTES', 32 * 1024 * 102
 const LOCATIONS_CACHE_STABLE_MS = envNumber('LOCATIONS_CACHE_STABLE_MS', 60000);
 const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000) || 60000;
 
-const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts }
+const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts, classA, staticScore }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
 const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
 const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
@@ -106,7 +107,8 @@ function handle(msg) {
     if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; setDimensions(v, pos.Dimension); }
     // heading e rot fanno parte del fix: passano anche per candidato e conferma di position-check.js
     const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
-      heading: hdg(pos.TrueHeading), rot: rotOf(pos.RateOfTurn), navStat: pos.NavigationalStatus, ts: Date.now() };
+      heading: hdg(pos.TrueHeading), rot: rotOf(pos.RateOfTurn), navStat: pos.NavigationalStatus, ts: Date.now(),
+      classA: !!m.PositionReport, staticScore: staticImportance(v) };   // per il campione (sample.js), non vanno nella risposta
     // scarto posizioni non valide e salti impossibili (un salto confermato due volte è accettato)
     if (!isValidFix(pos)) status.rejected++;
     else {
@@ -135,6 +137,9 @@ function handle(msg) {
     setDimensions(v, sd.ReportB?.Dimension);
     v.staticTs = Date.now();
   }
+  // parte statica del punteggio del campione (sample.js), ricalcolata qui perché i dati statici cambiano solo qui
+  const cur = positions.get(mmsi);
+  if (cur) cur.staticScore = staticImportance(v);
 }
 
 let retry = 1000;
@@ -289,9 +294,8 @@ function shipFeature(mmsi, p) {
 function locations({ box, limit }) {
   const hits = [];
   for (const [mmsi, p] of positions) if (inBox(box, p)) hits.push([mmsi, p]);
-  // campione stabile per MMSI, così le navi mostrate non cambiano a ogni aggiornamento
-  const k = Math.ceil(hits.length / limit);
-  const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : hits;
+  // campione per importanza (punto 4, sample.js): oltre limit le navi più importanti, con un massimo per cella
+  const shown = sampleByImportance(hits, limit, box, { staticOf: (m, p) => p.staticScore, now: Date.now() });
   return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) };
 }
 

@@ -98,6 +98,31 @@ cache: la misura non lo usa. A cache spenta (non registrate), stessa sessione: p
 e porto 11,3 / 18,9 ms; dopo mondo 41,1 / 54 ms (un'altra prova 42,8 / 54,1) e porto 10,3 / 12,3 ms (mediana / p95):
 differenze nel rumore della misura.
 
+Punto 4 (26/11/2026, campione per importanza in `sample.js` invece di `mmsi % k`): la vista mondo
+restituisce esattamente `limit` navi (6000 invece di 5979; 255 KB gzip invece di 248). A cache spenta
+(`LOCATIONS_CACHE_SIZE=0`), nella stessa sessione, la mediana della vista mondo è passata da 38-42 ms
+a 43-45 ms (tra +1 e +5 ms: la misura varia di ±4 ms tra un'esecuzione e l'altra), sotto la soglia di +10 ms;
+p95 circa +5-10 ms; vista porto invariata (meno di `limit` navi: nessun campione). La prima versione (oggetti per nave e
+`sort` con confronto) costava circa +17 ms. Le due ottimizzazioni: (1) ordinamento numerico nativo di un
+`Float64Array` (chiave MMSI · 2^22 + indice), poi un counting sort stabile per punteggio arrotondato a 1/1024 (per
+lunghezze intere l'ordine è identico); (2) la parte statica del punteggio (lunghezza e tipo) è calcolata in
+`handle()` e tenuta nella posizione (`staticScore`), così una richiesta non rilegge `vessels`. Memoria: 0,55 MB
+ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa 1 MB con 30.000 navi).
+
+- Correzioni da revisione e QA del punto 4 (26/11/2026): l'ottimizzazione (1) è tolta per semplicità
+  (decisione del coordinatore): ora un solo ordinamento di un `Uint32Array` di indici con comparatore
+  (punteggio decrescente in unità di 1e-9, poi MMSI crescente; punteggi e MMSI in `Float64Array`), senza
+  chiave impaccata né counting sort né ramo di riserva. La lunghezza è arrotondata al metro in
+  `staticImportance`. Costo misurato in questa sessione con 30.000 navi: `sampleByImportance` da solo
+  (limit 6000) 10,5-11,5 ms invece di 4,7-5,1 ms; l'ordinamento con comparatore da solo 8-11 ms (nessuna
+  variante del comparatore è più veloce oltre il rumore). Vista mondo a cache spenta, mediana, cinque
+  coppie alternate nella stessa sessione: prima del punto 4 (a298b83) 39 / 41 / 36,5 / 42 / 44,5 ms (media
+  40,6), dopo le correzioni 51,3 / 45 / 45,7 / 53,1 / 51,1 ms (media 49,2): **+8,6 ms in media**, sotto la
+  soglia di +10 ms, ma in 2 coppie su 5 la differenza è stata di +11 / +12 ms. Rispetto al punto 4 prima delle
+  correzioni (251436c, due coppie) circa +5 ms. La riga registrata qui sotto con la cache spenta (53,7 ms)
+  va confrontata con queste coppie, non con la riga «prima punto 4» di un'altra sessione. Vista porto e
+  caso con cache invariati.
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |
@@ -111,4 +136,10 @@ differenze nel rumore della misura.
 | 2026-11-26 | dopo punto 5 (heading e rot in /api/locations) | 30000 | 0.51 | 168.3 | 5979 | 247.6 (1603.7) | 0.9 / 5.5 | 1427 | 58 (381.3) | 0.6 / 2.8 | v22.23.5 |
 | 2026-11-26 | dopo punto 3 (include=, senza include nella misura) | 30000 | 0.51 | 169.9 | 5979 | 248.2 (1603.7) | 1 / 4.3 | 1427 | 58.1 (381.3) | 0.6 / 2.4 | v22.23.5 |
 | 2026-11-26 | dopo correzioni 43/5/3 (include fuori dalla cache, heading/rot omessi se null) | 30000 | 0.51 | 170.1 | 5979 | 245.5 (1539.5) | 0.8 / 1.5 | 1427 | 57.5 (366) | 0.5 / 3.9 | v22.23.5 |
+| 2026-11-26 | prima punto 4 (campione per importanza), con punti 43, 5, 3 | 30000 | 0.51 | 169.3 | 5979 | 248.2 (1603.7) | 1.2 / 2.1 | 1427 | 58.2 (381.3) | 0.6 / 0.9 | v22.23.5 |
+| 2026-11-26 | prima punto 4 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.51 | 168.7 | 5979 | 247.9 (1603.7) | 40.8 / 56.2 | 1427 | 58.1 (381.3) | 13.1 / 16.1 | v22.23.5 |
+| 2026-11-26 | dopo punto 4 (campione per importanza; caso migliore: vista ripetuta) | 30000 | 0.55 | 169.4 | 6000 | 255 (1614.9) | 1.3 / 2.3 | 1427 | 58.1 (381.3) | 0.6 / 1 | v22.23.5 |
+| 2026-11-26 | dopo punto 4 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 171.1 | 6000 | 255.7 (1614.9) | 43.1 / 58.1 | 1427 | 58.3 (381.3) | 11 / 14.4 | v22.23.5 |
+| 2026-11-26 | dopo correzioni punto 4 (ordinamento semplice) | 30000 | 0.55 | 169.7 | 6000 | 255.3 (1614.9) | 1 / 4.1 | 1427 | 58.2 (381.3) | 0.9 / 1.2 | v22.23.5 |
+| 2026-11-26 | dopo correzioni punto 4 (ordinamento semplice) con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 171.4 | 6000 | 255.4 (1614.9) | 53.7 / 66.1 | 1427 | 58.2 (381.3) | 13.9 / 36 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
