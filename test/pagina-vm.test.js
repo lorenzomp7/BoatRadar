@@ -398,3 +398,42 @@ test('pagina: un marker già in mappa sparisce quando la sua posizione supera il
   assert.equal(page.markers().has(A), false);
   assert.equal(marker.removed, true);
 });
+
+// --- Punto 62: pallino colorato dell'età, sempre con il testo ------------------------------------------------
+test('pagina: pallino verde/arancio/rosso con il testo dell\'età, in scheda e nei risultati di ricerca (punto 62)', async () => {
+  const G = 247620001, O = 247620002, R = 247620003, FAR = 247620004;
+  const ship = (mmsi, name, ageMs) => ({ type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [11, 44] },
+    properties: { mmsi, name, sog: 10, cog: 90, navStat: 0, timestampExternal: Date.now() - ageMs } });
+  const view = [ship(G, 'ETA VERDE', 2 * MIN), ship(O, 'ETA ARANCIO', 10 * MIN), ship(R, 'ETA ROSSO', 20 * MIN)];
+  const remote = [{ mmsi: FAR, name: 'ETA LONTANA', lat: -30, lon: -40, timestampExternal: Date.now() - 7 * MIN }];
+  const page = startPage({ routes: url => {
+    if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 3, serverTime: Date.now() }) };
+    if (url.endsWith('/vessels')) return { body: [] };
+    if (url.startsWith('/api/vessel')) return { body: null };
+    if (url.startsWith('/api/search')) return { body: remote };
+    if (isView(url)) return { body: { type: 'FeatureCollection', total: 3, features: view } };
+    if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
+  } });
+  await page.firstTickDone();
+  const dot = c => `<span class="age age-${c}" aria-hidden="true"></span>`;
+  for (const [mmsi, c, text] of [[G, 'verde', '2 min fa'], [O, 'arancio', '10 min fa'], [R, 'rosso', '20 min fa']]) {
+    page.ctx.select(mmsi);
+    const row = page.el('content').innerHTML.match(/<td>Ultimo segnale<\/td><td>(.*?)<\/td>/)[1];
+    assert.ok(row.startsWith(dot(c) + text + ' ('), `${c}: ${row}`);
+  }
+
+  // ricerca: risultati del server (con timestampExternal) e navi in mappa, ognuno con pallino e testo
+  const q = page.el('q');
+  q.value = 'eta';
+  const handlers = [];
+  // il campo di ricerca registra il suo gestore con addEventListener: lo recupero rieseguendo la registrazione
+  q.addEventListener = (type, fn) => handlers.push(fn);
+  vm.runInContext(pageScript.slice(pageScript.indexOf("$('q').addEventListener('input'"),
+    pageScript.indexOf("$('results').addEventListener('click'")), page.ctx);
+  await handlers[0]({ target: q });
+  const res = page.el('results').innerHTML;
+  assert.ok(res.includes(`${dot('arancio')}ETA LONTANA`), 'risultato del server: pallino');
+  assert.match(res, /ETA LONTANA <span[^>]*>· 247620004 · 7 min fa<\/span>/, 'e il testo dell\'età');
+  assert.ok(res.includes(`${dot('verde')}ETA VERDE`) && res.includes('· 2 min fa'), 'nave in mappa');
+  assert.ok(res.includes(`${dot('rosso')}ETA ROSSO`));
+});

@@ -20,6 +20,11 @@
     border-radius:10px; max-height:300px; overflow:auto; width:330px; max-width:calc(100vw - 72px); display:none; }
   #results div { padding:7px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--line); }
   #results div:hover { background:#1f2c3b; }
+  /* punto 62: pallino dell'età della posizione (sempre con il testo accanto) */
+  .age { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; }
+  .age-verde { background:#3fb950; }
+  .age-arancio { background:#f0883e; }
+  .age-rosso { background:#f85149; }
   #panel { position:absolute; top:12px; right:12px; bottom:12px; width:340px; max-width:calc(100% - 24px); z-index:1000;
     background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; overflow:auto; display:none; }
   #panel h2 { margin:0 0 2px; padding-right:32px; font-size:20px; }   /* spazio per la × */
@@ -146,7 +151,7 @@ if (!window.AisLogic) {
   throw new Error(msg);
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
-  clockSample, createClock, includeParam, toMs, ageStyle, formatAge } = AisLogic;
+  clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass } = AisLogic;
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
@@ -244,6 +249,13 @@ function ageText(props, now = clock.now()) {
   const a = ageStyle(props || {}, now), age = formatAge(a.age);
   if (!age) return null;
   return `${a.dashed ? 'posizione di ' : ''}${age} (${new Date(toMs(props.timestampExternal)).toLocaleTimeString('it-IT')})`;
+}
+
+// Punto 62: pallino colorato dell'età (verde < 5 min, arancio < 15 min, rosso), decorativo: il testo accanto dice
+// sempre l'età, quindi per i lettori di schermo è nascosto. '' senza orario.
+function ageDot(props, now = clock.now()) {
+  const age = ageStyle(props || {}, now).age;
+  return Number.isFinite(age) ? `<span class="age age-${ageClass(age)}" aria-hidden="true"></span>` : '';
 }
 
 // Tooltip: nome, «ferma» e età (senza l'ora), calcolati quando compare
@@ -438,7 +450,7 @@ function facts(mmsi) {
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
-      ${row('Ultimo segnale', ageText(p))}
+      <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : '—'}</td></tr>
       ${row('Fonte', SOURCE_LABEL[p.source])}`;
 }
 
@@ -671,9 +683,10 @@ $('q').addEventListener('input', async e => {
   found.clear();
   const hits = [];
   for (const v of remote) {
-    meta.set(v.mmsi, { ...meta.get(v.mmsi), ...v });
+    const { timestampExternal, ...data } = v;   // l'orario è della posizione, non dei dati statici
+    meta.set(v.mmsi, { ...meta.get(v.mmsi), ...data });
     found.set(v.mmsi, [v.lat, v.lon]);
-    hits.push({ mmsi: v.mmsi, v });
+    hits.push({ mmsi: v.mmsi, v, props: { timestampExternal } });
   }
   for (const [mmsi, m] of markers) {
     if (hits.length >= 25) break;
@@ -681,11 +694,14 @@ $('q').addEventListener('input', async e => {
     if (found.has(mmsi)) continue;
     if (matchesQuery(v, mmsi, q)) {
       found.set(mmsi, m.marker.getLatLng());
-      hits.push({ mmsi, v });
+      hits.push({ mmsi, v, props: m.props });
     }
   }
+  // pallino e testo dell'età della posizione (punto 62), con l'ora corretta
+  const now = clock.now();
+  const ageOf = props => { const t = formatAge(ageStyle(props || {}, now).age); return t ? ' · ' + t : ''; };
   box.innerHTML = hits.length
-    ? hits.map(h => `<div data-mmsi="${h.mmsi}">${esc(h.v.name || 'Senza nome')} <span style="color:var(--muted)">· ${h.mmsi}</span></div>`).join('')
+    ? hits.map(h => `<div data-mmsi="${h.mmsi}">${ageDot(h.props, now)}${esc(h.v.name || 'Senza nome')} <span style="color:var(--muted)">· ${h.mmsi}${esc(ageOf(h.props))}</span></div>`).join('')
     : '<div>Nessun risultato</div>';
   box.style.display = 'block';
 });

@@ -197,6 +197,10 @@
     return m ? `${h} h ${m} min fa` : `${h} h fa`;
   }
 
+  // Punto 62: colore dell'età della posizione (soglie di MyShipTracking): 'verde' sotto 5 min, 'arancio' sotto 15 min,
+  // poi 'rosso' (anche età non valida). Nella pagina il pallino colorato è sempre accompagnato dal testo dell'età.
+  const ageClass = age => typeof age !== 'number' || Number.isNaN(age) ? 'rosso' : age < 5 * MIN_MS ? 'verde' : age < 15 * MIN_MS ? 'arancio' : 'rosso';
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
-    clockSample, createClock, includeParam, DEFAULT_LIMITS, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge };
+    clockSample, createClock, includeParam, DEFAULT_LIMITS, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass };
 });

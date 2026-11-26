@@ -433,7 +433,7 @@ function search(q) {
   for (const v of vessels.values()) {
     const p = positions.get(v.mmsi);
     if (p && isLive(p, now) && ((v.name || '').toUpperCase().includes(q) || String(v.mmsi).startsWith(q) || String(v.imo || '').startsWith(q))) {
-      hits.push({ ...v, lat: p.lat, lon: p.lon });
+      hits.push({ ...v, lat: p.lat, lon: p.lon, timestampExternal: p.ts });   // età nei risultati della pagina (punto 62)
       if (hits.length >= 25) break;
     }
   }

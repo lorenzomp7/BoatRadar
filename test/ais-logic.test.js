@@ -485,3 +485,22 @@ test('formatAge: età in parole, per tooltip e scheda (punto 8)', () => {
   assert.equal(AL.formatAge(5 * H + 59 * MIN + 59 * 1000), '5 h 59 min fa');
   for (const a of [Infinity, NaN, undefined, null]) assert.equal(AL.formatAge(a), null, String(a));
 });
+
+// --- Punto 62: tre colori per l'età della posizione (soglie di MyShipTracking) ---------------------------------
+test('ageClass: verde sotto 5 min, arancio sotto 15 min, poi rosso (punto 62)', () => {
+  assert.equal(AL.ageClass(0), 'verde');
+  assert.equal(AL.ageClass(4 * MIN), 'verde');
+  assert.equal(AL.ageClass(5 * MIN - 1), 'verde');
+  assert.equal(AL.ageClass(5 * MIN), 'arancio');
+  assert.equal(AL.ageClass(10 * MIN), 'arancio');
+  assert.equal(AL.ageClass(15 * MIN), 'rosso');
+  assert.equal(AL.ageClass(20 * MIN), 'rosso');
+  assert.equal(AL.ageClass(3 * H), 'rosso');
+  for (const a of [Infinity, NaN, undefined, null]) assert.equal(AL.ageClass(a), 'rosso', String(a));
+});
+
+test('boatradar.html: pallino dell\'età decorativo (aria-hidden) con i tre colori in CSS (punto 62)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  for (const c of ['verde', 'arancio', 'rosso']) assert.match(html, new RegExp(`\\.age-${c} \\{ background:#[0-9a-f]{6}`), c);
+  assert.match(html, /<span class="age age-\$\{[^}]+\}" aria-hidden="true"><\/span>/, 'il pallino è nascosto ai lettori di schermo');
+});

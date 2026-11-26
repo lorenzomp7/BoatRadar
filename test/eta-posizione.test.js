@@ -114,3 +114,17 @@ test('limiti in /api/status; valori non validi = limiti normali (30 min e 6 h) (
       'riportati come dati: retentionMs usa comunque almeno movingMs per le navi ferme');
   } finally { await short.stop(); }
 });
+
+test('/api/search riporta timestampExternal, per il pallino dell\'età nei risultati (punto 62)', async () => {
+  const s = await startServer({ LOCATIONS_CACHE_MS: '0' });
+  try {
+    const before = Date.now();
+    await sendShips(s);
+    const hits = await s.getJson('/api/search?q=ETA%20ORMEGGIATA');
+    assert.equal(hits.length, 1);
+    assert.equal(typeof hits[0].timestampExternal, 'number');
+    assert.ok(hits[0].timestampExternal >= before && hits[0].timestampExternal <= Date.now());
+    const loc = (await s.getJson(`/api/locations?include=${MOORED}`)).features[0];
+    assert.equal(hits[0].timestampExternal, loc.properties.timestampExternal, 'stesso orario di /api/locations');
+  } finally { await s.stop(); }
+});
