@@ -68,6 +68,8 @@ before(async () => {
     // senza variabili di proxy: con NODE_USE_ENV_PROXY=1 server.js passerebbe dal proxy (Diagnosi)
     env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(https?|no|all)_proxy$|^NODE_USE_ENV_PROXY$/i.test(k))),
       PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
+      // cache di /api/locations (punto 84) senza durata minima: ogni messaggio si vede subito
+      LOCATIONS_CACHE_MS: '0',
       AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

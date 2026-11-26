@@ -46,11 +46,11 @@ async function startServer(env = {}, aisOptions = {}) {
   child.stderr.on('data', d => { log += d; });
 
   // agent: false = connessione diretta anche se l'ambiente del test ha NODE_USE_ENV_PROXY e un proxy
-  const get = pathname => new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path: pathname, agent: false }, res => {
+  const get = (pathname, headers = {}) => new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: pathname, headers, agent: false }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
     }).on('error', reject);
   });
   const getJson = async p => JSON.parse((await get(p)).body.toString('utf8'));

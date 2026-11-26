@@ -15,11 +15,21 @@ const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest
 const MAX_FEATURES = 6000; // oltre questo numero la pagina riceve un campione delle navi visibili
 const STALE_MS = 30 * 60 * 1000;
 const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
+// Cache di /api/locations (punto 84): una risposta si riusa per LOCATIONS_CACHE_MS, oppure finché i dati
+// non cambiano (al massimo 60 s). LOCATIONS_CACHE_SIZE = numero di viste tenute; 0 = cache spenta.
+const envNumber = (name, def) => {
+  const n = Number(process.env[name]);
+  return process.env[name] && Number.isFinite(n) && n >= 0 ? n : def;
+};
+const LOCATIONS_CACHE_MS = envNumber('LOCATIONS_CACHE_MS', 3000);
+const LOCATIONS_CACHE_SIZE = envNumber('LOCATIONS_CACHE_SIZE', 50);
+const LOCATIONS_CACHE_STABLE_MS = 60000;
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, navStat, ts }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
 const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
 const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
+let dataVersion = 0;  // cresce a ogni cambio di navi o posizioni: dice se una risposta in cache è ancora attuale
 // compressione con aisstream: negotiated = permessage-deflate accettato all'apertura, confirmed = CompressionEnabled
 // della SubscriptionConfirmation (null finché non arriva). aisstream limita la banda delle connessioni non compresse.
 status.compression = null;
@@ -73,6 +83,7 @@ function handle(msg) {
   const md = msg.MetaData || {};
   const mmsi = md.MMSI;
   if (!mmsi) return;
+  dataVersion++;
   const v = vessel(mmsi);
   if (clean(md.ShipName)) v.name = clean(md.ShipName);
 
@@ -179,7 +190,9 @@ setInterval(() => {
 
 setInterval(() => {
   const limit = Date.now() - STALE_MS;
-  for (const [mmsi, p] of positions) if (p.ts < limit) positions.delete(mmsi);
+  let removed = false;
+  for (const [mmsi, p] of positions) if (p.ts < limit) { positions.delete(mmsi); removed = true; }
+  if (removed) dataVersion++;
   for (const [mmsi, c] of candidates) if (c.ts < limit) candidates.delete(mmsi);
   // i dati statici arrivano solo ogni 6 minuti: li conservo 48 ore, così una nave che riappare li ha subito
   const staticLimit = Date.now() - 48 * 3600 * 1000;
@@ -190,11 +203,14 @@ setInterval(() => {
 // quindi di base le può leggere qualunque origine; CORS_ORIGIN la restringe (es. https://lorenzomp7.github.io)
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
+const apiHeaders = () => ({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+  'Access-Control-Allow-Origin': CORS_ORIGIN, ...(CORS_ORIGIN === '*' ? {} : { Vary: 'Origin' }) });
+const acceptsGzip = req => /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+
 function json(req, res, body) {
-  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': CORS_ORIGIN, ...(CORS_ORIGIN === '*' ? {} : { Vary: 'Origin' }) };
+  const headers = apiHeaders();
   let data = Buffer.from(JSON.stringify(body));
-  if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) { data = zlib.gzipSync(data); headers['Content-Encoding'] = 'gzip'; }
+  if (acceptsGzip(req)) { data = zlib.gzipSync(data); headers['Content-Encoding'] = 'gzip'; }
   res.writeHead(200, headers);
   res.end(data);
 }
@@ -223,6 +239,61 @@ function locations(query) {
   }) };
 }
 
+// Cache di /api/locations: chiave = parametri con il bbox arrotondato verso l'esterno a 0,25°, così viste
+// quasi uguali (piccoli spostamenti della mappa) condividono la stessa risposta. Il bbox arrotondato è anche
+// quello usato per filtrare: la risposta è identica per tutte le viste con la stessa chiave.
+const locationsCache = new Map(); // chiave -> { version, t, raw: Buffer, gz: Promise<Buffer> | null }
+const cacheStats = { hits: 0, misses: 0 };
+const gzipAsync = require('util').promisify(zlib.gzip);
+
+function locationsKey(query) {
+  const q = new URLSearchParams(query);
+  const box = q.get('bbox')?.split(',').map(Number);
+  q.delete('bbox');   // bbox non valido = nessun filtro: stessa voce del mondo
+  if (box?.length === 4 && !box.some(isNaN)) {
+    const clamp = (x, m) => Math.max(-m, Math.min(m, x));
+    let w = clamp(Math.floor(box[0] * 4) / 4, 180), s = clamp(Math.floor(box[1] * 4) / 4, 90);
+    let e = clamp(Math.ceil(box[2] * 4) / 4, 180), n = clamp(Math.ceil(box[3] * 4) / 4, 90);
+    if (box[0] > box[2] && w <= e) { w = -180; e = 180; } // attraversava l'antimeridiano e ora copre tutto
+    q.set('bbox', [w, s, e, n].join(','));
+  }
+  q.sort();
+  return q;
+}
+
+function sendLocations(req, res, query) {
+  const q = locationsKey(query);
+  const key = q.toString(), now = Date.now();
+  let entry = LOCATIONS_CACHE_SIZE > 0 ? locationsCache.get(key) : undefined;
+  const hit = !!entry && (now - entry.t < LOCATIONS_CACHE_MS
+    || (entry.version === dataVersion && now - entry.t < LOCATIONS_CACHE_STABLE_MS));
+  if (hit) cacheStats.hits++;
+  else {
+    cacheStats.misses++;
+    entry = { version: dataVersion, t: now, raw: Buffer.from(JSON.stringify(locations(q))), gz: null };
+    if (LOCATIONS_CACHE_SIZE > 0) {
+      locationsCache.delete(key);   // ricalcolata: torna in fondo all'ordine di inserimento
+      locationsCache.set(key, entry);
+      while (locationsCache.size > LOCATIONS_CACHE_SIZE) locationsCache.delete(locationsCache.keys().next().value);
+    }
+  }
+  const headers = apiHeaders();
+  headers.Vary = headers.Vary ? headers.Vary + ', Accept-Encoding' : 'Accept-Encoding';
+  headers['X-Cache'] = hit ? 'hit' : 'miss';
+  if (!acceptsGzip(req)) { res.writeHead(200, headers); return res.end(entry.raw); }
+  // gzip asincrono; la Promise è salvata subito, così le richieste contemporanee la condividono
+  entry.gz ??= gzipAsync(entry.raw);
+  entry.gz.then(data => {
+    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
+    res.end(data);
+  }, () => {
+    if (locationsCache.get(key) === entry) locationsCache.delete(key);
+    entry.gz = null;
+    res.writeHead(200, headers);
+    res.end(entry.raw);
+  });
+}
+
 function search(q) {
   q = q.trim().toUpperCase();
   const hits = [];
@@ -239,10 +310,11 @@ function search(q) {
 
 http.createServer((req, res) => {
   const { pathname: url, searchParams: query } = new URL(req.url, 'http://localhost');
-  if (url === '/api/locations') return json(req, res, locations(query));
+  if (url === '/api/locations') return sendLocations(req, res, query);
   if (url === '/api/vessel') return json(req, res, vessels.get(Number(query.get('mmsi'))) || null);
   if (url === '/api/search') return json(req, res, search(query.get('q') || ''));
-  if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size });
+  if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size,
+    locationsCache: { ...cacheStats, size: locationsCache.size } });
   if (url === '/config.js') {
     // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });

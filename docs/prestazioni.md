@@ -60,9 +60,27 @@ Prima misura (sessione cloud di Claude Code, 23/11/2026 UTC, 30.000 navi):
   heap, quindi lo stato delle navi non è il problema per il limite di 1 GB: lo diventa lo storico
   del punto 20, da dimensionare con queste misure.
 
+Punto 84 (26/11/2026, cache di `/api/locations`): la risposta, anche compressa, si riusa per
+`LOCATIONS_CACHE_MS` (default 3000 ms) o finché i dati non cambiano (al massimo 60 s); il bbox è
+arrotondato verso l'esterno a 0,25°; `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenute;
+`hits`, `misses` e `size` in `locationsCache` di `/api/status`, intestazione `X-Cache: hit|miss`.
+
+- La riga «dopo punto 84» è il **caso migliore**: `tools/carico.js` chiede sempre la stessa vista
+  senza messaggi AIS nel frattempo, quindi tutte le richieste tranne la prima sono servite dalla cache.
+  Con il flusso vero i dati cambiano di continuo e conta la regola dei 3 s: più utenti sulla stessa
+  zona (o la stessa pagina che si aggiorna) entro 3 s condividono una risposta già compressa.
+- Con la cache spenta (o a ogni miss) la risposta costa un po' di più di prima (mondo circa
+  33-35 ms invece di 27-29 ms in tre ripetizioni; porto 9-11 invece di 7-8 ms): il gzip ora è
+  asincrono e passa dal thread pool di libuv. In cambio non blocca più il ciclo degli eventi, quindi
+  la ricezione AIS e le altre richieste vanno avanti durante la compressione (questo il carico
+  sequenziale non lo misura). Un `chunkSize` più grande per `zlib.gzip` non cambia i tempi.
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |
 | 2026-11-26 | prima punto 1 (scarto posizioni) | 30000 | 0.5 | 165.5 | 5979 | 227.2 (1459.5) | 39.1 / 43.7 | 1427 | 53.1 (346.9) | 8.3 / 13.9 | v22.23.5 |
 | 2026-11-26 | dopo punto 1 (scarto posizioni) | 30000 | 0.5 | 166.7 | 5979 | 227.3 (1459.5) | 37 / 46.1 | 1427 | 53.1 (346.9) | 8.3 / 13.1 | v22.23.5 |
+| 2026-11-26 | prima punto 84 (cache /api/locations), con punti 1, 7, 11 | 30000 | 0.5 | 169 | 5979 | 227.1 (1459.5) | 28.8 / 33.6 | 1427 | 53 (346.9) | 8.4 / 11.8 | v22.23.5 |
+| 2026-11-26 | dopo punto 84 (cache /api/locations, caso migliore: vista ripetuta senza messaggi) | 30000 | 0.5 | 168.9 | 5979 | 227.8 (1459.5) | 0.9 / 1.5 | 1427 | 53.3 (346.9) | 0.5 / 0.8 | v22.23.5 |
+| 2026-11-26 | dopo punto 84 con LOCATIONS_CACHE_SIZE=0 (cache spenta, gzip asincrono) | 30000 | 0.5 | 167.7 | 5979 | 227.3 (1459.5) | 34.5 / 40.6 | 1427 | 53.1 (346.9) | 11.5 / 16.2 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
