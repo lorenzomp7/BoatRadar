@@ -374,49 +374,95 @@
     return one.length ? one : [{ url: '/api', name: null, sleeps: false }];
   }
 
+  // Prove del primo server (ritorno alla VM, quota di Render), usate da createFailover. due(t, force) dice true una volta
+  // ogni intervallo e segna la prova in corso; finché non arriva end(t), failed(t) o returned(t) non ne dice altre.
+  // Intervallo: recheckMs (5 min); se il primo ricade (primaryLeft) entro flapMs (10 min) da un ritorno con la prova
+  // (returned) raddoppia (10, 20, al massimo recheckMaxMs, 40 min), e torna recheckMs se il primo è restato stabile per
+  // stableMs (30 min, da returned o da primaryBack, il ritorno per errore dell'altro server). force (scheda riaperta) non
+  // aspetta l'intervallo, ma solo se l'ultima prova è finita da almeno forceGapMs (60 s) e l'intervallo non è raddoppiato;
+  // startNow (si parte da un server salvato, ricaricando la scheda): la prima prova è subito. failed(t): la prossima da
+  // t + intervallo; end(t): prova finita senza ritorno, l'ora resta quella fissata all'inizio della prova.
+  // backupChanged(t): passaggio fra due server di riserva, l'ora fissata resta (se non c'è, da t + intervallo).
+  function createRecheck({ startNow = false, recheckMs = 300000, recheckMaxMs = 2400000, flapMs = 600000,
+    stableMs = 1800000, forceGapMs = 60000 } = {}) {
+    // prossima prova (null: da fissare; -Infinity: subito), prova in corso, fine dell'ultima prova
+    let at = startNow ? -Infinity : null, running = false, endedAt = null;
+    let level = 0, returnedAt = null, primarySince = null;   // raddoppi dell'intervallo, ultimo ritorno con la prova
+    const interval = () => Math.min(recheckMaxMs, recheckMs * 2 ** level);
+    const end = t => { running = false; endedAt = t ?? null; };
+    return {
+      due(t, force = false) {
+        if (running) return false;
+        const forced = force && level === 0 && (endedAt == null || t - endedAt >= forceGapMs);
+        if (!forced) {
+          if (at == null) { at = t + interval(); return false; }
+          if (t < at) return false;
+        }
+        running = true; at = t + interval();   // se la prova non finisce bene, la prossima fra un intervallo
+        return true;
+      },
+      end,
+      failed(t) { end(t); at = t + interval(); },
+      returned(t) { end(t); at = null; returnedAt = t ?? null; primarySince = t ?? null; },
+      primaryLeft(t) {   // il primo ricade: oscillazione se è appena tornato con la prova, stabile dopo stableMs
+        if (returnedAt != null && t - returnedAt < flapMs) level = Math.min(level + 1, 16);
+        else if (primarySince == null || t - primarySince >= stableMs) level = 0;
+        returnedAt = null;
+        at = t + interval();
+      },
+      primaryBack(t) { at = null; primarySince = t; },
+      backupChanged(t) { if (at == null) at = t + interval(); },
+      level: () => level,
+    };
+  }
+
   // Passaggio automatico fra i server di list (apiList). Lo decide solo la richiesta della vista: fail(url, t) dopo un
   // errore (t = ora in ms), ok(url, t) dopo una risposta. Un server che non dorme (la VM) si lascia solo dopo due errori
   // di fila: il primo lo fa riprovare da t + confirmMs (3 s), un errore isolato non fa passare a Render (quota). Poi il
   // server si riprova solo da t + baseMs·2^(n−1), al massimo maxMs (canTry, retryIn). fail(url, t, {counts: false})
-  // (rete dell'utente assente, networkDown) fa solo riprovare da t + confirmMs, senza contare.
-  // Un server che dorme (sleeps, Render) e non ha ancora risposto resta attivo per wakeGraceMs dal primo errore (waking:
-  // «in avvio»); l'attesa di avvio si riapre, tornando su di lui, solo se il suo ultimo contatto (errore o risposta) è
-  // più vecchio di rewakeMs (15 min, dopo i quali Render si addormenta): se ha sbagliato o risposto da poco è sveglio e
-  // un suo errore fa passare subito. Altrimenti si passa al successivo, in giro, che si possa già riprovare, e se nessuno
-  // si può riprovare si resta su quello pronto per primo. Una risposta (anche tardiva) di un altro server non sposta
-  // l'attivo. Errori di un server non più attivo, o arrivati durante l'attesa (richieste partite prima dell'errore
-  // precedente), sono ignorati: due richieste fallite insieme contano una volta. onChange(server) ai cambi.
-  // Ritorno al primo (quota di Render): su un server diverso dal primo shouldRecheck(t) dice true una volta ogni
-  // intervallo e segna la prova in corso; finché non arriva recheckOk(url, t) o recheckFailed(t) non ne dice altre.
-  // shouldRecheck(t, true) (scheda tornata visibile) non aspetta l'intervallo. Partendo da un server salvato diverso dal
-  // primo la prima prova è subito (ricaricando la scheda). recheckOk(url del primo, t) torna al primo; recheckFailed(t)
-  // riprova da t + intervallo (recheckOk di un altro indirizzo: dall'inizio della prova). La prova non conta come errore
-  // né come risposta del server attivo. Intervallo: recheckMs (5 min); se il primo ricade entro flapMs (10 min) da un
-  // ritorno con la prova raddoppia (10, 20, al massimo recheckMaxMs, 40 min), dopo stableMs (30 min) sul primo senza
-  // ricadute torna recheckMs.
+  // (rete dell'utente assente, networkDown) non avvicina al passaggio: fa solo riprovare dopo un'attesa crescente a parte
+  // (downWaitsMs: 3, 5, 10, 20, 40, poi sempre 60 s), azzerata da una risposta o da un errore che conta; networkBack(t)
+  // (evento online) dopo errori di questo tipo fa riprovare subito e dice true.
+  // Avvio di un server che dorme (sleeps, Render): lastSeenAt è il suo ultimo contatto (errore o risposta), wakeSince
+  // l'inizio dell'avvio. L'avvio parte al suo primo errore se non lo si sente da rewakeMs (15 min, dopo i quali Render si
+  // addormenta; o mai sentito) e finisce con una risposta o dopo wakeGraceMs (90 s): intanto si resta su di lui (waking:
+  // «in avvio»). Se ha sbagliato o risposto da poco è sveglio e un suo errore fa passare subito. Vale anche con un solo
+  // server. Altrimenti si passa al successivo, in giro, che si possa già riprovare, e se nessuno si può riprovare si
+  // resta su quello pronto per primo. Una risposta (anche tardiva) di un altro server non sposta l'attivo. Errori di un
+  // server non più attivo, o arrivati durante l'attesa (richieste partite prima dell'errore precedente), sono ignorati:
+  // due richieste fallite insieme contano una volta. onChange(server) ai cambi.
+  // Ritorno al primo (quota di Render, createRecheck): su un server diverso dal primo shouldRecheck(t) dice true una volta
+  // ogni intervallo e segna la prova in corso; finché non arriva recheckOk(url, t) o recheckFailed(t) non ne dice altre.
+  // shouldRecheck(t, true) (scheda tornata visibile) non aspetta l'intervallo se l'ultima prova è finita da almeno
+  // forceGapMs (60 s) e l'intervallo non è raddoppiato. Partendo da un server salvato diverso dal primo la prima prova è
+  // subito (ricaricando la scheda). recheckOk(url del primo, t) torna al primo; recheckFailed(t) riprova da
+  // t + intervallo (recheckOk di un altro indirizzo: dall'inizio della prova). La prova non conta come errore né come
+  // risposta del server attivo. Intervallo: recheckMs (5 min), raddoppiato se il primo oscilla (createRecheck).
   function createFailover(list, { saved = null, onChange = () => {}, baseMs = 5000, maxMs = 60000, confirmMs = 3000,
-    wakeGraceMs = 90000, rewakeMs = 15 * 60000, recheckMs = 300000, recheckMaxMs = 2400000, flapMs = 600000,
-    stableMs = 1800000 } = {}) {
-    const st = list.map(() => ({ failures: 0, strikes: 0, retryAt: 0, firstErrorAt: null, answered: false,
-      lastErrorAt: null, lastOkAt: null }));
+    downWaitsMs = [3000, 5000, 10000, 20000, 40000, 60000], wakeGraceMs = 90000, rewakeMs = 15 * 60000,
+    recheckMs = 300000, recheckMaxMs = 2400000, flapMs = 600000, stableMs = 1800000, forceGapMs = 60000 } = {}) {
+    const st = list.map(() => ({ failures: 0, strikes: 0, retryAt: 0, down: 0, lastSeenAt: null, wakeSince: null }));
     let idx = Math.max(0, list.findIndex(b => b.url === saved));
     let wakingNow = false;
-    // prossima prova del primo (null: da fissare; -Infinity: subito, si parte da un server salvato), prova in corso
-    let recheckAt = idx !== 0 ? -Infinity : null, rechecking = false;
-    let level = 0, returnedAt = null, primarySince = null;   // raddoppi dell'intervallo, ultimo ritorno con la prova
-    const interval = () => Math.min(recheckMaxMs, recheckMs * 2 ** level);
+    const recheck = createRecheck({ startNow: idx !== 0, recheckMs, recheckMaxMs, flapMs, stableMs, forceGapMs });
     const indexOf = url => list.findIndex(b => b.url === url);
+    const answered = (s, t) => Object.assign(s, { failures: 0, strikes: 0, retryAt: 0, down: 0, wakeSince: null },
+      t != null && { lastSeenAt: t });
     function fail(url, t, { counts = true } = {}) {
       if (indexOf(url) !== idx || t < st[idx].retryAt) return;
       const s = st[idx];
-      if (!counts) { s.retryAt = t + confirmMs; return; }
-      s.lastErrorAt = t;
+      if (!counts) { s.retryAt = t + downWaitsMs[Math.min(s.down++, downWaitsMs.length - 1)]; return; }
+      s.down = 0;
+      if (list[idx].sleeps) {   // avvio: scaduto dopo wakeGraceMs; riparte solo se non lo si sente da rewakeMs
+        if (s.wakeSince != null && t - s.wakeSince >= wakeGraceMs) s.wakeSince = null;
+        if (s.wakeSince == null && (s.lastSeenAt == null || t - s.lastSeenAt >= rewakeMs)) s.wakeSince = t;
+      }
+      s.lastSeenAt = t;
       s.strikes++;
       if (!list[idx].sleeps && s.strikes === 1) { s.retryAt = t + confirmMs; wakingNow = false; return; }
       s.failures++;
       s.retryAt = t + Math.min(maxMs, baseMs * 2 ** (s.failures - 1));
-      if (s.firstErrorAt == null) s.firstErrorAt = t;
-      wakingNow = list[idx].sleeps && !s.answered && t - s.firstErrorAt < wakeGraceMs;
+      wakingNow = s.wakeSince != null;
       if (wakingNow) return;
       let next = -1;
       for (let k = 1; k < list.length && next < 0; k++) { const j = (idx + k) % list.length; if (st[j].retryAt <= t) next = j; }
@@ -425,73 +471,58 @@
         if (next < 0 || st[j].retryAt < st[next].retryAt) next = j;
       }
       if (next === idx) return;
-      if (idx === 0) {   // il primo ricade: oscillazione se è appena tornato con la prova, stabile dopo stableMs
-        if (returnedAt != null && t - returnedAt < flapMs) level = Math.min(level + 1, 16);
-        else if (primarySince == null || t - primarySince >= stableMs) level = 0;
-        returnedAt = null;
-      }
-      if (next === 0) { recheckAt = null; primarySince = t; }
-      else if (idx === 0 || recheckAt == null) recheckAt = t + interval();   // fra secondo e terzo l'ora resta
+      if (idx === 0) recheck.primaryLeft(t);
+      else if (next === 0) recheck.primaryBack(t);
+      else recheck.backupChanged(t);
       idx = next;
-      const n = st[idx];
-      n.strikes = 0;
-      // un server che dorme può essersi riaddormentato: l'attesa di avvio riparte dal suo prossimo errore, ma solo se
-      // non lo si sente da rewakeMs
-      const seen = Math.max(n.lastErrorAt ?? -Infinity, n.lastOkAt ?? -Infinity);
-      if (!(t - seen < rewakeMs)) { n.firstErrorAt = null; n.answered = false; }
+      st[idx].strikes = 0;
       onChange(list[idx]);
     }
     function ok(url, t) {
       const i = indexOf(url);
       if (i < 0) return;
-      Object.assign(st[i], { failures: 0, strikes: 0, retryAt: 0, firstErrorAt: null, answered: true });
-      if (t != null) st[i].lastOkAt = t;
+      answered(st[i], t);
       if (i === idx) wakingNow = false;
     }
-    function shouldRecheck(t, force = false) {
-      if (idx === 0 || rechecking) return false;
-      if (!force) {
-        if (recheckAt == null) { recheckAt = t + interval(); return false; }
-        if (t < recheckAt) return false;
-      }
-      rechecking = true; recheckAt = t + interval();   // se la prova non finisce bene, la prossima fra un intervallo
+    function networkBack(t) {
+      const s = st[idx];
+      if (!s.down) return false;
+      s.down = 0;
+      s.retryAt = Math.min(s.retryAt, t);
       return true;
     }
     function recheckOk(url, t) {
-      rechecking = false;
-      if (url !== list[0].url || idx === 0) return;
-      Object.assign(st[0], { failures: 0, strikes: 0, retryAt: 0, firstErrorAt: null, answered: true });
-      if (t != null) st[0].lastOkAt = t;
-      idx = 0; recheckAt = null; wakingNow = false;
-      returnedAt = t ?? null; primarySince = t ?? null;
+      if (url !== list[0].url || idx === 0) { recheck.end(t); return; }
+      answered(st[0], t);
+      idx = 0; wakingNow = false;
+      recheck.returned(t);
       onChange(list[0]);
-    }
-    function recheckFailed(t) {
-      rechecking = false;
-      recheckAt = t + interval();
     }
     return {
       current: () => list[idx],
       canTry: t => t >= st[idx].retryAt,
       retryIn: t => Math.max(0, st[idx].retryAt - t),
       waking: () => wakingNow,
-      ok, fail, shouldRecheck, recheckOk, recheckFailed,
+      shouldRecheck: (t, force = false) => idx !== 0 && recheck.due(t, force),
+      recheckFailed: t => recheck.failed(t),
+      ok, fail, networkBack, recheckOk,
     };
   }
 
   // Punto 86 (correzioni da revisione): l'errore della vista viene dalla rete dell'utente, non dal server, e non deve far
-  // cambiare server (fail(..., {counts: false})) quando il browser dice di essere offline (onLine === false) oppure
-  // quando nello stesso giro anche il Baltico (Digitraffic, un altro sito) è fallito con un errore di rete e la vista
-  // stessa non ha avuto risposta (viewNetwork: errore di rete o nessuna risposta; un 503 dice che la rete c'è). Il Baltico
-  // vale come prova solo se è riuscito negli ultimi graceMs (2 min, balticOkAt): se è bloccato (rete aziendale,
-  // filtri) o la rete manca da più tempo, l'errore conta e la pagina può passare all'altro server.
+  // cambiare server (fail(..., {counts: false})) quando la vista non ha avuto risposta (viewNetwork: errore di rete o
+  // nessuna risposta; una risposta di errore, per esempio 503, dice che la rete c'è e conta sempre) e il browser dice di
+  // essere offline (onLine === false), oppure nello stesso giro anche il Baltico (Digitraffic, un altro sito) è fallito
+  // con un errore di rete. Il Baltico vale come prova solo se è riuscito negli ultimi graceMs (2 min, balticOkAt): se è
+  // bloccato (rete aziendale, filtri) o la rete manca da più tempo, l'errore conta e la pagina può passare all'altro server.
   function networkDown({ onLine, viewNetwork = false, balticNetwork = false, balticOkAt = null, t, graceMs = 120000 } = {}) {
+    if (viewNetwork !== true) return false;
     if (onLine === false) return true;
-    return viewNetwork === true && balticNetwork === true && balticOkAt != null && Number.isFinite(t) && t - balticOkAt <= graceMs;
+    return balticNetwork === true && balticOkAt != null && Number.isFinite(t) && t - balticOkAt <= graceMs;
   }
 
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
-    apiList, createFailover, networkDown };
+    apiList, createRecheck, createFailover, networkDown };
 });

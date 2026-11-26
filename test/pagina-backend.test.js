@@ -37,6 +37,7 @@ const DEAD = () => ({ fail: true });
 const on = (page, base) => page.requests.filter(r => r.url.startsWith(base));
 const isView = r => r.url.includes('/locations?bbox=');
 const views = (page, base) => on(page, base).filter(isView);
+const isBalticView = r => r.url.includes('digitraffic') && r.url.includes('/locations?');
 const CONFIRM = 3000, SLACK_RETRY = 250;   // attesa dopo il primo errore della VM, margine del tentativo programmato
 
 test('pagina: VM giù (errore di rete) → due tentativi a 3 s, poi Render, navi in mappa, «server di riserva (Render)», ricordato', async () => {
@@ -69,7 +70,8 @@ test('pagina: VM che risponde 503 o non risponde entro 8 s (due volte di fila) �
     assert.equal(vm.length, 2, `${what}: due tentativi alla VM`);
     if (what !== '503') {
       assert.ok(vm.every(v => v.outcome === 'annullata'), 'le richieste della vista alla VM sono state annullate');
-      assert.ok(vm[0].end - vm[0].at >= 8000, 'dopo 8 s');
+      // tolleranza di 2 ms veri: timer e ora della pagina sono scalati di TIME_SCALE e arrotondati in modo diverso
+      assert.ok(vm[0].end - vm[0].at >= 8000 - 2 * TIME_SCALE, `dopo 8 s (${vm[0].end - vm[0].at} ms)`);
       const firstRender = views(page, RENDER.url)[0];
       const waited = firstRender.at - vm[1].end;
       assert.ok(waited >= 0 && waited < 300 * TIME_SCALE, `Render provato appena scaduto il secondo timeout (${waited} ms)`);
@@ -204,6 +206,8 @@ test('pagina: ricaricando con Render salvato, prova subito la VM e la aspetta; l
   assert.ok(page.markers().has(666));
   assert.equal(on(page, RENDER.url).length, 0, 'nessuna richiesta a Render');
   assert.ok(isView(on(page, VM.url)[0]), 'la prova è la vista');
+  assert.equal(views(page, VM.url).length, 1, 'la risposta della prova è la vista del giro (niente doppio download)');
+  assert.equal(on(page, VM.url).filter(r => r.url === VM.url + '/status').length, 1, 'elenco non vuoto: nessun /status in più per la prova');
   assert.equal(page.storage.get(KEY), VM.url, 'sessionStorage torna alla VM');
 });
 
@@ -215,7 +219,11 @@ test('pagina: ricaricando con Render salvato e la VM che non risponde → la pri
   const probe = on(page, VM.url)[0];
   assert.ok(isView(probe));
   assert.equal(probe.outcome, 'annullata');
-  assert.ok(on(page, RENDER.url)[0].at >= probe.at + 8000, 'Render solo dopo il timeout della prova');
+  const after = on(page, RENDER.url)[0].at - probe.at;
+  assert.ok(after >= 8000 - 2 * TIME_SCALE, `Render solo dopo il timeout della prova (${after} ms)`);
+  // il Baltico non aspetta la prova: parte dopo l'attesa dell'orologio (3 s), prima della fine della prova
+  const baltic = page.requests.find(isBalticView);
+  assert.ok(baltic.at < probe.end && baltic.at - probe.at < 3000 + 300 * TIME_SCALE, `Baltico a ${baltic.at - probe.at} ms dalla prova`);
   assert.equal(on(page, VM.url).length, 1, 'una sola richiesta alla VM');
   assert.equal(page.storage.get(KEY), RENDER.url);
 
@@ -310,19 +318,23 @@ test('pagina: scheda nascosta → la prova della VM continua ogni 5 min; tornata
   await page.waitStatus(/ · server di riserva \(Render\)$/);
   const vmViews = () => views(page, VM.url);
   assert.equal(vmViews().length, 1, 'ricaricando: una prova subito (503 → resta su Render)');
+  const renderHidden = on(page, RENDER.url).length;
   page.setHidden(true);
   await ticksUntil(page, () => vmViews().length >= 2, 'prova con la scheda nascosta', MIN5 + 30000);
+  assert.equal(on(page, RENDER.url).length, renderHidden, 'scheda nascosta su Render: nessuna richiesta a Render (quota)');
+  assert.ok(page.markers().has(707), 'la mappa resta com\'era');
   const hiddenGap = vmViews()[1].at - vmViews()[0].end;
   assert.ok(hiddenGap >= MIN5 - SLACK && hiddenGap < MIN5 + 10000, `scheda nascosta: prova dopo 5 min (${hiddenGap} ms)`);
   await until(() => vmViews()[1].outcome === 503, 'prova finita');
-  await sleep(20);
+  // riapertura almeno 60 s dopo la fine dell'ultima prova, se no la prova non è forzata (test più sotto)
+  await until(() => page.pageNow() > vmViews()[1].end + 61000, '61 s della pagina', 2000);
   assert.match(page.status(), /riserva/);
   vmUp = true;   // la prossima prova sarebbe fra 5 min, ma la scheda torna visibile
   const renderViews = views(page, RENDER.url).length;
   page.setHidden(false);   // visibilitychange: la pagina fa subito un giro
   await until(() => page.markers().has(606) && !/riserva/.test(page.status()), 'navi della VM', 1000);
-  assert.ok(vmViews().length >= 3);
-  assert.ok(vmViews()[2].at - vmViews()[1].end < 60000, 'prova subito, senza aspettare i 5 min');
+  assert.equal(vmViews().length, 3, 'la risposta della prova è la vista del giro');
+  assert.ok(vmViews()[2].at - vmViews()[1].end < 70000, 'prova subito, senza aspettare i 5 min');
   assert.equal(views(page, RENDER.url).length, renderViews, 'la vista del giro non è andata a Render: la pagina ha atteso la prova');
   assert.equal(page.storage.get(KEY), VM.url);
 });
@@ -344,4 +356,106 @@ test('pagina: entrambi giù, Render sbagliato da poco → «in avvio» solo la p
   assert.ok(rendersAfter >= 1, `Render riprovato dopo il primo avvio (${rendersAfter})`);
   assert.ok(samples.some(([t, s]) => t > back.end
     && / · Mondo: server non raggiungibile, riprovo tra \d+ s \(ora solo Baltico\)$/.test(s)), 'poi «riprovo tra N s»');
+});
+
+// --- seconda revisione: offline, riapertura, prove con elenco vuoto, Baltico, scheda nascosta ------------------------
+test('pagina: navigator.onLine false ma la VM risponde 503 (due volte di fila) → conta, passa a Render', async () => {
+  const page = startPage({ config: APIS, routes: routesOf({ [VM.url]: () => ({ status: 503 }), [RENDER.url]: healthy(161) }) });
+  page.ctx.navigator.onLine = false;   // un 503 dice che la rete c'è
+  await page.waitStatus(/ · server di riserva \(Render\)$/);
+  assert.ok(page.markers().has(161));
+  assert.equal(views(page, VM.url).length, 2);
+});
+
+test('pagina: offline → attese crescenti 3, 5, 10 s senza passare a Render; evento online → subito la vista', async () => {
+  let down = false;
+  const vm = (path, now) => (down ? { fail: true } : healthy(171)(path, now));
+  const page = startPage({ config: APIS, routes: routesOf({ [VM.url]: vm, [RENDER.url]: healthy(999) }) });
+  await page.waitStatus(/ · 1 nel mondo$/);
+  page.ctx.navigator.onLine = false;
+  down = true;
+  const n0 = views(page, VM.url).length;
+  await page.tick();
+  await until(() => views(page, VM.url).length >= n0 + 4 && views(page, VM.url)[n0 + 3].end, 'quattro viste fallite', 6000);
+  const v = views(page, VM.url).slice(n0);
+  assert.ok(v.slice(0, 4).every(r => r.outcome === 'rete'));
+  [3000, 5000, 10000].forEach((w, i) => {
+    const gap = v[i + 1].at - v[i].end;
+    assert.ok(gap >= w && gap < w + 300 * TIME_SCALE, `attesa ${i + 1}: ~${w / 1000} s (${gap} ms)`);
+  });
+  await page.waitStatus(/riprovo tra 20 s/, 'quarto errore: prossima attesa 20 s', 1000);   // il giro finisce dopo il Baltico
+  // la rete torna: il browser manda «online» e la pagina non aspetta i 20 s
+  page.ctx.navigator.onLine = true;
+  down = false;
+  const firedAt = page.pageNow();
+  page.fire('online');
+  await until(() => views(page, VM.url).length > n0 + 4, 'vista dopo online', 1000);
+  assert.ok(views(page, VM.url)[n0 + 4].at - firedAt < 100 * TIME_SCALE, 'subito');
+  await page.waitStatus(/ · 1 nel mondo$/);
+  assert.equal(on(page, RENDER.url).length, 0, 'Render mai chiamato');
+  assert.equal(page.retryTimers.size, 0, 'nessun tentativo rimasto in attesa');
+});
+
+test('pagina: prova della VM con elenco vuoto → buona solo se /status della VM dice chiave e connessione', async () => {
+  for (const [what, st, back] of [['senza chiave', { hasKey: false, connected: false }, false],
+    ['non connessa', { hasKey: true, connected: false }, false], ['connessa', { hasKey: true, connected: true }, true]]) {
+    const vm = (path, now) => (path === '/status' ? { body: () => ({ ...st, vessels: 0, serverTime: now() }) }
+      : path.startsWith('/locations?') ? { body: { type: 'FeatureCollection', total: 0, features: [] } } : undefined);
+    const page = startPage({ config: APIS, session: { [KEY]: RENDER.url },
+      routes: routesOf({ [VM.url]: vm, [RENDER.url]: healthy(181) }) });
+    const vmReq = () => on(page, VM.url);
+    if (back) {
+      await page.waitStatus(/^0 in mappa · .* · 0 nel mondo$/, what);
+      assert.equal(page.storage.get(KEY), VM.url, what);
+      assert.equal(on(page, RENDER.url).length, 0, `${what}: Render mai chiamato`);
+      assert.ok(isView(vmReq()[0]) && vmReq()[1].url === VM.url + '/status', `${what}: vista, poi /status della prova`);
+      assert.equal(views(page, VM.url).length, 1, `${what}: la vista della prova vale per il giro`);
+    } else {
+      await page.waitStatus(/ · server di riserva \(Render\)$/, what);
+      assert.ok(page.markers().has(181), what);
+      assert.deepEqual(vmReq().map(r => r.url.slice(VM.url.length).split('?')[0]), ['/locations', '/status'], `${what}: una richiesta in più`);
+      assert.equal(page.storage.get(KEY), RENDER.url, what);
+    }
+  }
+});
+
+test('pagina: il Baltico che non risponde si annulla dopo 15 s, il mondo resta', async () => {
+  const SCALE = 50;
+  const servers = routesOf({ [VM.url]: healthy(191), [RENDER.url]: healthy(999) });
+  const page = startPage({ timeScale: SCALE, config: APIS,
+    routes: (url, now) => (url.includes('digitraffic') && url.includes('/locations?') ? { hang: true } : servers(url, now)) });
+  await until(() => page.requests.find(isBalticView)?.outcome === 'annullata', 'Baltico annullato', 3000);
+  const b = page.requests.find(isBalticView);
+  assert.ok(b.end - b.at >= 15000 - 2 * SCALE && b.end - b.at < 15000 + 100 * SCALE, `dopo 15 s (${b.end - b.at} ms)`);
+  await page.waitStatus(/^1 in mappa · .* · 1 nel mondo$/);
+  assert.ok(page.markers().has(191));
+  assert.equal(on(page, RENDER.url).length, 0, 'un Baltico lento non fa cambiare server');
+});
+
+test('pagina: scheda nascosta su Render → nessuna richiesta a Render; riaperta entro 60 s dall\'ultima prova → niente prova, vista a Render', async () => {
+  const SCALE = 50;
+  const page = startPage({ timeScale: SCALE, config: APIS, session: { [KEY]: RENDER.url },
+    routes: routesOf({ [VM.url]: () => ({ status: 503 }), [RENDER.url]: healthy(717) }) });
+  await page.waitStatus(/ · server di riserva \(Render\)$/);
+  const vmViews = () => views(page, VM.url);
+  assert.equal(vmViews().length, 1, 'ricaricando: una prova subito');
+  const probeEnd = vmViews()[0].end;
+  const render0 = on(page, RENDER.url).length;
+  page.setHidden(true);
+  for (let i = 0; i < 4; i++) { await page.tick(); await sleep(5); }
+  assert.equal(on(page, RENDER.url).length, render0, 'scheda nascosta: nessuna richiesta a Render');
+  assert.ok(page.markers().has(717), 'la mappa resta com\'era');
+  assert.ok(page.pageNow() - probeEnd < 60000, 'riapertura entro 60 s dalla fine della prova');
+  page.setHidden(false);
+  await until(() => views(page, RENDER.url).length > views(page, RENDER.url).filter(r => r.at <= probeEnd).length
+    && on(page, RENDER.url).length > render0, 'vista a Render dopo la riapertura', 1000);
+  assert.equal(vmViews().length, 1, 'niente prova forzata: l\'ultima è finita da meno di 60 s');
+  await page.waitStatus(/ · server di riserva \(Render\)$/);
+  // nascosta di nuovo e riaperta più di 60 s dopo la prova: prova subito, poi la vista a Render
+  page.setHidden(true);
+  await until(() => page.pageNow() > probeEnd + 62000, '62 s della pagina', 3000);
+  const render1 = views(page, RENDER.url).length;
+  page.setHidden(false);
+  await until(() => vmViews().length === 2 && vmViews()[1].end && views(page, RENDER.url).length > render1, 'prova e vista', 2000);
+  assert.ok(views(page, RENDER.url)[render1].at >= vmViews()[1].end, 'la vista aspetta la prova');
 });

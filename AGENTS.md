@@ -41,10 +41,11 @@ Lavora su `main_claude` salvo indicazione diversa.
   (`{url, name, sleeps}`, prima la VM poi Render) e il primo in `window.BOATRADAR_API`. Servito vuoto da
   `server.js` in locale. Test in `test/backend.test.js`. La pagina (punto 86) parte dal primo e passa al
   successivo solo quando sbaglia la richiesta della vista, dalla VM due volte di fila e mai per la rete
-  dell'utente assente (`apiList`, `createFailover` e `networkDown` di `public/ais-logic.js`, test in
+  dell'utente assente (`apiList`, `createRecheck`, `createFailover` e `networkDown` di `public/ais-logic.js`, test in
   `test/backend-pagina.test.js` e `test/pagina-backend.test.js`, che usa `test/pagina-helpers.js`); su un server di
-  riserva prova la VM con la stessa vista ogni 5 min (`PRIMARY_RECHECK_MS`, di più se la VM oscilla, anche a scheda
-  nascosta), subito ricaricando e quando la scheda torna visibile, e ci torna se risponde; ricorda il server per la
+  riserva prova la VM con la stessa vista ogni 5 min (`PRIMARY_RECHECK_MS`, di più se la VM oscilla; a scheda
+  nascosta solo questa prova, niente richieste a Render), subito ricaricando e quando la scheda torna visibile (se
+  l'ultima prova è di almeno 60 s prima), e ci torna se risponde; ricorda il server per la
   sessione della scheda (`sessionStorage`): per la quota di Render vedi `deploy/README.md`, «Passaggio automatico
   nella pagina».
 - `Dockerfile`, `deploy/`: immagine e avvio sulla VM; `deploy/README.md` spiega la configurazione.

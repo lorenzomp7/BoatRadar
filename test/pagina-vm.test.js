@@ -82,6 +82,7 @@ function startPage({ skewMs = 0, routes }) {
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
     ResizeObserver: class { observe() {} }, matchMedia: () => ({ matches: false }),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, navigator: {},
+    addEventListener() {},   // eventi di window (online): non servono a questi test
   });
   ctx.window = ctx;
   vm.runInContext(logicScript, ctx);

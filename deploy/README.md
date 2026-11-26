@@ -119,47 +119,60 @@ che non è un nome di host (per esempio con spazi o virgolette, una porta fuori 
 - **Niente passaggio per un errore isolato della VM.** Dalla VM (`"sleeps":false`) la pagina passa a Render
   solo dopo **due errori di fila** della vista: dopo il primo riprova la VM dopo 3 s (riga di stato «Mondo:
   server non raggiungibile, riprovo tra 3 s (ora solo Baltico)»). Una risposta in mezzo azzera il conto.
-- **Rete dell'utente assente.** Un errore della vista non conta (si riprova lo stesso server dopo 3 s, senza
-  passare) quando il browser dice di essere offline (`navigator.onLine` falso) oppure quando nello stesso giro
-  anche la richiesta al Baltico (Digitraffic, un altro sito) fallisce con un errore di rete e la vista non ha
-  avuto nessuna risposta. Il Baltico vale come prova solo se ha risposto negli ultimi 2 min: se Digitraffic è
-  bloccato dalla rete dell'utente, o la rete manca da più di 2 min, gli errori contano di nuovo e la pagina
-  può passare a Render. Una risposta di errore della VM (per esempio 503) conta sempre: la rete c'è.
+- **Rete dell'utente assente.** Un errore della vista senza nessuna risposta (errore di rete o nessuna risposta
+  entro 8 s) non conta quando il browser dice di essere offline (`navigator.onLine` falso) oppure quando nello
+  stesso giro anche la richiesta al Baltico (Digitraffic, un altro sito) fallisce con un errore di rete. Il
+  Baltico vale come prova solo se ha risposto negli ultimi 2 min: se Digitraffic è bloccato dalla rete
+  dell'utente, o la rete manca da più di 2 min, gli errori contano di nuovo e la pagina può passare a Render.
+  Una risposta di errore della VM (per esempio 503) conta sempre, anche con il browser offline: una risposta
+  dice che la rete c'è. Gli errori che non contano non avvicinano al passaggio e fanno riprovare lo stesso
+  server con un'attesa crescente a parte (3, 5, 10, 20, 40, poi ogni 60 s), azzerata da una risposta; quando
+  la rete torna (evento `online` del browser) la pagina riprova subito. La richiesta al Baltico ha 15 s, poi
+  si annulla e il giro va avanti senza.
 - Dopo il secondo errore di fila la VM si riprova dopo 5 s, poi 10, 20, 40 e al massimo 60 s; con due
   server nel frattempo la pagina passa subito all'altro, con un server solo mostra il Baltico e «riprovo
   tra N s».
-- **Render che si sveglia**: finché non ha risposto, per 90 s dal suo primo errore la pagina resta su di lui
-  (riga di stato «Mondo: server di riserva in avvio, circa un minuto…»), e in quel periodo la richiesta della
-  vista a Render ha **45 s** invece di 8 (Render tiene le richieste finché il servizio non è pronto); intanto
-  gli altri giri non ne aprono altre. Dopo, se non ha ancora risposto, torna a provare la VM. L'attesa di avvio
-  si riapre tornando su Render solo se Render non ha sbagliato né risposto negli ultimi 15 min (dopo 15 min
-  senza visite si addormenta davvero): con **entrambi i server giù** la riga di stato dice quindi «Mondo:
-  server non raggiungibile, riprovo tra N s (ora solo Baltico)» e non più «in avvio».
+- **Render che si sveglia**: l'avvio parte al primo errore di Render se la pagina non lo sente (né errori né
+  risposte) da 15 min, o non l'ha mai sentito: dopo 15 min senza visite si addormenta davvero. Finché non
+  risponde, per 90 s da quel primo errore la pagina resta su di lui (riga di stato «Mondo: server di riserva
+  in avvio, circa un minuto…»), e in quel periodo la richiesta della vista a Render ha **45 s** invece di 8
+  (Render tiene le richieste finché il servizio non è pronto); intanto gli altri giri non ne aprono altre.
+  Dopo, se non ha ancora risposto, torna a provare la VM. Se Render ha sbagliato o risposto da poco è sveglio
+  e un suo errore fa passare subito: con **entrambi i server giù** la riga di stato dice quindi «Mondo:
+  server non raggiungibile, riprovo tra N s (ora solo Baltico)» e non più «in avvio». La stessa regola vale
+  con **un solo server che dorme** (solo `RENDER_HOST`): «in avvio» al primo errore dopo 15 min senza
+  contatti, poi «riprovo tra N s».
 - Quando il server attivo non è il primo dell'elenco, la riga di stato finisce con «server di riserva
   (Render)».
 - **Ritorno alla VM.** Mentre è su Render (o su un altro server che non è il primo), ogni 5 min
   (`PRIMARY_RECHECK_MS` in `boatradar.html`) la pagina prova la VM con una sola richiesta della **stessa
   vista** del giro (`/api/locations?bbox=…`, uguale per tutti e servita dalla cache della VM; timeout 8 s), a
   parte dal giro: la mappa continua con Render. Se la VM risponde con l'elenco delle navi, dal giro successivo
-  la pagina torna alla VM e lo ricorda in `sessionStorage`. Se non risponde o risponde con un errore, la pagina
-  resta su Render senza segnalare errori e riprova dopo un altro intervallo. Mai più di una prova in corso. La
-  prova continua anche con la **scheda nascosta** (in secondo piano o con lo schermo spento, finché il browser
-  la tiene attiva), e quando la scheda torna visibile su Render la pagina prova subito la VM e aspetta la
-  risposta (al massimo 8 s) prima di chiedere la vista: se la VM risponde, la vista va già alla VM.
+  la pagina torna alla VM e lo ricorda in `sessionStorage`. Un elenco **vuoto** vale solo se anche
+  `/api/status` della VM dice `hasKey` e `connected` (una VM appena ripartita o senza chiave risponde con zero
+  navi): una richiesta in più solo in quel caso. Se non risponde o risponde con un errore, la pagina resta su
+  Render senza segnalare errori e riprova dopo un altro intervallo. Mai più di una prova in corso.
+- **Scheda nascosta** (in secondo piano o con lo schermo spento, finché il browser la tiene attiva) su Render:
+  i giri non chiedono nulla a Render (né la vista né `/api/status`), la mappa resta com'era e continua solo la
+  prova della VM. Quando la scheda torna visibile su Render riparte subito un giro normale; se l'ultima prova è
+  finita da almeno 60 s e l'intervallo non è raddoppiato (VM che oscilla, sotto), la pagina prova prima la VM
+  e aspetta la risposta (al massimo 8 s) prima di chiedere la vista: se la VM risponde, la vista del giro è
+  la risposta della prova (nessun secondo download). Il Baltico non aspetta la prova.
 - **VM che oscilla.** Se la VM ricade entro 10 min da un ritorno con la prova, l'intervallo delle prove
   raddoppia: 5, 10, 20 e al massimo 40 min. Dopo 30 min di VM senza ricadute torna a 5 min.
 - Il server attivo resta per la **sessione della scheda** (`sessionStorage`, chiave `boatradar:api`):
-  ricaricando la scheda su Render la pagina prova **subito** la VM e aspetta la risposta (al massimo 8 s)
-  prima della prima vista: se la VM risponde si riparte dalla VM, altrimenti da Render. Una scheda nuova
-  riparte dalla VM.
+  ricaricando la scheda su Render la pagina prova **subito** la VM (sempre, anche entro 60 s) e aspetta la
+  risposta (al massimo 8 s) prima della prima vista: se la VM risponde si riparte dalla VM, con la sua
+  risposta come prima vista, altrimenti da Render. Una scheda nuova riparte dalla VM.
 
 **Quota di Render.** Una VM che risponde non fa mai passare la pagina a Render: si cambia solo dopo due
 errori di fila della vista, e non per un buco di rete dell'utente. Una scheda passata a Render ci resta al
 massimo circa 5 min dopo che la VM è tornata in linea, **anche se è nascosta** (con lo schermo spento
-alcuni browser rallentano i giri fino a uno al minuto: qualche decina di secondi in più); se il browser
-ferma del tutto la scheda in secondo piano, Render non riceve nulla e alla riapertura la prima richiesta
-è la prova della VM. Il traffico di Render dopo un guasto della VM è quindi quello dei minuti del guasto
-più al massimo circa 5 min per scheda aperta (vista mondo: circa 5 MB, sotto). Se la VM oscilla, ogni
+alcuni browser rallentano i giri fino a uno al minuto: qualche decina di secondi in più); una scheda
+nascosta su Render non gli chiede nulla, e se il browser la ferma del tutto alla riapertura la prima
+richiesta è la prova della VM (se l'ultima è di almeno 60 s prima). Il traffico di Render dopo un guasto
+della VM è quindi quello dei minuti del guasto passati con la scheda in primo piano, al massimo circa 5 min
+per scheda aperta dopo il ritorno della VM (vista mondo: circa 5 MB, sotto). Se la VM oscilla, ogni
 ricaduta lascia la scheda su Render fino a 10, 20 o 40 min (vista mondo: fino a circa 37 MB per scheda a
 ricaduta) invece di farla rimbalzare ogni 5 min. La prova pesa sulla VM, non su Render: una vista ogni
 5 min per ogni scheda che sta su Render (vista mondo: 227,5 KB gzip, circa 2,7 MB all'ora, dai 10 TB della VM). Con la

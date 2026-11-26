@@ -5,7 +5,7 @@
 // l'errore è della rete dell'utente e non deve contare.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { apiList, createFailover, networkDown } = require('../public/ais-logic');
+const { apiList, createFailover, createRecheck, networkDown } = require('../public/ais-logic');
 
 const VM = { url: 'https://boatradar.130-61-10-20.sslip.io/api', name: 'VM Oracle', sleeps: false };
 const RENDER = { url: 'https://boatradar-x.onrender.com/api', name: 'Render', sleeps: true };
@@ -93,22 +93,54 @@ test('createFailover: due errori di fila della VM → Render', () => {
   assert.equal(f.retryIn(SEC3), 0, 'Render si prova subito');
 });
 
-test('createFailover: errori che non contano (rete assente) → si riprova la VM dopo 3 s, senza mai passare a Render', () => {
+test('createFailover: errori che non contano (rete assente) → attesa crescente separata (3, 5, 10, 20, 40, 60 s), mai a Render', () => {
   const changes = [];
   const f = createFailover([VM, RENDER], { onChange: b => changes.push(b.url) });
-  for (let t = 0; t < 600000; t += SEC3) {
-    f.fail(VM.url, t, { counts: false });
-    assert.equal(f.retryIn(t), SEC3, `t = ${t}`);
-  }
+  const waits = [];
+  let t = 0;
+  for (let i = 0; i < 40; i++) { f.fail(VM.url, t, { counts: false }); waits.push(f.retryIn(t)); t += f.retryIn(t); }
+  assert.deepEqual(waits.slice(0, 7), [3000, 5000, 10000, 20000, 40000, 60000, 60000]);
+  assert.ok(waits.slice(6).every(w => w === 60000), 'poi sempre 60 s');
   assert.equal(f.current().url, VM.url);
   assert.deepEqual(changes, []);
-  f.fail(VM.url, 600000);          // poi un errore vero: è il primo della serie
+  f.fail(VM.url, t);               // poi un errore vero: è il primo della serie (conferma dopo 3 s)
   assert.equal(f.current().url, VM.url);
-  assert.equal(f.retryIn(600000), SEC3);
-  f.fail(VM.url, 600000 + SEC3, { counts: false });   // in mezzo un errore che non conta: la serie resta a 1
+  assert.equal(f.retryIn(t), SEC3);
+  f.fail(VM.url, t + SEC3, { counts: false });   // in mezzo un errore che non conta: la serie resta a 1, attesa da capo
   assert.equal(f.current().url, VM.url);
-  f.fail(VM.url, 600000 + 2 * SEC3);
+  assert.equal(f.retryIn(t + SEC3), SEC3, 'dopo un errore vero l\'attesa della rete assente riparte da 3 s');
+  f.fail(VM.url, t + 2 * SEC3);
   assert.equal(f.current().url, RENDER.url, 'secondo errore vero');
+});
+
+test('createFailover: una risposta azzera l\'attesa della rete assente', () => {
+  const f = createFailover([VM]);
+  f.fail(VM.url, 0, { counts: false });
+  f.fail(VM.url, 3000, { counts: false });
+  assert.equal(f.retryIn(3000), 5000);
+  f.ok(VM.url, 8000);
+  f.fail(VM.url, 9000, { counts: false });
+  assert.equal(f.retryIn(9000), 3000);
+});
+
+test('createFailover: networkBack (evento online) → si riprova subito, solo dopo errori che non contano', () => {
+  const f = createFailover([VM, RENDER]);
+  let t = 0;
+  for (let i = 0; i < 5; i++) { f.fail(VM.url, t, { counts: false }); t += f.retryIn(t); }
+  f.fail(VM.url, t, { counts: false });
+  assert.equal(f.retryIn(t), 60000);
+  assert.equal(f.networkBack(t + 1000), true);
+  assert.equal(f.canTry(t + 1000), true, 'rete tornata: subito');
+  f.fail(VM.url, t + 2000, { counts: false });
+  assert.equal(f.retryIn(t + 2000), 3000, 'l\'attesa della rete assente riparte da 3 s');
+  assert.equal(f.networkBack(t + 2100), true);
+  // dopo un errore vero networkBack non tocca l'attesa (il server ha sbagliato, la rete c'era)
+  const g = createFailover([VM]);
+  g.fail(VM.url, 0); g.fail(VM.url, 3000);
+  assert.equal(g.retryIn(3000), 5000);
+  assert.equal(g.networkBack(4000), false);
+  assert.equal(g.canTry(4000), false);
+  assert.equal(createFailover([VM]).networkBack(0), false, 'nessun errore: niente da fare');
 });
 
 test('createFailover: VM giù → Render, che si sveglia con attese crescenti; dopo 90 s senza risposta torna alla VM', () => {
@@ -469,10 +501,115 @@ test('createFailover: un ritorno alla VM per errore di Render non conta come rit
   nextRecheckAfter(f, t, 10 * MIN);
 });
 
+// Riapertura della scheda (prova forzata): solo se l'ultima prova è finita da almeno 60 s e l'intervallo non è
+// raddoppiato; altrimenti vale l'intervallo normale. Il ricaricamento (server salvato) resta immediato.
+test('createFailover: prova forzata entro 60 s dalla fine dell\'ultima prova → no, si segue l\'intervallo', () => {
+  const f = createFailover([VM, RENDER]);
+  const t0 = downVM(f, 0);
+  assert.equal(f.shouldRecheck(t0 + MIN5), true);
+  f.recheckFailed(t0 + MIN5 + 8000);
+  const end = t0 + MIN5 + 8000;
+  assert.equal(f.shouldRecheck(end + 59999, true), false, 'scheda riaperta dopo 59 s: niente prova');
+  assert.equal(f.shouldRecheck(end + 60000, true), true, 'dopo 60 s sì');
+  f.recheckFailed(end + 61000);
+  assert.equal(f.shouldRecheck(end + 61000 + 30000, true), false);
+  assert.equal(f.shouldRecheck(end + 61000 + MIN5), true, 'l\'intervallo normale vale comunque');
+});
+
+test('createFailover: con l\'intervallo raddoppiato (VM che oscilla) la riapertura non forza la prova', () => {
+  const f = createFailover([VM, RENDER]);
+  let t = downVM(f, 0);
+  t = nextRecheckAfter(f, t, MIN5);
+  f.recheckOk(VM.url, t);
+  t = downVM(f, t + 2 * MIN);                // ricaduta: livello 1, 10 min
+  assert.equal(f.shouldRecheck(t + 2 * MIN, true), false, 'riaperta dopo 2 min: niente prova');
+  assert.equal(f.shouldRecheck(t + 9 * MIN, true), false);
+  assert.equal(f.shouldRecheck(t + 10 * MIN, true), true, 'all\'intervallo (10 min) sì');
+});
+
+test('createFailover: ricaricando con un server salvato la prova resta immediata', () => {
+  const f = createFailover([VM, RENDER], { saved: RENDER.url });
+  assert.equal(f.shouldRecheck(10, true), true);
+  const g = createFailover([VM, RENDER], { saved: RENDER.url });
+  assert.equal(g.shouldRecheck(10), true);
+});
+
+test('createFailover: parametro forceGapMs', () => {
+  const f = createFailover([VM, RENDER], { forceGapMs: 1000 });
+  const t0 = downVM(f, 0);
+  assert.equal(f.shouldRecheck(t0, true), true);
+  f.recheckFailed(t0 + 100);
+  assert.equal(f.shouldRecheck(t0 + 1099, true), false);
+  assert.equal(f.shouldRecheck(t0 + 1100, true), true);
+});
+
+// Stato di avvio unificato (lastSeenAt, wakeSince): vale anche con un solo server che dorme (solo RENDER_HOST).
+test('createFailover: un solo server che dorme si risveglia di nuovo dopo 15 min senza contatti', () => {
+  const f = createFailover([RENDER]);
+  f.fail(RENDER.url, 0);
+  assert.equal(f.waking(), true, 'primo errore: in avvio');
+  f.ok(RENDER.url, 20000);
+  assert.equal(f.waking(), false);
+  f.fail(RENDER.url, 60000);
+  assert.equal(f.waking(), false, 'ha risposto 40 s fa: è sveglio, errore vero');
+  f.ok(RENDER.url, 70000);
+  f.fail(RENDER.url, 70000 + 16 * MIN);
+  assert.equal(f.waking(), true, '16 min senza contatti: si è riaddormentato, di nuovo in avvio');
+  assert.equal(f.current().url, RENDER.url);
+});
+
+test('createFailover: un solo server che dorme, avvio scaduto senza risposta → «riprovo» finché lo si sente', () => {
+  const f = createFailover([RENDER]);
+  f.fail(RENDER.url, 0);
+  let t = 0;
+  while (t < 90000) { t += f.retryIn(t); f.fail(RENDER.url, t); }
+  assert.equal(f.waking(), false, 'oltre 90 s: non più in avvio');
+  for (let i = 0; i < 5; i++) { t += f.retryIn(t); f.fail(RENDER.url, t); assert.equal(f.waking(), false); }
+  t += 16 * MIN;
+  f.fail(RENDER.url, t);
+  assert.equal(f.waking(), true, 'dopo 15 min senza contatti un nuovo avvio');
+});
+
+test('createFailover: errori che non contano non toccano lo stato di avvio', () => {
+  const f = createFailover([RENDER]);
+  f.ok(RENDER.url, 0);
+  f.fail(RENDER.url, 16 * MIN, { counts: false });   // rete dell'utente assente: Render non è stato sentito
+  assert.equal(f.waking(), false);
+  f.fail(RENDER.url, 16 * MIN + 3000);
+  assert.equal(f.waking(), true, 'l\'ultimo contatto vero resta quello di 16 min fa');
+});
+
+test('createRecheck: intervallo, prova in corso, raddoppio e riapertura', () => {
+  const r = createRecheck({ recheckMs: 1000, recheckMaxMs: 4000, flapMs: 500, stableMs: 3000, forceGapMs: 200 });
+  assert.equal(r.due(0), false, 'sul primo: si fissa l\'ora (da 0 + 1000)');
+  assert.equal(r.due(999), false);
+  assert.equal(r.due(1000), true);
+  assert.equal(r.due(1000, true), false, 'una prova alla volta');
+  r.returned(1100);                            // la prova riesce: si torna al primo
+  r.primaryLeft(1200);                         // ricade entro flapMs: raddoppia
+  assert.equal(r.level(), 1);
+  assert.equal(r.due(1300, true), false, 'livello 1: niente prova forzata');
+  assert.equal(r.due(1200 + 1999), false);
+  assert.equal(r.due(1200 + 2000), true);
+  r.failed(3300);
+  assert.equal(r.due(3400), false, 'prova fallita: la prossima fra un intervallo (2000)');
+  assert.equal(r.due(5299), false);
+  assert.equal(r.due(5300), true);
+  r.end(5400);                                 // prova finita senza ritorno (es. già tornati per errore): l'ora resta
+  r.primaryBack(5500);
+  r.primaryLeft(5600 + 3000);                  // stabile per stableMs: si torna al livello 0
+  assert.equal(r.level(), 0);
+  assert.equal(r.due(8700, true), true, 'livello 0 e ultima prova finita da più di forceGapMs: riapertura subito');
+  const s = createRecheck({ startNow: true, forceGapMs: 200 });
+  assert.equal(s.due(5), true, 'startNow: subito');
+});
+
 // Rete assente dalla parte dell'utente (networkDown): l'errore della vista non conta per il passaggio.
-test('networkDown: navigator.onLine false → rete assente', () => {
-  assert.equal(networkDown({ onLine: false }), true);
-  assert.equal(networkDown({ onLine: false, viewNetwork: false, balticNetwork: false }), true);
+test('networkDown: navigator.onLine false → rete assente solo se la vista non ha avuto risposta', () => {
+  assert.equal(networkDown({ onLine: false, viewNetwork: true }), true);
+  assert.equal(networkDown({ onLine: false, viewNetwork: true, balticNetwork: false }), true, 'il Baltico non c\'entra');
+  assert.equal(networkDown({ onLine: false, viewNetwork: false }), false, 'un 503 dice che la rete c\'è: conta sempre');
+  assert.equal(networkDown({ onLine: false }), false);
 });
 
 test('networkDown: vista e Baltico falliti con errore di rete, Baltico riuscito da poco → rete assente', () => {

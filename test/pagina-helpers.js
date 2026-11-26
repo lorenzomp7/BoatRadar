@@ -3,7 +3,7 @@
 // più: config.js (window.BOATRADAR_APIS), sessionStorage, fetch che può fallire, non rispondere (con AbortController) o
 // rispondere con un errore HTTP, ora della pagina che corre come i timer (TIME_SCALE volte più veloce), registro dei
 // setTimeout di tick() (i tentativi dopo un errore), scheda nascosta o visibile (setHidden, con l'evento
-// visibilitychange) e navigator.onLine (page.ctx.navigator).
+// visibilitychange), navigator.onLine (page.ctx.navigator) ed eventi di window (fire, per esempio 'online').
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -33,6 +33,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }
   const pageNow = () => realStart + (Date.now() - realStart) * timeScale;
   const elements = new Map();
   const listeners = new Map();   // eventi di document (per visibilitychange)
+  const winListeners = new Map();   // eventi di window (per online)
   const document = { activeElement: null, hidden: false, getElementById: id => el(id),
     body: { classList: { add() {}, remove() {}, contains: () => false, toggle() {} } },
     addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); } };
@@ -99,6 +100,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
     ResizeObserver: class { observe() {} }, matchMedia: () => ({ matches: false }),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, navigator: {},
+    addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
   ctx.window = ctx;
   Object.assign(ctx, config);
@@ -109,7 +111,9 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }
   const stop = () => { stopped = true; for (const id of allTimers) clearTimeout(id); allTimers.clear(); };
   // scheda nascosta o di nuovo visibile, come fa il browser: document.hidden e poi l'evento visibilitychange
   const setHidden = hidden => { document.hidden = hidden; for (const fn of listeners.get('visibilitychange') || []) fn({ type: 'visibilitychange' }); };
-  return { ctx, el, get, requests, stop, storage, retryTimers, pageNow, status, setHidden, tick: () => ctx.tick(), markers: () => get('markers'),
+  // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
+  const fire = type => { for (const fn of winListeners.get(type) || []) fn({ type }); };
+  return { ctx, el, get, requests, stop, storage, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }
 
