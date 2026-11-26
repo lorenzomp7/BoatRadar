@@ -9,10 +9,11 @@
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
-#      secondo quello di prova, la pagina passi al secondo: navi in mappa e «server di riserva (Render)» nella riga di
-#      stato, a desktop e telefono; con il primo buono resti sul primo senza chiedere nulla al secondo;
+#      secondo quello di prova, la pagina passi al secondo dopo due tentativi al primo (3 s fra i due): navi in mappa e
+#      «server di riserva (Render)» nella riga di stato, a desktop e telefono; con il primo buono resti sul primo senza
+#      chiedere nulla al secondo;
 #   6. (solo con il server locale, punto 86) sul secondo server, prima di 5 min nessuna prova del primo; con il primo
-#      tornato e l'orologio della pagina (e serverTime) 5 min avanti, una prova leggera (/status) del primo e, dal giro
+#      tornato e l'orologio della pagina (e serverTime) 5 min avanti, una prova del primo con la stessa vista e, dal giro
 #      dopo, ritorno al primo: niente «server di riserva» e sessionStorage aggiornato, a desktop e telefono.
 # Esce con 0 se tutto va bene, con 1 al primo controllo fallito. Screenshot in diagnosi/smoke/.
 #
@@ -279,8 +280,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
       && / · server di riserva \(Render\)$/.test(document.getElementById('status').textContent)" >/dev/null \
       || { "${AB[@]}" screenshot "$OUT/riserva-$1-errore.png" >/dev/null || true
            fail "riserva $1: niente navi dal secondo server · stato: $(js "document.getElementById('status')?.textContent")"; }
-    tried=$(js "window.__smokeFetched.some(u => u.startsWith('$DEAD_API/locations?bbox='))")
-    [ "$tried" = true ] || fail "riserva $1: la pagina non ha provato prima il server morto"
+    tried=$(js "window.__smokeFetched.filter(u => u.startsWith('$DEAD_API/locations?bbox=')).length")
+    [ "$tried" = 2 ] || fail "riserva $1: la pagina ha provato $tried volte il server morto prima di passare (attese 2)"
     saved=$(js "sessionStorage.getItem('boatradar:api')" | tr -d '"')
     [ "$saved" = "$GOOD_API" ] || fail "riserva $1: sessionStorage ricorda «$saved», non $GOOD_API"
     ok "riserva $1: $(js "markers.size") navi dal secondo server · stato «$(js "document.getElementById('status').textContent" | tr -d '"')»"
@@ -348,23 +349,23 @@ JS
     "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0
       && / · server di riserva \(Render\)$/.test(document.getElementById('status').textContent)" >/dev/null \
       || fail "ritorno $1: la pagina non passa al secondo · stato: $(js "document.getElementById('status')?.textContent")"
-    [ "$(js "document.hidden")" = false ] || fail "ritorno $1: la scheda risulta nascosta, la prova non partirebbe"
-    # il primo torna, ma prima di 5 min la pagina non lo prova
+    # il primo torna, ma prima di 5 min la pagina non lo prova (le viste al primo restano i due tentativi iniziali)
+    dead_views="window.__smokeFetched.filter(u => u.startsWith('$DEAD_API/locations?bbox=')).length"
     js "window.__smokePrimaryUp = true" >/dev/null
     js "tick().then(() => tick()).then(() => true)" >/dev/null
-    early=$(js "window.__smokeFetched.filter(u => u === '$DEAD_API/status').length")
-    [ "$early" = 1 ] || fail "ritorno $1: $early richieste a /status del primo prima di 5 min (attesa 1, quella del primo giro)"
-    # 5 min e 5 s dopo: il giro successivo fa la prova, quello dopo ancora torna al primo
+    early=$(js "$dead_views")
+    [ "$early" = 2 ] || fail "ritorno $1: $early viste chieste al primo prima di 5 min (attese 2, i tentativi iniziali)"
+    # 5 min e 5 s dopo: il giro successivo fa la prova (la stessa vista), quello dopo ancora torna al primo
     js "window.__smokeShift = 305000" >/dev/null
     js "tick().then(() => true)" >/dev/null
     "${AB[@]}" wait --fn "sessionStorage.getItem('boatradar:api') === '$DEAD_API'" >/dev/null \
-      || fail "ritorno $1: dopo la prova il primo non è ricordato · prove $(js "window.__smokeFetched.filter(u => u === '$DEAD_API/status').length")"
+      || fail "ritorno $1: dopo la prova il primo non è ricordato · viste al primo $(js "$dead_views")"
     js "tick().then(() => true)" >/dev/null
     "${AB[@]}" wait --fn "markers.size > 0 && !/riserva/.test(document.getElementById('status').textContent)" >/dev/null \
       || { "${AB[@]}" screenshot "$OUT/ritorno-$1-errore.png" >/dev/null || true
            fail "ritorno $1: ancora sul secondo · stato: $(js "document.getElementById('status').textContent")"; }
-    views=$(js "window.__smokeFetched.filter(u => u.startsWith('$DEAD_API/locations?bbox=')).length")
-    [ "$views" -ge 2 ] || fail "ritorno $1: la vista non è stata chiesta di nuovo al primo ($views)"
+    views=$(js "$dead_views")
+    [ "$views" -ge 4 ] || fail "ritorno $1: prova e vista del giro dopo non chieste al primo ($views viste, attese almeno 4)"
     ok "ritorno $1: dopo 5 min una prova e il ritorno al primo · $(js "markers.size") navi · stato «$(js "document.getElementById('status').textContent" | tr -d '"')»"
     "${AB[@]}" screenshot "$OUT/ritorno-$1.png" >/dev/null
     problems=$(page_problems)

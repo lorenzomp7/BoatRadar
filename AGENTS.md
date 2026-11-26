@@ -40,11 +40,13 @@ Lavora su `main_claude` salvo indicazione diversa.
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
   (`{url, name, sleeps}`, prima la VM poi Render) e il primo in `window.BOATRADAR_API`. Servito vuoto da
   `server.js` in locale. Test in `test/backend.test.js`. La pagina (punto 86) parte dal primo e passa al
-  successivo solo quando sbaglia la richiesta della vista (`apiList` e `createFailover` di `public/ais-logic.js`,
-  test in `test/backend-pagina.test.js` e `test/pagina-backend.test.js`, che usa `test/pagina-helpers.js`);
-  su un server di riserva prova la VM ogni 5 min (`PRIMARY_RECHECK_MS`, solo `/api/status`) e ci torna se risponde, e
-  ricorda il server per la sessione della scheda (`sessionStorage`): per la quota di Render vedi `deploy/README.md`,
-  «Passaggio automatico nella pagina».
+  successivo solo quando sbaglia la richiesta della vista, dalla VM due volte di fila e mai per la rete
+  dell'utente assente (`apiList`, `createFailover` e `networkDown` di `public/ais-logic.js`, test in
+  `test/backend-pagina.test.js` e `test/pagina-backend.test.js`, che usa `test/pagina-helpers.js`); su un server di
+  riserva prova la VM con la stessa vista ogni 5 min (`PRIMARY_RECHECK_MS`, di più se la VM oscilla, anche a scheda
+  nascosta), subito ricaricando e quando la scheda torna visibile, e ci torna se risponde; ricorda il server per la
+  sessione della scheda (`sessionStorage`): per la quota di Render vedi `deploy/README.md`, «Passaggio automatico
+  nella pagina».
 - `Dockerfile`, `deploy/`: immagine e avvio sulla VM; `deploy/README.md` spiega la configurazione.
 - `render.yaml`: Blueprint del servizio Render (Docker, piano Free, `AISSTREAM_KEY` con `sync: false`,
   da impostare solo su Render). Ogni file nelle `COPY` del `Dockerfile` va nei `paths` di
@@ -58,7 +60,7 @@ Lavora su `main_claude` salvo indicazione diversa.
 | Scopo | Comando |
 |---|---|
 | Dipendenze | `npm install` |
-| **Verifica standard** | `npm test` (meno di un secondo, gira anche in CI) |
+| **Verifica standard** | `npm test` (circa 50 s, soprattutto i test di rete e della pagina; gira anche in CI) |
 | Avvio | `node server.js` → http://localhost:8765 |
 | Dati mondiali | `AISSTREAM_KEY=...` oppure file `aisstream-key.txt` (ignorato da git) |
 
@@ -135,9 +137,9 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
-  passi al secondo con «server di riserva (Render)» nella riga di stato, e che con il primo buono non chieda nulla al
-  secondo; e che dal secondo, con il primo tornato e l'orologio 5 min avanti, la pagina provi il primo e ci torni
-  (punto 86). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
+  passi al secondo dopo due tentativi al primo, con «server di riserva (Render)» nella riga di stato, e che con il
+  primo buono non chieda nulla al secondo; e che dal secondo, con il primo tornato e l'orologio 5 min avanti, la
+  pagina provi il primo con la stessa vista e ci torni (punto 86). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
 - Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
 - Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
   registro npm. Senza tile la mappa resta scura: è normale.

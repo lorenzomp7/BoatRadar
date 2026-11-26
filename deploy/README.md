@@ -27,7 +27,7 @@ In **Settings → Secrets and variables → Actions**:
 
 | Tipo | Nome | Valore |
 |---|---|---|
-| Variable | `VM_HOST` | IP pubblico della VM, es. `130.61.10.20` (con un nome al posto dell'IP serve anche `API_HOST`: sslip.io funziona solo con un IP) |
+| Variable | `VM_HOST` | IP pubblico della VM, es. `130.61.10.20` (con un nome al posto dell'IP serve anche `API_HOST`: sslip.io funziona solo con un IP). Impostala solo quando la VM esiste e risponde (vedi «Due backend») |
 | Variable | `VM_USER` | facoltativa, di base `ubuntu` |
 | Secret | `VM_SSH_KEY` | contenuto della chiave privata scaricata al punto 2 |
 | Variable | `API_HOST` | facoltativa: tuo dominio per il server, es. `api.miosito.it` |
@@ -95,7 +95,13 @@ window.BOATRADAR_API = window.BOATRADAR_APIS[0].url;
 ```
 
 La pagina usa il primo indirizzo e passa da sola al successivo quando il primo non risponde (vedi
-«Passaggio automatico nella pagina» qui sotto). Senza nessuna variabile `config.js` resta un
+«Passaggio automatico nella pagina» qui sotto).
+
+**Non impostare `VM_HOST` (né `API_HOST`) finché la VM non esiste e non risponde.** Con la variabile
+impostata `config.js` mette la VM al primo posto anche se non c'è: ogni scheda nuova la prova due volte
+(fino a circa 20 s senza navi del mondo se l'indirizzo non risponde) prima di passare a Render, ogni scheda
+su Render ci riprova ogni 5 min e *Deploy backend* fallisce a ogni esecuzione. Finché c'è solo Render imposta
+solo `RENDER_HOST`: `config.js` avrà una sola voce e la pagina userà Render direttamente. Senza nessuna variabile `config.js` resta un
 commento e la pagina mostra solo il Baltico. Se `API_HOST` (o il nome sslip.io di `VM_HOST`) e
 `RENDER_HOST` sono lo stesso indirizzo, in `config.js` resta una sola voce, quella della VM. Un valore
 che non è un nome di host (per esempio con spazi o virgolette, una porta fuori da 1-65535, o
@@ -105,39 +111,60 @@ che non è un nome di host (per esempio con spazi o virgolette, una porta fuori 
 ### Passaggio automatico nella pagina
 
 `boatradar.html` legge l'elenco con `apiList` e sceglie il server con `createFailover` (entrambe in
-`public/ais-logic.js`, test in `test/backend-pagina.test.js` e `test/pagina-backend.test.js`):
+`public/ais-logic.js`, con `networkDown`; test in `test/backend-pagina.test.js` e `test/pagina-backend.test.js`):
 
 - Decide **solo la richiesta della vista** (`/api/locations?bbox=…`): errore di rete, risposta non ok
   (per esempio 503) o nessuna risposta entro 8 s. `/api/status`, `include=`, `/api/vessel` e la ricerca
   vanno al server attivo, ma un loro errore non fa cambiare server.
-- Dopo un errore la pagina riprova lo stesso server dopo 5 s, poi 10, 20, 40 e al massimo 60 s; nel
-  frattempo mostra solo il Baltico e la riga di stato dice «Mondo: server non raggiungibile, riprovo tra
-  N s (ora solo Baltico)». Con due server passa invece subito all'altro.
-- Render che si sveglia: finché non ha mai risposto, per 90 s dal suo primo errore la pagina resta su di
-  lui (riga di stato «Mondo: server di riserva in avvio, circa un minuto…»). Dopo, se non ha ancora
-  risposto, torna a provare la VM.
+- **Niente passaggio per un errore isolato della VM.** Dalla VM (`"sleeps":false`) la pagina passa a Render
+  solo dopo **due errori di fila** della vista: dopo il primo riprova la VM dopo 3 s (riga di stato «Mondo:
+  server non raggiungibile, riprovo tra 3 s (ora solo Baltico)»). Una risposta in mezzo azzera il conto.
+- **Rete dell'utente assente.** Un errore della vista non conta (si riprova lo stesso server dopo 3 s, senza
+  passare) quando il browser dice di essere offline (`navigator.onLine` falso) oppure quando nello stesso giro
+  anche la richiesta al Baltico (Digitraffic, un altro sito) fallisce con un errore di rete e la vista non ha
+  avuto nessuna risposta. Il Baltico vale come prova solo se ha risposto negli ultimi 2 min: se Digitraffic è
+  bloccato dalla rete dell'utente, o la rete manca da più di 2 min, gli errori contano di nuovo e la pagina
+  può passare a Render. Una risposta di errore della VM (per esempio 503) conta sempre: la rete c'è.
+- Dopo il secondo errore di fila la VM si riprova dopo 5 s, poi 10, 20, 40 e al massimo 60 s; con due
+  server nel frattempo la pagina passa subito all'altro, con un server solo mostra il Baltico e «riprovo
+  tra N s».
+- **Render che si sveglia**: finché non ha risposto, per 90 s dal suo primo errore la pagina resta su di lui
+  (riga di stato «Mondo: server di riserva in avvio, circa un minuto…»), e in quel periodo la richiesta della
+  vista a Render ha **45 s** invece di 8 (Render tiene le richieste finché il servizio non è pronto); intanto
+  gli altri giri non ne aprono altre. Dopo, se non ha ancora risposto, torna a provare la VM. L'attesa di avvio
+  si riapre tornando su Render solo se Render non ha sbagliato né risposto negli ultimi 15 min (dopo 15 min
+  senza visite si addormenta davvero): con **entrambi i server giù** la riga di stato dice quindi «Mondo:
+  server non raggiungibile, riprovo tra N s (ora solo Baltico)» e non più «in avvio».
 - Quando il server attivo non è il primo dell'elenco, la riga di stato finisce con «server di riserva
   (Render)».
 - **Ritorno alla VM.** Mentre è su Render (o su un altro server che non è il primo), ogni 5 min
-  (`PRIMARY_RECHECK_MS` in `boatradar.html`) la pagina prova la VM con una sola richiesta leggera a
-  `/api/status` (timeout 8 s), a parte dal giro: la mappa continua con Render. Se la VM risponde 200 con
-  `"hasKey":true` (o senza il campo `hasKey`), dal giro successivo la pagina torna alla VM e lo ricorda in
-  `sessionStorage`. Se non risponde, risponde con un errore o con `"hasKey":false`, la pagina resta su
-  Render senza segnalare errori e riprova dopo altri 5 min. Mai più di una prova in corso, e nessuna
-  prova con la scheda nascosta (in secondo piano o con lo schermo spento): la prima prova parte al primo
-  aggiornamento con la scheda di nuovo visibile.
+  (`PRIMARY_RECHECK_MS` in `boatradar.html`) la pagina prova la VM con una sola richiesta della **stessa
+  vista** del giro (`/api/locations?bbox=…`, uguale per tutti e servita dalla cache della VM; timeout 8 s), a
+  parte dal giro: la mappa continua con Render. Se la VM risponde con l'elenco delle navi, dal giro successivo
+  la pagina torna alla VM e lo ricorda in `sessionStorage`. Se non risponde o risponde con un errore, la pagina
+  resta su Render senza segnalare errori e riprova dopo un altro intervallo. Mai più di una prova in corso. La
+  prova continua anche con la **scheda nascosta** (in secondo piano o con lo schermo spento, finché il browser
+  la tiene attiva), e quando la scheda torna visibile su Render la pagina prova subito la VM e aspetta la
+  risposta (al massimo 8 s) prima di chiedere la vista: se la VM risponde, la vista va già alla VM.
+- **VM che oscilla.** Se la VM ricade entro 10 min da un ritorno con la prova, l'intervallo delle prove
+  raddoppia: 5, 10, 20 e al massimo 40 min. Dopo 30 min di VM senza ricadute torna a 5 min.
 - Il server attivo resta per la **sessione della scheda** (`sessionStorage`, chiave `boatradar:api`):
-  ricaricando la scheda si riparte da lì (e la prima prova della VM arriva 5 min dopo), una scheda nuova
+  ricaricando la scheda su Render la pagina prova **subito** la VM e aspetta la risposta (al massimo 8 s)
+  prima della prima vista: se la VM risponde si riparte dalla VM, altrimenti da Render. Una scheda nuova
   riparte dalla VM.
 
-**Quota di Render.** Una VM che risponde non fa mai passare la pagina a Render: si cambia solo dopo un
-errore della vista. Una scheda passata a Render ci resta al massimo circa 5 min dopo che la VM è tornata
-in linea (un po' di più se la scheda era nascosta), poi torna da sola alla VM: il traffico di Render
-dopo un guasto della VM è quindi quello dei minuti del guasto più al massimo 5 min per scheda aperta.
-La prova costa poco: una risposta di `/api/status` (meno di 1 KB) ogni 5 min alla VM, nessuna a
-Render. Con la quota di 5 GB al mese (sotto) non serve più chiudere e riaprire le schede dopo un guasto;
-per tornare subito alla VM senza aspettare: dalla console del browser
-`sessionStorage.removeItem('boatradar:api')` e ricarica.
+**Quota di Render.** Una VM che risponde non fa mai passare la pagina a Render: si cambia solo dopo due
+errori di fila della vista, e non per un buco di rete dell'utente. Una scheda passata a Render ci resta al
+massimo circa 5 min dopo che la VM è tornata in linea, **anche se è nascosta** (con lo schermo spento
+alcuni browser rallentano i giri fino a uno al minuto: qualche decina di secondi in più); se il browser
+ferma del tutto la scheda in secondo piano, Render non riceve nulla e alla riapertura la prima richiesta
+è la prova della VM. Il traffico di Render dopo un guasto della VM è quindi quello dei minuti del guasto
+più al massimo circa 5 min per scheda aperta (vista mondo: circa 5 MB, sotto). Se la VM oscilla, ogni
+ricaduta lascia la scheda su Render fino a 10, 20 o 40 min (vista mondo: fino a circa 37 MB per scheda a
+ricaduta) invece di farla rimbalzare ogni 5 min. La prova pesa sulla VM, non su Render: una vista ogni
+5 min per ogni scheda che sta su Render (vista mondo: 227,5 KB gzip, circa 2,7 MB all'ora, dai 10 TB della VM). Con la
+quota di 5 GB al mese (sotto) non serve chiudere e riaprire le schede dopo un guasto; per tornare subito
+alla VM basta ricaricare la scheda (prova immediata).
 
 ### Costi e quote di Render
 

@@ -146,6 +146,7 @@ const REFRESH_MS = 15000;
 const WINDOW_MS = 30 * 60 * 1000;
 const CLOCK_WAIT_MS = 3000;       // primo aggiornamento: attesa massima di /api/status prima di chiedere il Baltico
 const API_TIMEOUT_MS = 8000;      // richieste al server del giro (vista, include=, /status): oltre, annullate
+const WAKE_TIMEOUT_MS = 45000;    // vista a Render che si sveglia (waking): Render tiene la richiesta finché non è pronto
 const RETRY_SLACK_MS = 250;       // margine del tentativo dopo un errore, perché il timer non scatti prima dell'attesa
 const API_KEY = 'boatradar:api';  // sessionStorage: server attivo, ricordato per la sessione della scheda
 const PRIMARY_RECHECK_MS = 5 * 60 * 1000;   // su un server di riserva: ogni 5 min una prova leggera del primo
@@ -159,15 +160,16 @@ if (!window.AisLogic) {
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
   clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits,
-  apiList, createFailover } = AisLogic;
+  apiList, createFailover, networkDown } = AisLogic;
 
 // Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
 // Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
-// richiesta della vista sbaglia (errore di rete, risposta non ok, nessuna risposta entro API_TIMEOUT_MS): un server
-// che risponde non fa mai passare all'altro. Su un server di riserva, ogni PRIMARY_RECHECK_MS la pagina prova il primo
-// (recheckPrimary) e, se risponde, ci torna: Render ha 5 GB al mese di traffico (deploy/README.md, «Passaggio
-// automatico nella pagina»). Il server attivo resta per la sessione della scheda (sessionStorage, che in alcuni
-// browser lancia: allora vale solo fino alla chiusura della pagina).
+// richiesta della vista sbaglia (errore di rete, risposta non ok, nessuna risposta entro API_TIMEOUT_MS), sulla VM
+// due volte di fila, e mai quando manca la rete dell'utente (networkDown): un server che risponde non fa mai passare
+// all'altro. Su un server di riserva, ogni PRIMARY_RECHECK_MS (o più, se la VM oscilla), subito ricaricando la scheda e
+// quando la scheda torna visibile, la pagina prova il primo (recheckPrimary) e, se risponde, ci torna: Render ha 5 GB al
+// mese di traffico (deploy/README.md, «Passaggio automatico nella pagina»). Il server attivo resta per la sessione della
+// scheda (sessionStorage, che in alcuni browser lancia: allora vale solo fino alla chiusura della pagina).
 const API_LIST = apiList(window);
 const backends = createFailover(API_LIST, {
   saved: (() => { try { return sessionStorage.getItem(API_KEY); } catch { return null; } })(),
@@ -178,6 +180,9 @@ const api = () => backends.current().url;
 // «server di riserva (Render)»: il server attivo quando non è il primo dell'elenco
 const backupName = (b = backends.current()) => 'server di riserva' + (b.name ? ` (${b.name})` : '');
 let retryTimer = null;   // l'unico tentativo programmato dopo un errore del server
+let balticOkAt = null;   // ultima risposta del Baltico (networkDown: il Baltico dice se la rete dell'utente c'è)
+let firstRound = true, visibleAgain = false;   // giri in cui la prova del primo si fa subito e si aspetta
+let wakeView = false;    // vista a Render in avvio in corso (fino a WAKE_TIMEOUT_MS): gli altri giri non ne aprono altre
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
@@ -346,20 +351,21 @@ async function loadBalticMeta() {
 
 // Richiesta al server dei dati mondiali: senza risposta entro API_TIMEOUT_MS la annullo, così un server che non
 // risponde conta come errore (punto 86) e il giro non resta appeso
-function fetchApi(url) {
+function fetchApi(url, timeoutMs = API_TIMEOUT_MS) {
   // browser senza AbortController (Safari prima della 12.1): niente timeout, l'errore arriva quando arriva
   if (typeof AbortController !== 'function') return fetch(url);
-  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), timeoutMs);
   return fetch(url, { signal: ctl.signal })
-    .catch(err => { throw ctl.signal.aborted ? new Error(`nessuna risposta in ${API_TIMEOUT_MS / 1000} s`) : err; })
+    .catch(err => { throw ctl.signal.aborted ? new Error(`nessuna risposta in ${timeoutMs / 1000} s`) : err; })
     .finally(() => clearTimeout(timer));
 }
 
 // Posizioni di una fonte. setTotal: total della risposta = navi nella vista (solo per la richiesta della vista;
-// quello di include= conta le navi incluse). get: fetchApi per il server, fetch per il Baltico.
+// quello di include= conta le navi incluse). get: fetchApi per il server, fetch per il Baltico. Errore senza risposta
+// (rete, timeout): err.network = true (networkDown); con una risposta non ok: err.status.
 async function features(url, setTotal = false, get = fetch) {
-  const res = await get(url);
-  if (!res.ok) throw new Error('locations ' + res.status);
+  const res = await get(url).catch(err => { throw Object.assign(err instanceof Error ? err : new Error(String(err)), { network: true }); });
+  if (!res.ok) throw Object.assign(new Error('locations ' + res.status), { status: res.status });
   const fc = await res.json();
   if (setTotal && fc.total != null) worldTotal = fc.total;
   return fc.features;
@@ -379,27 +385,49 @@ async function loadStatus(server) {
 // (poi si va avanti con l'ora del telefono). Creata al primo giro, poi è già risolta.
 let clockReady = null;
 
-// Ritorno al server principale (punto 86): su un server di riserva, ogni PRIMARY_RECHECK_MS una sola richiesta a
-// /status del primo (timeout API_TIMEOUT_MS), a parte dal giro: non tocca vista, orologio né riga di stato. 200 con
-// hasKey true (o senza hasKey) → dal giro dopo si torna al primo; altrimenti si resta e si riprova fra
-// PRIMARY_RECHECK_MS, senza contarlo come errore del server attivo. Con la scheda nascosta nessuna prova (si fa al
-// primo giro con la scheda visibile).
-function recheckPrimary() {
-  if (document.hidden || !backends.shouldRecheck(clock.now())) return;
-  const url = API_LIST[0].url;
-  fetchApi(`${url}/status`)
-    .then(res => (res.status === 200 ? res.json() : null))
-    .then(st => !!st && typeof st === 'object' && st.hasKey !== false)
-    .catch(() => false)
-    .then(good => (good ? backends.recheckOk(url) : backends.recheckFailed(clock.now())));
+// Ritorno al server principale (punto 86): su un server di riserva, ogni PRIMARY_RECHECK_MS (raddoppiato se la VM
+// oscilla, createFailover) una sola richiesta al primo della stessa vista del giro (/locations?bbox=…, uguale per tutti
+// e servita dalla cache della VM; timeout API_TIMEOUT_MS), anche con la scheda nascosta (una risposta ogni 5 min). Di
+// solito a parte dal giro: non tocca vista, orologio né riga di stato. Risposta ok con un elenco di navi → dal giro dopo
+// si torna al primo; altrimenti si resta e si riprova dopo un intervallo, senza contarlo come errore del server attivo.
+// urgent (primo giro dopo il caricamento, scheda tornata visibile): la prova parte subito e il giro la aspetta prima
+// della vista, così se la VM risponde la vista va già alla VM. Restituisce la prova in corso (o una promessa risolta).
+let probe = null, probeUrgent = false;
+function recheckPrimary(box, urgent) {
+  if (!probe && backends.shouldRecheck(clock.now(), urgent)) {
+    const url = API_LIST[0].url;
+    probeUrgent = urgent;
+    probe = features(`${url}/locations?bbox=${box}`, false, fetchApi)
+      .then(list => Array.isArray(list), () => false)
+      .then(good => {
+        if (good) backends.recheckOk(url, clock.now()); else backends.recheckFailed(clock.now());
+        probe = null; probeUrgent = false;
+      });
+  }
+  return probe || Promise.resolve();
 }
 
+// Scheda di nuovo visibile su un server di riserva: subito un giro con la prova del primo (il telefono può essere stato
+// in tasca per ore mentre la VM tornava)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || backends.current() === API_LIST[0]) return;
+  visibleAgain = true;
+  tick();
+});
+
 async function loadLocations() {
-  recheckPrimary();
+  const urgent = firstRound || visibleAgain;
+  firstRound = visibleAgain = false;
+  const probing = recheckPrimary(viewBox(), urgent);
+  if (urgent || probeUrgent) await probing;
   // server attivo all'inizio del giro (punto 86): vista, include= e /status vanno tutti a lui. Dopo un errore, fino
-  // al tentativo programmato (retryTimer), i giri chiedono solo il Baltico. Le attese si contano con clock.now() (la
-  // regola di test/ais-logic.test.js vuole l'ora del telefono solo per misurare /api/status).
-  const server = api(), world = backends.canTry(clock.now());
+  // al tentativo programmato (retryTimer), i giri chiedono solo il Baltico; così anche mentre una vista a Render in
+  // avvio aspetta (wakeView). Le attese si contano con clock.now() (la regola di test/ais-logic.test.js vuole l'ora del
+  // telefono solo per misurare /api/status).
+  const server = api(), waking = backends.waking(), world = backends.canTry(clock.now()) && !(waking && wakeView);
+  const ownsWake = world && waking;   // Render in avvio: la vista ha WAKE_TIMEOUT_MS (Render la tiene finché non è pronto)
+  if (ownsWake) wakeView = true;
+  const viewGet = ownsWake ? u => fetchApi(u, WAKE_TIMEOUT_MS) : fetchApi;
   const status = world ? loadStatus(server) : Promise.resolve(null);
   if (!clockReady) clockReady = Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
   // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a
@@ -410,16 +438,21 @@ async function loadLocations() {
   const skipped = Promise.reject(new Error('server non raggiungibile'));
   skipped.catch(() => {});
   const [med, inc, baltic, statusResult] = await Promise.allSettled([
-    world ? features(`${server}/locations?bbox=${viewBox()}`, true, fetchApi) : skipped,
+    world ? features(`${server}/locations?bbox=${viewBox()}`, true, viewGet) : skipped,
     !ship ? [] : world ? features(`${server}/locations?${ship}`, false, fetchApi) : skipped,
     clockReady.then(() => features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`)), status]);
-  // solo la richiesta della vista decide il passaggio a un altro server; dopo un errore un solo tentativo programmato
-  if (world && med.status === 'fulfilled') backends.ok(server);
+  if (ownsWake) wakeView = false;
+  // solo la richiesta della vista decide il passaggio a un altro server; dopo un errore un solo tentativo programmato.
+  // Senza rete dalla parte dell'utente (offline, o anche il Baltico fallito con errore di rete) l'errore non conta.
+  if (world && med.status === 'fulfilled') backends.ok(server, clock.now());
   else if (world) {
-    backends.fail(server, clock.now());
+    const down = networkDown({ onLine: navigator.onLine, viewNetwork: med.reason?.network === true,
+      balticNetwork: baltic.status === 'rejected' && baltic.reason?.network === true, balticOkAt, t: clock.now() });
+    backends.fail(server, clock.now(), { counts: !down });
     clearTimeout(retryTimer);
     retryTimer = setTimeout(tick, backends.retryIn(clock.now()) + RETRY_SLACK_MS);
   }
+  if (baltic.status === 'fulfilled') balticOkAt = clock.now();
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
   const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
   if (st) serverLimits = normLimits(st.limits);

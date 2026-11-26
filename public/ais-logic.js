@@ -375,28 +375,44 @@
   }
 
   // Passaggio automatico fra i server di list (apiList). Lo decide solo la richiesta della vista: fail(url, t) dopo un
-  // errore (t = ora in ms), ok(url) dopo una risposta. Dopo un errore il server si riprova solo da t + baseMs·2^(errori−1),
-  // al massimo maxMs (canTry, retryIn). Un server che dorme (sleeps, Render) e non ha ancora risposto da quando è attivo
-  // resta attivo per wakeGraceMs dal primo errore (waking: «in avvio»); altrimenti si passa al successivo, in giro, che
-  // si possa già riprovare, e se nessuno si può riprovare si resta su quello pronto per primo. Un errore fa cambiare
-  // server, e una risposta (anche tardiva) di un altro server non sposta l'attivo.
-  // Errori di un server non più attivo, o arrivati durante l'attesa (richieste partite prima dell'errore precedente),
-  // sono ignorati: due richieste fallite insieme contano una volta. onChange(server) ai cambi.
-  // Ritorno al primo (quota di Render): su un server diverso dal primo, recheckMs dopo il passaggio (o dopo il primo
-  // shouldRecheck, se si parte da un server salvato) shouldRecheck(t) dice true una volta e segna la prova in corso;
-  // finché non arriva recheckOk(url) o recheckFailed(t) non ne dice altre. recheckOk(url del primo) torna al primo;
-  // recheckFailed(t) riprova da t + recheckMs (recheckOk di un altro indirizzo: dall'inizio della prova). La prova non
-  // conta come errore né come risposta del server attivo.
-  function createFailover(list, { saved = null, onChange = () => {}, baseMs = 5000, maxMs = 60000, wakeGraceMs = 90000,
-    recheckMs = 300000 } = {}) {
-    const st = list.map(() => ({ failures: 0, retryAt: 0, firstErrorAt: null, answered: false }));
+  // errore (t = ora in ms), ok(url, t) dopo una risposta. Un server che non dorme (la VM) si lascia solo dopo due errori
+  // di fila: il primo lo fa riprovare da t + confirmMs (3 s), un errore isolato non fa passare a Render (quota). Poi il
+  // server si riprova solo da t + baseMs·2^(n−1), al massimo maxMs (canTry, retryIn). fail(url, t, {counts: false})
+  // (rete dell'utente assente, networkDown) fa solo riprovare da t + confirmMs, senza contare.
+  // Un server che dorme (sleeps, Render) e non ha ancora risposto resta attivo per wakeGraceMs dal primo errore (waking:
+  // «in avvio»); l'attesa di avvio si riapre, tornando su di lui, solo se il suo ultimo contatto (errore o risposta) è
+  // più vecchio di rewakeMs (15 min, dopo i quali Render si addormenta): se ha sbagliato o risposto da poco è sveglio e
+  // un suo errore fa passare subito. Altrimenti si passa al successivo, in giro, che si possa già riprovare, e se nessuno
+  // si può riprovare si resta su quello pronto per primo. Una risposta (anche tardiva) di un altro server non sposta
+  // l'attivo. Errori di un server non più attivo, o arrivati durante l'attesa (richieste partite prima dell'errore
+  // precedente), sono ignorati: due richieste fallite insieme contano una volta. onChange(server) ai cambi.
+  // Ritorno al primo (quota di Render): su un server diverso dal primo shouldRecheck(t) dice true una volta ogni
+  // intervallo e segna la prova in corso; finché non arriva recheckOk(url, t) o recheckFailed(t) non ne dice altre.
+  // shouldRecheck(t, true) (scheda tornata visibile) non aspetta l'intervallo. Partendo da un server salvato diverso dal
+  // primo la prima prova è subito (ricaricando la scheda). recheckOk(url del primo, t) torna al primo; recheckFailed(t)
+  // riprova da t + intervallo (recheckOk di un altro indirizzo: dall'inizio della prova). La prova non conta come errore
+  // né come risposta del server attivo. Intervallo: recheckMs (5 min); se il primo ricade entro flapMs (10 min) da un
+  // ritorno con la prova raddoppia (10, 20, al massimo recheckMaxMs, 40 min), dopo stableMs (30 min) sul primo senza
+  // ricadute torna recheckMs.
+  function createFailover(list, { saved = null, onChange = () => {}, baseMs = 5000, maxMs = 60000, confirmMs = 3000,
+    wakeGraceMs = 90000, rewakeMs = 15 * 60000, recheckMs = 300000, recheckMaxMs = 2400000, flapMs = 600000,
+    stableMs = 1800000 } = {}) {
+    const st = list.map(() => ({ failures: 0, strikes: 0, retryAt: 0, firstErrorAt: null, answered: false,
+      lastErrorAt: null, lastOkAt: null }));
     let idx = Math.max(0, list.findIndex(b => b.url === saved));
     let wakingNow = false;
-    let recheckAt = null, rechecking = false;   // prossima prova del primo (null: da fissare), prova in corso
+    // prossima prova del primo (null: da fissare; -Infinity: subito, si parte da un server salvato), prova in corso
+    let recheckAt = idx !== 0 ? -Infinity : null, rechecking = false;
+    let level = 0, returnedAt = null, primarySince = null;   // raddoppi dell'intervallo, ultimo ritorno con la prova
+    const interval = () => Math.min(recheckMaxMs, recheckMs * 2 ** level);
     const indexOf = url => list.findIndex(b => b.url === url);
-    function fail(url, t) {
+    function fail(url, t, { counts = true } = {}) {
       if (indexOf(url) !== idx || t < st[idx].retryAt) return;
       const s = st[idx];
+      if (!counts) { s.retryAt = t + confirmMs; return; }
+      s.lastErrorAt = t;
+      s.strikes++;
+      if (!list[idx].sleeps && s.strikes === 1) { s.retryAt = t + confirmMs; wakingNow = false; return; }
       s.failures++;
       s.retryAt = t + Math.min(maxMs, baseMs * 2 ** (s.failures - 1));
       if (s.firstErrorAt == null) s.firstErrorAt = t;
@@ -409,36 +425,50 @@
         if (next < 0 || st[j].retryAt < st[next].retryAt) next = j;
       }
       if (next === idx) return;
-      if (next === 0) recheckAt = null;
-      else if (idx === 0 || recheckAt == null) recheckAt = t + recheckMs;   // fra secondo e terzo l'ora resta
+      if (idx === 0) {   // il primo ricade: oscillazione se è appena tornato con la prova, stabile dopo stableMs
+        if (returnedAt != null && t - returnedAt < flapMs) level = Math.min(level + 1, 16);
+        else if (primarySince == null || t - primarySince >= stableMs) level = 0;
+        returnedAt = null;
+      }
+      if (next === 0) { recheckAt = null; primarySince = t; }
+      else if (idx === 0 || recheckAt == null) recheckAt = t + interval();   // fra secondo e terzo l'ora resta
       idx = next;
-      // appena attivo: un server che dorme può essersi riaddormentato, l'attesa di avvio riparte dal suo prossimo errore
-      st[idx].firstErrorAt = null; st[idx].answered = false;
+      const n = st[idx];
+      n.strikes = 0;
+      // un server che dorme può essersi riaddormentato: l'attesa di avvio riparte dal suo prossimo errore, ma solo se
+      // non lo si sente da rewakeMs
+      const seen = Math.max(n.lastErrorAt ?? -Infinity, n.lastOkAt ?? -Infinity);
+      if (!(t - seen < rewakeMs)) { n.firstErrorAt = null; n.answered = false; }
       onChange(list[idx]);
     }
-    function ok(url) {
+    function ok(url, t) {
       const i = indexOf(url);
       if (i < 0) return;
-      Object.assign(st[i], { failures: 0, retryAt: 0, firstErrorAt: null, answered: true });
+      Object.assign(st[i], { failures: 0, strikes: 0, retryAt: 0, firstErrorAt: null, answered: true });
+      if (t != null) st[i].lastOkAt = t;
       if (i === idx) wakingNow = false;
     }
-    function shouldRecheck(t) {
+    function shouldRecheck(t, force = false) {
       if (idx === 0 || rechecking) return false;
-      if (recheckAt == null) { recheckAt = t + recheckMs; return false; }
-      if (t < recheckAt) return false;
-      rechecking = true; recheckAt = t + recheckMs;   // se la prova non finisce bene, la prossima fra recheckMs
+      if (!force) {
+        if (recheckAt == null) { recheckAt = t + interval(); return false; }
+        if (t < recheckAt) return false;
+      }
+      rechecking = true; recheckAt = t + interval();   // se la prova non finisce bene, la prossima fra un intervallo
       return true;
     }
-    function recheckOk(url) {
+    function recheckOk(url, t) {
       rechecking = false;
       if (url !== list[0].url || idx === 0) return;
-      Object.assign(st[0], { failures: 0, retryAt: 0, firstErrorAt: null, answered: true });
+      Object.assign(st[0], { failures: 0, strikes: 0, retryAt: 0, firstErrorAt: null, answered: true });
+      if (t != null) st[0].lastOkAt = t;
       idx = 0; recheckAt = null; wakingNow = false;
+      returnedAt = t ?? null; primarySince = t ?? null;
       onChange(list[0]);
     }
     function recheckFailed(t) {
       rechecking = false;
-      recheckAt = t + recheckMs;
+      recheckAt = t + interval();
     }
     return {
       current: () => list[idx],
@@ -449,8 +479,19 @@
     };
   }
 
+  // Punto 86 (correzioni da revisione): l'errore della vista viene dalla rete dell'utente, non dal server, e non deve far
+  // cambiare server (fail(..., {counts: false})) quando il browser dice di essere offline (onLine === false) oppure
+  // quando nello stesso giro anche il Baltico (Digitraffic, un altro sito) è fallito con un errore di rete e la vista
+  // stessa non ha avuto risposta (viewNetwork: errore di rete o nessuna risposta; un 503 dice che la rete c'è). Il Baltico
+  // vale come prova solo se è riuscito negli ultimi graceMs (2 min, balticOkAt): se è bloccato (rete aziendale,
+  // filtri) o la rete manca da più tempo, l'errore conta e la pagina può passare all'altro server.
+  function networkDown({ onLine, viewNetwork = false, balticNetwork = false, balticOkAt = null, t, graceMs = 120000 } = {}) {
+    if (onLine === false) return true;
+    return viewNetwork === true && balticNetwork === true && balticOkAt != null && Number.isFinite(t) && t - balticOkAt <= graceMs;
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
-    apiList, createFailover };
+    apiList, createFailover, networkDown };
 });
