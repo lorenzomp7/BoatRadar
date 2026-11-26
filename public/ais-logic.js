@@ -50,5 +50,27 @@
     return (v.name || '').toUpperCase().includes(q) || String(mmsi).startsWith(q) || String(v.imo || '').startsWith(q);
   }
 
-  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery };
+  // Fonti dei dati di posizione e testo mostrato nella scheda (riga «Fonte»)
+  const SOURCE_LABEL = { digitraffic: 'Digitraffic (Fintraffic, Baltico)', aisstream: 'aisstream.io' };
+
+  // Unisce le posizioni di più fonti: groups = [{ source, features }] (features può mancare).
+  // Restituisce Map<mmsi, feature>: per ogni MMSI vince properties.timestampExternal più alto
+  // (mancante = la più vecchia); a parità resta la prima nell'ordine dei gruppi. Ogni feature è una
+  // copia con properties.source; gli originali non vengono toccati. Senza MMSI la feature è scartata.
+  function mergeFeatures(groups) {
+    const out = new Map(), time = new Map();
+    for (const { source, features } of groups) {
+      for (const f of features || []) {
+        const mmsi = f.mmsi ?? f.properties?.mmsi;
+        if (mmsi == null) continue;
+        const t = Number.isFinite(f.properties?.timestampExternal) ? f.properties.timestampExternal : -Infinity;
+        if (out.has(mmsi) && !(t > time.get(mmsi))) continue;
+        out.set(mmsi, { ...f, properties: { ...f.properties, source } });
+        time.set(mmsi, t);
+      }
+    }
+    return out;
+  }
+
+  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, mergeFeatures };
 });

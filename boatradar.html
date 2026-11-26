@@ -107,7 +107,7 @@ const REFRESH_MS = 15000;
 const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
 
 // Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js
-const { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery } = AisLogic;
+const { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, mergeFeatures } = AisLogic;
 
 const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
   'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
@@ -215,11 +215,10 @@ async function loadLocations() {
   const [med, baltic] = await Promise.allSettled([
     features(`${API}/locations?bbox=${viewBox()}`), features(`${BALTIC}/locations?from=${Date.now() - WINDOW_MS}`)]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
-  const seen = new Set();
-  for (const f of [...(baltic.value || []), ...(med.value || [])]) {
-    const mmsi = f.mmsi ?? f.properties.mmsi;
+  // stessa nave in entrambe le fonti: tengo la posizione più recente (properties.source dice da dove viene)
+  const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }]);
+  for (const [mmsi, f] of merged) {
     const [lon, lat] = f.geometry.coordinates;
-    seen.add(mmsi);
     const { name, shipType } = f.properties;
     if (name || shipType != null) meta.set(mmsi, { ...meta.get(mmsi), ...(name && { name }), ...(shipType != null && { shipType }) });
     const color = typeOf(meta.get(mmsi)?.shipType).color;
@@ -238,7 +237,7 @@ async function loadLocations() {
     }
     m.props = f.properties;
   }
-  for (const [mmsi, m] of markers) if (!seen.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
+  for (const [mmsi, m] of markers) if (!merged.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
   const st = await fetch(`${API}/status`).then(r => r.json()).catch(() => null);
   const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
@@ -292,7 +291,8 @@ function facts(mmsi) {
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
-      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}`;
+      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}
+      ${row('Fonte', SOURCE_LABEL[p.source])}`;
 }
 
 function render(mmsi) {
