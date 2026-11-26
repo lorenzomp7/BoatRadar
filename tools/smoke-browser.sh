@@ -5,7 +5,10 @@
 #   1. compaiano le navi;
 #   2. un clic del mouse su una nave apra la scheda con il suo MMSI, e un clic vero sulla × (almeno 44×44 px)
 #      o Esc la chiudano, lasciando il focus su un elemento visibile;
-#   3. la pagina non abbia errori JavaScript né messaggi console.error;
+#   3. (punto 10) un clic vero sulle due navi sovrapposte della fixture (GEMELLA, 247555001 e 247555002, a 10 m a
+#      Genova) apra il popup «2 navi qui» con due righe e la × da almeno 44 px e il focus sulla prima, Esc lo chiuda, e un clic
+#      vero sulla seconda riga apra la scheda di 247555002; la nave isolata del punto 2 apre la scheda senza popup;
+#   3b. la pagina non abbia errori JavaScript né messaggi console.error;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
@@ -114,6 +117,7 @@ check() {
   "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none'
     && document.getElementById('content').textContent.includes('$mmsi')" >/dev/null \
     || { "${AB[@]}" screenshot "$OUT/$name-errore.png" >/dev/null || true; fail "$name: il clic sulla nave $mmsi non apre la scheda (screenshot in $OUT/)"; }
+  [ "$(js "!document.querySelector('.leaflet-popup.pick')")" = true ] || fail "$name: il clic sulla nave $mmsi apre il popup di scelta invece della scheda"
   ok "$name: il clic sulla nave $mmsi apre la scheda ($(js "document.querySelector('#content h2')?.textContent || ''"))"
   "${AB[@]}" screenshot "$OUT/$name.png" >/dev/null
 
@@ -154,6 +158,66 @@ check() {
   "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none'" >/dev/null \
     || fail "$name: Esc non chiude la scheda"
   ok "$name: Esc chiude la scheda"
+
+  # navi sovrapposte (punto 10): le due GEMELLA della fixture, a 10 m l'una dall'altra (meno di 1 px a zoom 12) a Genova;
+  # dopo lo zoom su Venezia sono fuori dalla vista, quindi prima la mappa va su di loro. Solo con il server locale.
+  if [ -z "${SMOKE_URL:-}" ]; then
+    js "map.setView([44.42, 8.9], 12, { animate: false }), true" >/dev/null
+    "${AB[@]}" wait --fn "markers.has(247555001) && markers.has(247555002)" >/dev/null \
+      || fail "$name: le navi sovrapposte della fixture (247555001, 247555002) non sono in mappa · stato: $(js "document.getElementById('status').textContent")"
+    "${AB[@]}" wait 300 >/dev/null
+    local twin
+    twin=$(js "(() => { const r = document.getElementById('map').getBoundingClientRect();
+      const p = map.latLngToContainerPoint(markers.get(247555001).marker.getLatLng());
+      return Math.round(r.left + p.x) + ' ' + Math.round(r.top + p.y); })()" | tr -d '"')
+    "${AB[@]}" mouse move $twin >/dev/null
+    "${AB[@]}" mouse down >/dev/null
+    "${AB[@]}" mouse up >/dev/null
+    "${AB[@]}" wait --fn "document.querySelectorAll('.leaflet-popup.pick .pickrow').length === 2" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-sovrapposte-errore.png" >/dev/null || true
+           fail "$name: il clic sulle navi sovrapposte ($twin) non apre il popup con 2 righe · righe: $(js "document.querySelectorAll('.pickrow').length") · scheda: $(js "document.getElementById('panel').style.display")"; }
+    "${AB[@]}" wait 500 >/dev/null   # fine dell'autoPan del popup
+    local rows
+    rows=$(js "[...document.querySelectorAll('.leaflet-popup.pick .pickrow')].map(b => b.dataset.pick + ':' + Math.round(b.getBoundingClientRect().height)).join(' ')" | tr -d '"')
+    for r in $rows; do [ "${r#*:}" -ge 44 ] || fail "$name: riga del popup $r px, meno di 44"; done
+    local px
+    px=$(js "(() => { const r = document.querySelector('.leaflet-popup.pick .leaflet-popup-close-button').getBoundingClientRect();
+      return Math.round(r.width) + 'x' + Math.round(r.height); })()" | tr -d '"')
+    [ "${px%x*}" -ge 44 ] && [ "${px#*x}" -ge 44 ] || fail "$name: la × del popup è $px px, meno di 44×44"
+    [ "$(js "document.activeElement?.classList.contains('pickrow') === true")" = true ] || fail "$name: il focus non è sulla prima riga del popup"
+    [ "$(js "getComputedStyle(document.getElementById('panel')).display")" = '"none"' ] || fail "$name: il popup ha aperto anche la scheda"
+    ok "$name: navi sovrapposte → popup «$(js "document.querySelector('.pick .pick-title').textContent" | tr -d '"')», righe $rows (MMSI:px), × $px px"
+    "${AB[@]}" screenshot "$OUT/$name-sovrapposte.png" >/dev/null
+    "${AB[@]}" press Escape >/dev/null
+    "${AB[@]}" wait --fn "!document.querySelector('.leaflet-popup.pick')" >/dev/null || fail "$name: Esc non chiude il popup"
+    ok "$name: Esc chiude il popup"
+    "${AB[@]}" mouse move $twin >/dev/null
+    "${AB[@]}" mouse down >/dev/null
+    "${AB[@]}" mouse up >/dev/null
+    "${AB[@]}" wait --fn "document.querySelectorAll('.leaflet-popup.pick .pickrow').length === 2" >/dev/null \
+      || fail "$name: il secondo clic sulle navi sovrapposte non riapre il popup"
+    "${AB[@]}" wait 500 >/dev/null
+    local second
+    second=$(js "(() => { const b = document.querySelectorAll('.leaflet-popup.pick .pickrow')[1], r = b.getBoundingClientRect();
+      return b.dataset.pick + ' ' + Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')
+    local srow sx sy
+    read -r srow sx sy <<<"$second"
+    local hitrow
+    hitrow=$(js "document.elementFromPoint($sx, $sy)?.closest('[data-pick]')?.dataset.pick || 'niente'" | tr -d '"')
+    [ "$hitrow" = "$srow" ] || fail "$name: sopra la seconda riga ($sx $sy) c'è $hitrow, non $srow"
+    "${AB[@]}" mouse move $sx $sy >/dev/null
+    "${AB[@]}" mouse down >/dev/null
+    "${AB[@]}" mouse up >/dev/null
+    "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none'
+      && document.getElementById('content').textContent.includes('$srow') && !document.querySelector('.leaflet-popup.pick')" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-sovrapposte-errore.png" >/dev/null || true; fail "$name: il clic sulla seconda riga non apre la scheda di $srow"; }
+    [ "$srow" = 247555002 ] || fail "$name: la seconda riga è $srow, attesa 247555002"
+    ok "$name: clic sulla seconda riga → scheda di $srow ($(js "document.querySelector('#content h2')?.textContent || ''"))"
+    "${AB[@]}" press Escape >/dev/null
+    "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none'" >/dev/null || fail "$name: Esc non chiude la scheda dopo la scelta"
+  else
+    ok "$name: navi sovrapposte non controllate (pagina pubblicata, navi vere)"
+  fi
 
   # errori JavaScript e console.error (i warning, come Digitraffic non raggiungibile, non contano)
   local problems

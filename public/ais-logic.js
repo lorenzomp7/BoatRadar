@@ -449,8 +449,24 @@
     };
   }
 
+  // Punto 10: area toccabile. pickRadius: distanza in px dal punto toccato entro cui una nave si può scegliere (il dito è
+  // meno preciso del mouse); canvasTolerance: tolleranza del renderer canvas di Leaflet (area di hover e tooltip).
+  const pickRadius = touch => (touch ? 20 : 8);
+  const canvasTolerance = touch => (touch ? 12 : 4);
+  // Marker entro radius px da point ({x, y}, punto del contenitore della mappa): items = [{mmsi, x, y}] già proiettati;
+  // → [{mmsi, d}] dal più vicino, a parità di distanza per MMSI crescente (ordine stabile). Bordo incluso; coordinate
+  // non numeriche scartate.
+  function nearbyMarkers(point, items, radius) {
+    const out = [];
+    for (const it of items || []) {
+      const d = Math.hypot(it.x - point.x, it.y - point.y);
+      if (Number.isFinite(d) && d <= radius) out.push({ mmsi: it.mmsi, d });
+    }
+    return out.sort((a, b) => (a.d !== b.d ? a.d - b.d : a.mmsi < b.mmsi ? -1 : a.mmsi > b.mmsi ? 1 : 0));
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
-    apiList, createFailover };
+    apiList, createFailover, pickRadius, canvasTolerance, nearbyMarkers };
 });

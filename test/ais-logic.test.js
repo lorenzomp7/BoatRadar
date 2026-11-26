@@ -549,3 +549,26 @@ test('boatradar.html: i tre colori dell\'età hanno luminanza diversa e almeno 3
   assert.ok(lumOf(g) > lumOf(o) && lumOf(o) > lumOf(r), `luminanze ${[g, o, r].map(c => lumOf(c).toFixed(3))}`);
   assert.ok(contrast(g, o) >= 1.3 && contrast(o, r) >= 1.3, `verde/arancio ${contrast(g, o).toFixed(2)}, arancio/rosso ${contrast(o, r).toFixed(2)}`);
 });
+
+// Punto 10: area toccabile più ampia e scelta tra navi sovrapposte
+test('pickRadius e canvasTolerance: più larghi su schermo touch', () => {
+  assert.equal(AL.pickRadius(true), 20);
+  assert.equal(AL.pickRadius(false), 8);
+  assert.equal(AL.canvasTolerance(true), 12);
+  assert.equal(AL.canvasTolerance(false), 4);
+});
+
+test('nearbyMarkers: marker entro il raggio, dal più vicino, a parità per MMSI', () => {
+  const p = { x: 100, y: 100 };
+  // 5 px e 15 px dal punto, raggio 20: entrambi, prima quello a 5
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 2, x: 115, y: 100 }, { mmsi: 1, x: 100, y: 95 }], 20),
+    [{ mmsi: 1, d: 5 }, { mmsi: 2, d: 15 }]);
+  // 25 px escluso, 20 px esatti inclusi (3-4-5: 12, 16 → 20)
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 3, x: 125, y: 100 }, { mmsi: 4, x: 112, y: 116 }], 20), [{ mmsi: 4, d: 20 }]);
+  // stessa distanza: MMSI crescente, in qualunque ordine arrivino
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 9, x: 110, y: 100 }, { mmsi: 7, x: 90, y: 100 }, { mmsi: 8, x: 100, y: 110 }], 20)
+    .map(n => n.mmsi), [7, 8, 9]);
+  assert.deepEqual(AL.nearbyMarkers(p, [], 20), []);
+  // coordinate non numeriche: scartate, mai NaN nell'ordine
+  assert.deepEqual(AL.nearbyMarkers(p, [{ mmsi: 5, x: NaN, y: 100 }, { mmsi: 6, x: 100, y: 100 }], 20), [{ mmsi: 6, d: 0 }]);
+});
