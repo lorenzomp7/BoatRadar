@@ -58,6 +58,16 @@ Lavora su `main_claude` salvo indicazione diversa.
   prima «Filtri», poi la legenda (dopo gli Esc del popup e della ricerca); su telefono il titolo resta fisso in cima.
   Un cambio di filtro chiude il popup «N navi qui». I giri sono numerati (`roundSeq`): uno più vecchio dell'ultimo avviato
   non tocca marker né riga di stato. Test in `test/pagina-filtri.test.js`.
+- Movimento fluido (punti 13, 63, 42): ogni marker tiene gli ultimi 3 fix (`m.track`, `pushFix`) e la posizione
+  disegnata (`m.shown`); la mappa mostra le navi all'ora di riproduzione (ora corretta − 15 s, `ANIM_DELAY_MS`):
+  fra due fix l'interpolazione, oltre l'ultimo la stima da velocità e rotta (`positionAt`: al massimo 242 s fino a 3 kn,
+  122 s oltre, mai per le navi ferme). Età e dissolvenza del punto 8 restano del fix. Un solo ciclo
+  `requestAnimationFrame` (oggetto `anim`, con `anim.stats`): ogni 3 s sceglie nella vista al massimo `ANIM_MAX` (500)
+  navi in movimento per `animPriority` (la selezionata sempre) e ricalcola le altre in un colpo; negli altri fotogrammi,
+  ogni `frameInterval` ms (ridisegno misurato avvolgendo `renderer._redraw`), muove le scelte con `approach`;
+  `setLatLng` solo da 0,5 px. Pausa con mappa in movimento e scheda nascosta. Spento con `prefers-reduced-motion` o senza
+  `requestAnimationFrame` (marker all'ultimo fix). Test in `test/pagina-movimento.test.js` (ora manuale e coda di
+  `requestAnimationFrame` di `test/pagina-helpers.js`).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`

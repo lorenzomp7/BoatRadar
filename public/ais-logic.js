@@ -318,14 +318,16 @@
   }
 
   // Priorità di animazione (punto 63, allineato a sample.js senza classe e movimento: si animano solo navi in moto):
-  // selezionata +1000; tipo 60-89 +1; lunghezza log2(m / 10) da 0 a 5 (metri interi); -1 ogni 10 min di età, al massimo -3.
+  // selezionata +1000; tipo 60-89 +1; lunghezza log2(m / 10) da 0 a 5 (metri interi); età come agePenalty di sample.js:
+  // -1 ogni 10 min fino a -3 (30 min), poi -1 per ogni ora o frazione in più fino a -8 (ora non valida = -8).
   function animPriority(p, v, isSelected, now) {
     let s = isSelected ? 1000 : 0;
     if (v?.shipType >= 60 && v?.shipType <= 89) s += 1;
     const len = Math.round(v?.length);
     if (len > 0) s += Math.min(5, Math.max(0, Math.log2(len / 10)));
     const age = finite(p.ts) && finite(now) ? Math.max(0, now - p.ts) : Infinity;
-    return s - Math.min(3, Math.floor(age / (10 * MIN_MS)));
+    const oldMs = 30 * MIN_MS;
+    return s - (age <= oldMs ? Math.floor(age / (10 * MIN_MS)) : Math.min(8, 3 + Math.ceil((age - oldMs) / HOUR_MS)));
   }
   // MMSI da animare: items = [{ mmsi, score }], per score decrescente poi MMSI crescente, i primi n
   const pickAnimated = (items, n) => [...items].sort((a, b) => b.score - a.score || a.mmsi - b.mmsi).slice(0, Math.max(0, n)).map(x => x.mmsi);

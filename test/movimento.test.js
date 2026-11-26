@@ -252,10 +252,24 @@ test('animPriority: selezionata prima di tutto, poi tipo 60-89, lunghezza, età 
   assert.equal(AL.animPriority(p, { length: 5 }, false, T), 0, 'mai negativa');
   assert.equal(AL.animPriority(p, { length: 40.4 }, false, T), 2, 'lunghezza arrotondata al metro');
   assert.equal(AL.animPriority({ ts: T - 25 * MIN }, {}, false, T), -2, '-1 ogni 10 min');
-  assert.equal(AL.animPriority({ ts: T - 300 * MIN }, {}, false, T), -3, 'al massimo -3');
-  assert.equal(AL.animPriority({ ts: -Infinity }, {}, false, T), -3, 'ora non valida = vecchia');
+  // penalità d'età come sample.js (punti 8 e 62): -1 ogni 10 min fino a -3 (30 min), poi -1 per ora o frazione fino a -8
+  assert.equal(AL.animPriority({ ts: T - 30 * MIN }, {}, false, T), -3, '30 min esatti');
+  assert.equal(AL.animPriority({ ts: T - 30 * MIN - 1 }, {}, false, T), -4, 'oltre 30 min: un\'ora o frazione in più');
+  assert.equal(AL.animPriority({ ts: T - 90 * MIN }, {}, false, T), -4, '1 h 30 min esatti');
+  assert.equal(AL.animPriority({ ts: T - 90 * MIN - 1 }, {}, false, T), -5);
+  assert.equal(AL.animPriority({ ts: T - 300 * MIN }, {}, false, T), -8, 'al massimo -8');
+  assert.equal(AL.animPriority({ ts: T - 6000 * MIN }, {}, false, T), -8);
+  assert.equal(AL.animPriority({ ts: -Infinity }, {}, false, T), -8, 'ora non valida = vecchia');
   assert.equal(AL.animPriority({ ts: T + MIN }, {}, false, T), 0, 'ora nel futuro: nessuna penalità');
   assert.equal(AL.animPriority(p, null, false, T), 0, 'senza dati statici');
+});
+
+test('animPriority: stessa penalità d\'età di agePenalty di sample.js', () => {
+  const { agePenalty } = require('../sample.js');
+  const T = 1_700_000_000_000;
+  for (const age of [0, 1, 9 * MIN, 10 * MIN, 29 * MIN, 30 * MIN, 30 * MIN + 1, 61 * MIN, 90 * MIN, 91 * MIN, 150 * MIN,
+    210 * MIN, 270 * MIN, 330 * MIN, 360 * MIN, 1e9])
+    assert.equal(AL.animPriority({ ts: T - age }, {}, false, T), 0 - agePenalty(age) + 0, `età ${age} ms`);
 });
 
 test('pickAnimated: punteggio decrescente, poi MMSI crescente, primi n', () => {

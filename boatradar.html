@@ -230,7 +230,9 @@ if (!window.AisLogic) {
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
   clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits,
   apiList, createFailover, networkDown, validSog, pickRadius, canvasTolerance, nearbyMarkers, pickTouch, pickLimit, pickMaxHeight,
-  NAV_GROUPS, parseFilter, filterKey, passesFilter, filterCount } = AisLogic;
+  NAV_GROUPS, parseFilter, filterKey, passesFilter, filterCount,
+  KN, R_EARTH, ANIM_DELAY_MS, canEstimate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority,
+  pickAnimated, frameInterval, inViewBox, boundsBox } = AisLogic;
 
 // Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
 // Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
@@ -541,6 +543,135 @@ document.addEventListener('keydown', e => {
 // su telefono la legenda parte chiusa (resta il pulsante «Legenda»), così non copre la mappa
 if (matchMedia('(max-width: 640px)').matches) $('legend').open = false;
 
+// Punti 13, 63, 42: movimento fluido. Ogni marker tiene gli ultimi fix (m.track, al massimo 3, pushFix) e la posizione
+// disegnata (m.shown). La mappa mostra le navi all'ora di riproduzione anim.T = ora corretta − 15 s (ANIM_DELAY_MS,
+// l'intervallo dei giri): fra due fix l'interpolazione, oltre l'ultimo la stima da velocità e rotta (al massimo 242 s fino
+// a 3 kn, 122 s oltre; niente stima per le navi ferme), con positionAt di ais-logic.js. Età e dissolvenza (punto 8)
+// restano del fix (m.props), non della posizione mostrata; tooltip, popup e scelta (punto 10) usano getLatLng, cioè la
+// posizione mostrata. Un solo ciclo requestAnimationFrame (animFrame): ogni PICK_MS sceglie nella vista (non allargata)
+// le navi da animare fra quelle in movimento, al massimo ANIM_MAX per animPriority (la selezionata sempre, anche fuori
+// dalla vista), e ricalcola tutte le altre in un colpo solo; negli altri fotogrammi, ogni anim.interval ms
+// (frameInterval: almeno 4 volte il ridisegno misurato e mezzo pixel della nave più veloce), muove solo le scelte con
+// approach (mai indietro di meno di 300 m, salto oltre 5 km). setLatLng solo per spostamenti di almeno MIN_MOVE_PX.
+// Pausa durante spostamento e zoom della mappa e con la scheda nascosta; tornando visibile ogni nave va subito alla sua
+// posizione. Spento (prefers-reduced-motion, o senza requestAnimationFrame): ogni marker all'ultimo fix, come prima.
+const ANIM_MAX = 500, PICK_MS = 3000, ANIM_MIN_MS = 16, MIN_MOVE_PX = 0.5;
+const HAS_RAF = typeof requestAnimationFrame === 'function';
+const M_PER_DEG = R_EARTH * Math.PI / 180;
+// orologio per misurare (tempi dei passi e del ridisegno): performance.now, o l'ora corretta dove manca
+const perfNow = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : clock.now());
+const anim = { enabled: HAS_RAF && !matchMedia('(prefers-reduced-motion: reduce)').matches, set: new Set(), T: -Infinity,
+  lastPick: -Infinity, lastStep: -Infinity, interval: ANIM_MIN_MS, redrawMs: 0, paused: false, raf: 0,
+  // frames: fotogrammi del ciclo; picks/candidates: scelte e navi in movimento nella vista all'ultima scelta;
+  // steps/moved: passi e setLatLng dei passi; stepMs/pickMs: durata dell'ultimo passo e dell'ultima scelta;
+  // redraws/redrawTimes: ridisegni del canvas e gli ultimi 600 tempi (ms); loadMs: marker aggiornati nell'ultimo giro
+  stats: { frames: 0, picks: 0, candidates: 0, steps: 0, moved: 0, stepMs: 0, stepMsMax: 0, pickMs: 0, redraws: 0,
+    redrawTimes: [], loadMs: 0 } };
+// fix di una posizione del server o del Baltico (ts in ms)
+const fixOf = (p, lat, lon) => ({ lat, lon, sog: p.sog, cog: p.cog, heading: p.heading, navStat: p.navStat, ts: toMs(p.timestampExternal) });
+// ora di riproduzione di adesso (mai indietro)
+const playNow = () => (anim.T = playbackTime(clock.now(), ANIM_DELAY_MS, anim.T));
+// distanza in px fra due posizioni allo zoom zoom (equirettangolare, lon dal lato corto)
+function pxBetween(a, b, zoom) {
+  const dLon = ((b.lon - a.lon + 540) % 360) - 180, lat = (a.lat + b.lat) / 2;
+  const m = Math.hypot(dLon * M_PER_DEG * Math.cos(lat * Math.PI / 180), (b.lat - a.lat) * M_PER_DEG);
+  return m / metersPerPixel(lat, zoom);
+}
+// disegna il marker in pos (se si sposta di almeno MIN_MOVE_PX, o sempre con force); true se l'ha spostato
+function draw(m, pos, zoom = map.getZoom(), force = false) {
+  if (!force && m.shown && pxBetween(m.shown, pos, zoom) < MIN_MOVE_PX) return false;
+  m.shown = pos;
+  m.movedAt = perfNow();
+  m.marker.setLatLng([pos.lat, pos.lon]);
+  return true;
+}
+const lastFix = m => m.track[m.track.length - 1];
+// posizione da mostrare adesso: con l'animazione quella dell'ora di riproduzione, senza l'ultimo fix
+const targetOf = m => (anim.enabled ? positionAt(m.track, playNow()) : { ...lastFix(m), mode: 'fix', aheadMs: 0 });
+function startAnim() {
+  if (anim.enabled && !anim.raf && !anim.paused && !document.hidden) anim.raf = requestAnimationFrame(animFrame);
+}
+function animFrame() {
+  anim.raf = 0;
+  if (!anim.enabled || anim.paused || document.hidden) return;
+  anim.stats.frames++;
+  const wall = perfNow();
+  playNow();
+  // la scelta e il passo in fotogrammi diversi: nessun fotogramma muove più di ANIM_MAX navi più quelle ricalcolate
+  if (wall - anim.lastPick >= PICK_MS) pickAnim(wall);
+  else if (wall - anim.lastStep >= anim.interval) animStep(wall);
+  anim.raf = requestAnimationFrame(animFrame);
+}
+// Scelta delle navi da animare: in movimento (stimabili o non ancora al loro ultimo fix) nella vista, più la selezionata
+function pickAnim(wall) {
+  const t0 = perfNow(), b = map.getBounds(), box = boundsBox(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
+  const zoom = map.getZoom(), now = clock.now(), items = [], rest = [];
+  anim.lastPick = wall;
+  for (const [mmsi, m] of markers) {
+    if (!m.track?.length) continue;
+    const sel = mmsi === selected, last = lastFix(m), at = m.shown || last;
+    if (!sel && !inViewBox(box, at.lat, at.lon)) continue;
+    const target = positionAt(m.track, anim.T);
+    if (canEstimate(last) || target.lat !== last.lat || target.lon !== last.lon)
+      items.push({ mmsi, m, target, score: animPriority(last, meta.get(mmsi), sel, now) });
+    else rest.push({ m, target });
+  }
+  anim.set = new Set(pickAnimated(items, ANIM_MAX));
+  let maxPx = 0;
+  for (const it of items) {
+    if (!anim.set.has(it.mmsi)) { rest.push(it); continue; }
+    // velocità sullo schermo; senza velocità nota (interpolazione fra fix senza SOG) almeno 2 px/s
+    const sog = it.target.sog, mps = typeof sog === 'number' && sog >= 0 && sog < 102.3 ? sog * KN : 0;
+    maxPx = Math.max(maxPx, mps > 0 ? mps / metersPerPixel(it.target.lat, zoom) : 2);
+  }
+  for (const it of rest) draw(it.m, it.target, zoom);
+  anim.interval = frameInterval({ redrawMs: anim.redrawMs, maxPxPerS: maxPx, minMs: ANIM_MIN_MS });
+  Object.assign(anim.stats, { picks: anim.stats.picks + 1, candidates: items.length, pickMs: perfNow() - t0 });
+}
+// Un passo: le navi scelte verso la loro posizione all'ora di riproduzione, senza salti né ritorni (approach)
+function animStep(wall) {
+  const t0 = perfNow(), zoom = map.getZoom();
+  let moved = 0;
+  anim.lastStep = wall;
+  for (const mmsi of anim.set) {
+    const m = markers.get(mmsi);
+    if (!m?.track?.length) continue;
+    const target = positionAt(m.track, anim.T);
+    // dtMs dall'ultimo spostamento disegnato: i passi sotto mezzo pixel si sommano
+    if (draw(m, approach(m.shown, target, { dtMs: wall - (m.movedAt ?? -1e9) }), zoom)) moved++;
+  }
+  const ms = perfNow() - t0, st = anim.stats;
+  Object.assign(st, { steps: st.steps + 1, moved: st.moved + moved, stepMs: ms, stepMsMax: Math.max(st.stepMsMax, ms) });
+}
+// tutte le navi subito alla posizione di adesso (scheda tornata visibile, animazione accesa o spenta)
+function placeAll() {
+  const zoom = map.getZoom();
+  for (const m of markers.values()) if (m.track?.length) draw(m, targetOf(m), zoom, true);
+}
+map.on('movestart zoomstart', () => { anim.paused = true; });
+map.on('moveend', () => { anim.paused = false; anim.lastPick = -Infinity; startAnim(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !anim.enabled) return;
+  placeAll();
+  anim.lastPick = -Infinity;
+  startAnim();
+});
+// Tempo di ridisegno del canvas (media mobile): _redraw è un metodo privato di Leaflet 1.9.4, avvolto una volta; se
+// manca (altre versioni, test) resta 0 e frameInterval usa solo la velocità delle navi
+if (typeof renderer._redraw === 'function') {
+  const redraw = renderer._redraw;
+  renderer._redraw = function (...a) {
+    const t = perfNow();
+    try { return redraw.apply(this, a); } finally {
+      const d = perfNow() - t, st = anim.stats;
+      anim.redrawMs = st.redraws ? anim.redrawMs * 0.8 + d * 0.2 : d;
+      st.redraws++;
+      st.redrawTimes.push(d);
+      if (st.redrawTimes.length > 600) st.redrawTimes.shift();
+    }
+  };
+}
+
 async function loadDetail(mmsi) {
   const v = await fetch(`${api()}/vessel?mmsi=${mmsi}`).then(r => r.ok ? r.json() : null).catch(() => null);
   if (v) meta.set(mmsi, { ...meta.get(mmsi), ...v });
@@ -728,6 +859,7 @@ async function loadLocations() {
   if (st) serverLimits = normLimits(st.limits);
   // stessa nave in più fonti: tengo la posizione più recente (properties.source dice da dove viene); la nave
   // inclusa vince sulla vista (forse dalla cache) se è più recente
+  const loadT0 = perfNow();
   const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }, { source: 'aisstream', features: inc.value }]);
   // età con l'ora corretta (punto 8): una posizione oltre il suo limite (in moto 30 min, ferma 6 h, o i limiti del
   // server) non entra in mappa
@@ -744,17 +876,21 @@ async function loadLocations() {
     if (m && isNewer(m.props?.timestampExternal, f.properties.timestampExternal)) continue;
     // filtri (punto 9) con il filtro di adesso, anche su una risposta chiesta con il filtro di prima
     if (hiddenByFilter(mmsi, f.properties, now)) { if (m) hidden.add(mmsi); continue; }
+    const fx = fixOf(f.properties, lat, lon);
     if (!m) {
       // la nave selezionata (es. scelta dalla ricerca, arrivata con include=) nasce già con il bordo giallo
-      const sel = mmsi === selected;
-      const marker = new ShipMarker([lat, lon], { renderer, ...markerStyle(f.properties, sel, now), fillColor:color,
+      // posizione iniziale: quella dell'ora di riproduzione (punti 13, 42), o il fix ad animazione spenta
+      const sel = mmsi === selected, track = [fx], pos = anim.enabled ? positionAt(track, playNow()) : fx;
+      const marker = new ShipMarker([pos.lat, pos.lon], { renderer, ...markerStyle(f.properties, sel, now), fillColor:color,
         ...symbol(f.properties) }).addTo(map);   // clic: map.on('click') → pick (punto 10)
       if (sel) marker.bringToFront();
       marker.bindTooltip(() => tooltipText(mmsi), { direction:'top' });
-      m = { marker };
+      m = { marker, track, shown: pos, movedAt: perfNow() };
       markers.set(mmsi, m);
     } else {
-      m.marker.setLatLng([lat, lon]);
+      m.track = pushFix(m.track, fx);
+      // le navi animate le muove il ciclo, senza salti; le altre vanno subito alla posizione di adesso
+      if (!anim.enabled || !anim.set.has(mmsi)) draw(m, targetOf(m), undefined, true);
       m.marker.setSymbol(symbol(f.properties));   // colore, opacità e tratteggio dopo il ciclo, con un solo setStyle
     }
     m.props = f.properties;
@@ -770,6 +906,8 @@ async function loadLocations() {
     }
     else m.marker.setStyle({ ...markerStyle(m.props, mmsi === selected, now), fillColor: typeOf(meta.get(mmsi)?.shipType).color });
   }
+  anim.stats.loadMs = perfNow() - loadT0;
+  startAnim();
   // riga di stato (punto 86): vista non riuscita → server in avvio, prossimo server provato subito, o attesa prima di
   // riprovare; vista riuscita → stato del server, e «server di riserva (Render)» se non è il primo dell'elenco
   // fromBackup: i dati del giro vengono da un server di riserva (la prova del primo può essere finita nel frattempo)
