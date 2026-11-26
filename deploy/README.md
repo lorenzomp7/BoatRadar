@@ -118,15 +118,26 @@ che non è un nome di host (per esempio con spazi o virgolette, una porta fuori 
   risposto, torna a provare la VM.
 - Quando il server attivo non è il primo dell'elenco, la riga di stato finisce con «server di riserva
   (Render)».
+- **Ritorno alla VM.** Mentre è su Render (o su un altro server che non è il primo), ogni 5 min
+  (`PRIMARY_RECHECK_MS` in `boatradar.html`) la pagina prova la VM con una sola richiesta leggera a
+  `/api/status` (timeout 8 s), a parte dal giro: la mappa continua con Render. Se la VM risponde 200 con
+  `"hasKey":true` (o senza il campo `hasKey`), dal giro successivo la pagina torna alla VM e lo ricorda in
+  `sessionStorage`. Se non risponde, risponde con un errore o con `"hasKey":false`, la pagina resta su
+  Render senza segnalare errori e riprova dopo altri 5 min. Mai più di una prova in corso, e nessuna
+  prova con la scheda nascosta (in secondo piano o con lo schermo spento): la prima prova parte al primo
+  aggiornamento con la scheda di nuovo visibile.
 - Il server attivo resta per la **sessione della scheda** (`sessionStorage`, chiave `boatradar:api`):
-  ricaricando la scheda si riparte da lì, una scheda nuova riparte dalla VM.
+  ricaricando la scheda si riparte da lì (e la prima prova della VM arriva 5 min dopo), una scheda nuova
+  riparte dalla VM.
 
 **Quota di Render.** Una VM che risponde non fa mai passare la pagina a Render: si cambia solo dopo un
-errore della vista. Una scheda passata a Render però **non torna da sola alla VM**, neanche quando la VM
-è di nuovo in linea: resta su Render finché Render risponde o finché la scheda non viene chiusa (scelta
-del piano, per non rimbalzare fra i due server). Con la quota di 5 GB al mese (sotto), dopo un guasto
-della VM chiudi le schede rimaste aperte e riaprile, così ripartono dalla VM. Per tornare alla VM senza
-chiudere la scheda: dalla console del browser `sessionStorage.removeItem('boatradar:api')` e ricarica.
+errore della vista. Una scheda passata a Render ci resta al massimo circa 5 min dopo che la VM è tornata
+in linea (un po' di più se la scheda era nascosta), poi torna da sola alla VM: il traffico di Render
+dopo un guasto della VM è quindi quello dei minuti del guasto più al massimo 5 min per scheda aperta.
+La prova costa poco: una risposta di `/api/status` (meno di 1 KB) ogni 5 min alla VM, nessuna a
+Render. Con la quota di 5 GB al mese (sotto) non serve più chiudere e riaprire le schede dopo un guasto;
+per tornare subito alla VM senza aspettare: dalla console del browser
+`sessionStorage.removeItem('boatradar:api')` e ricarica.
 
 ### Costi e quote di Render
 

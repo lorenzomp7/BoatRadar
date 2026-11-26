@@ -148,6 +148,7 @@ const CLOCK_WAIT_MS = 3000;       // primo aggiornamento: attesa massima di /api
 const API_TIMEOUT_MS = 8000;      // richieste al server del giro (vista, include=, /status): oltre, annullate
 const RETRY_SLACK_MS = 250;       // margine del tentativo dopo un errore, perché il timer non scatti prima dell'attesa
 const API_KEY = 'boatradar:api';  // sessionStorage: server attivo, ricordato per la sessione della scheda
+const PRIMARY_RECHECK_MS = 5 * 60 * 1000;   // su un server di riserva: ogni 5 min una prova leggera del primo
 
 // Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
 // Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
@@ -163,17 +164,19 @@ const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, match
 // Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
 // Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
 // richiesta della vista sbaglia (errore di rete, risposta non ok, nessuna risposta entro API_TIMEOUT_MS): un server
-// che risponde non fa mai passare all'altro, e non si torna da soli al primo (Render ha 5 GB al mese di traffico:
-// deploy/README.md, «Due backend»). Il server attivo resta per la sessione della scheda (sessionStorage, che in alcuni
+// che risponde non fa mai passare all'altro. Su un server di riserva, ogni PRIMARY_RECHECK_MS la pagina prova il primo
+// (recheckPrimary) e, se risponde, ci torna: Render ha 5 GB al mese di traffico (deploy/README.md, «Passaggio
+// automatico nella pagina»). Il server attivo resta per la sessione della scheda (sessionStorage, che in alcuni
 // browser lancia: allora vale solo fino alla chiusura della pagina).
 const API_LIST = apiList(window);
 const backends = createFailover(API_LIST, {
   saved: (() => { try { return sessionStorage.getItem(API_KEY); } catch { return null; } })(),
   onChange: b => { try { sessionStorage.setItem(API_KEY, b.url); } catch { /* resta solo in memoria */ } },
+  recheckMs: PRIMARY_RECHECK_MS,
 });
 const api = () => backends.current().url;
 // «server di riserva (Render)»: il server attivo quando non è il primo dell'elenco
-const backupName = () => 'server di riserva' + (backends.current().name ? ` (${backends.current().name})` : '');
+const backupName = (b = backends.current()) => 'server di riserva' + (b.name ? ` (${b.name})` : '');
 let retryTimer = null;   // l'unico tentativo programmato dopo un errore del server
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
@@ -376,7 +379,23 @@ async function loadStatus(server) {
 // (poi si va avanti con l'ora del telefono). Creata al primo giro, poi è già risolta.
 let clockReady = null;
 
+// Ritorno al server principale (punto 86): su un server di riserva, ogni PRIMARY_RECHECK_MS una sola richiesta a
+// /status del primo (timeout API_TIMEOUT_MS), a parte dal giro: non tocca vista, orologio né riga di stato. 200 con
+// hasKey true (o senza hasKey) → dal giro dopo si torna al primo; altrimenti si resta e si riprova fra
+// PRIMARY_RECHECK_MS, senza contarlo come errore del server attivo. Con la scheda nascosta nessuna prova (si fa al
+// primo giro con la scheda visibile).
+function recheckPrimary() {
+  if (document.hidden || !backends.shouldRecheck(clock.now())) return;
+  const url = API_LIST[0].url;
+  fetchApi(`${url}/status`)
+    .then(res => (res.status === 200 ? res.json() : null))
+    .then(st => !!st && typeof st === 'object' && st.hasKey !== false)
+    .catch(() => false)
+    .then(good => (good ? backends.recheckOk(url) : backends.recheckFailed(clock.now())));
+}
+
 async function loadLocations() {
+  recheckPrimary();
   // server attivo all'inizio del giro (punto 86): vista, include= e /status vanno tutti a lui. Dopo un errore, fino
   // al tentativo programmato (retryTimer), i giri chiedono solo il Baltico. Le attese si contano con clock.now() (la
   // regola di test/ais-logic.test.js vuole l'ora del telefono solo per misurare /api/status).
@@ -446,7 +465,8 @@ async function loadLocations() {
   }
   // riga di stato (punto 86): vista non riuscita → server in avvio, prossimo server provato subito, o attesa prima di
   // riprovare; vista riuscita → stato del server, e «server di riserva (Render)» se non è il primo dell'elenco
-  const t = clock.now(), primary = backends.current() === API_LIST[0];
+  // fromBackup: i dati del giro vengono da un server di riserva (la prova del primo può essere finita nel frattempo)
+  const t = clock.now(), primary = backends.current() === API_LIST[0], fromBackup = server !== API_LIST[0].url;
   const note = med.status === 'rejected'
     ? (backends.waking() ? ` · Mondo: ${primary ? 'server' : 'server di riserva'} in avvio, circa un minuto…`
       : backends.canTry(t) ? ` · Mondo: provo il ${primary ? 'server principale' : backupName()}…`
@@ -458,7 +478,7 @@ async function loadLocations() {
       : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '')
         + (st.compression?.confirmed === false || (st.compression?.confirmed == null && st.compression?.negotiated === false)
           ? ' · Mondo: connessione non compressa, alcuni messaggi possono essere scartati' : ''))
-      + (primary ? '' : ' · ' + backupName());
+      + (fromBackup ? ' · ' + backupName(API_LIST.find(b => b.url === server)) : '');
   $('status').textContent = `${markers.size} in mappa · agg. ${new Date(clock.now()).toLocaleTimeString('it-IT')}${note}`;
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);

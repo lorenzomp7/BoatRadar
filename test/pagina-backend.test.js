@@ -1,7 +1,8 @@
 // Punto 86 (b): passaggio automatico fra VM Oracle e Render nella pagina (boatradar.html), senza browser
 // (test/pagina-helpers.js). Lo decide solo la richiesta della vista (locations?bbox=); /status e include= vanno al
 // server attivo; un server che risponde non fa mai passare all'altro (quota di traffico di Render, deploy/README.md).
-// La verifica nel browser vero è lo scenario «server di riserva» di tools/smoke-browser.sh.
+// Su Render, ogni 5 min una prova leggera della VM per tornarci (quota di Render). La verifica nel browser vero sono gli
+// scenari «server di riserva» e «ritorno» di tools/smoke-browser.sh.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { startPage: start, until, TIME_SCALE } = require('./pagina-helpers');
@@ -41,7 +42,7 @@ test('pagina: VM giù (errore di rete) → passa a Render, navi in mappa, «serv
   assert.match(page.status(), /^1 in mappa · agg\. .* · 1 nel mondo · server di riserva \(Render\)$/);
   assert.equal(page.storage.get(KEY), RENDER.url, 'sessionStorage ricorda Render');
   assert.ok(on(page, VM.url).some(isView), 'prima ha provato la VM');
-  // giri successivi: tutto a Render, anche /status e include=; nessun ritorno automatico alla VM
+  // giri successivi: tutto a Render, anche /status e include=; la VM si riprova solo dopo 5 min (test più sotto)
   const before = on(page, VM.url).length;
   page.get('selected = 111; document.getElementById("panel").style.display = "block"');
   await page.tick();
@@ -145,4 +146,100 @@ test('pagina: solo BOATRADAR_API (config.js vecchio) o niente config → un solo
   await local.waitStatus(/in mappa/);
   assert.ok(local.markers().has(131));
   assert.ok(local.requests.some(r => r.url.startsWith('/api/locations?bbox=')));
+});
+
+// --- ritorno automatico al server principale (PRIMARY_RECHECK_MS, 5 min) -----------------------------------------
+// Ora della pagina 200 volte più veloce: 5 min = 1,5 s veri, il timeout di 8 s = 40 ms veri. I giri li fa il test
+// (setInterval è finto): un tick() ogni 10 ms veri, cioè ogni 2 s della pagina.
+const FAST = 200;
+const MIN5 = 5 * 60 * 1000, SLACK = 3000;
+const { sleep } = require('./pagina-helpers');
+async function ticksUntil(page, cond, what, pageMs) {
+  const end = page.pageNow() + pageMs;
+  while (page.pageNow() < end) { if (cond()) return; await page.tick(); await sleep(10); }
+  if (!cond()) throw new Error(`in ${pageMs / 1000} s della pagina non è successo: ${what} (stato: «${page.status()}»)`);
+}
+const isStatus = base => r => r.url === base + '/status';
+
+test('pagina: su Render, dopo 5 min una prova leggera della VM (/status); la VM risponde → al giro dopo torna alla VM', async () => {
+  let vmUp = false;
+  const vm = (path, now) => (vmUp ? healthy(101)(path, now) : { fail: true });
+  const page = startPage({ timeScale: FAST, config: APIS, routes: routesOf({ [VM.url]: vm, [RENDER.url]: healthy(202) }) });
+  await page.waitStatus(/ · server di riserva \(Render\)$/);
+  // passaggio a Render: fra la vista fallita della VM e la prima vista di Render
+  const switchedAt = on(page, VM.url).find(isView).at;
+  const before = on(page, VM.url).length;
+  vmUp = true;   // la VM torna, ma la pagina non lo sa finché non prova
+  await ticksUntil(page, () => on(page, VM.url).length > before, 'prova della VM', MIN5 + 30000);
+  const probe = on(page, VM.url)[before];
+  assert.equal(probe.url, VM.url + '/status', 'la prova è /status');
+  // tolleranza SLACK: con l'ora 200 volte più veloce pochi ms veri di rete spostano l'orologio della pagina di qualche s
+  assert.ok(probe.at - switchedAt >= MIN5 - SLACK && probe.at - switchedAt < MIN5 + 10000, `dopo 5 min (${probe.at - switchedAt} ms)`);
+  // la prova non tocca la vista: in quel giro la vista resta di Render
+  await ticksUntil(page, () => on(page, VM.url).slice(before).some(isView), 'vista chiesta alla VM', 10000);
+  await until(() => page.markers().has(101) && !/riserva/.test(page.status()), 'navi della VM, senza «riserva»', 1000);
+  // la vista va alla VM solo dal giro dopo la prova: la prova stessa è solo /status
+  assert.ok(on(page, VM.url).slice(before).findIndex(isView) > 0, 'prima la prova, poi la vista');
+  assert.equal(page.storage.get(KEY), VM.url, 'sessionStorage aggiornato');
+  assert.match(page.status(), / · 1 nel mondo$/);
+  const renderBefore = on(page, RENDER.url).length;
+  for (let i = 0; i < 3; i++) await page.tick();
+  assert.equal(on(page, RENDER.url).length, renderBefore, 'dopo il ritorno niente più richieste a Render');
+});
+
+test('pagina: su Render la VM non risponde alla prova → resta su Render senza errori, riprova dopo altri 5 min, una prova alla volta', async () => {
+  const page = startPage({ timeScale: FAST, config: APIS,
+    routes: routesOf({ [VM.url]: () => ({ hang: true }), [RENDER.url]: healthy(303) }) });
+  await page.waitStatus(/ · server di riserva \(Render\)$/);
+  const before = on(page, VM.url).length;   // la vista provata all'inizio, annullata dopo 8 s
+  await until(() => on(page, VM.url)[0].outcome === 'annullata', 'vista della VM annullata', 2000);
+  const probes = () => on(page, VM.url).slice(before);
+  await ticksUntil(page, () => probes().length >= 1, 'prima prova', MIN5 + 30000);
+  // durante gli 8 s della prova i giri continuano (su Render) senza aprire altre prove
+  await ticksUntil(page, () => probes()[0].outcome === 'annullata', 'prova annullata dopo 8 s', 20000);
+  assert.equal(probes().length, 1, 'una prova alla volta');
+  assert.ok(probes().every(isStatus(VM.url)), 'solo /status, mai la vista');
+  assert.match(page.status(), /^1 in mappa · .* · 1 nel mondo · server di riserva \(Render\)$/, 'nessun errore del server attivo');
+  assert.ok(page.markers().has(303));
+  assert.equal(page.retryTimers.size, 0, 'nessun tentativo programmato: Render non ha sbagliato');
+  assert.equal(page.storage.get(KEY), RENDER.url);
+  await ticksUntil(page, () => probes().length >= 2, 'seconda prova', MIN5 + 30000);
+  const gap = probes()[1].at - (probes()[0].at + 8000);
+  assert.ok(gap >= MIN5 - SLACK && gap < MIN5 + 10000, `seconda prova 5 min dopo la fine della prima (${gap} ms)`);
+  assert.ok(probes().every(isStatus(VM.url)));
+});
+
+test('pagina: già sulla VM nessuna prova in più, anche dopo più di 5 min', async () => {
+  const page = startPage({ timeScale: FAST, config: APIS, routes: routesOf({ [VM.url]: healthy(404), [RENDER.url]: healthy(505) }) });
+  await page.waitStatus(/in mappa/);
+  const end = page.pageNow() + MIN5 + 60000;
+  while (page.pageNow() < end) { await page.tick(); await sleep(10); }
+  const vmReq = on(page, VM.url);
+  assert.equal(vmReq.filter(isStatus(VM.url)).length, vmReq.filter(isView).length, 'un /status per giro, niente prove');
+  assert.equal(on(page, RENDER.url).length, 0, 'Render mai chiamato');
+});
+
+test('pagina: scheda nascosta → nessuna prova; tornata visibile → prova; hasKey false → resta, 200 senza hasKey → torna', async () => {
+  let vmStatus = { body: { hasKey: false } };
+  const vm = (path, now) => {
+    if (path === '/status') return vmStatus;
+    if (path.startsWith('/locations?')) return { body: () => fc(606, now) };
+  };
+  const page = startPage({ timeScale: FAST, config: APIS, session: { [KEY]: RENDER.url },
+    routes: routesOf({ [VM.url]: vm, [RENDER.url]: healthy(707) }) });
+  await page.waitStatus(/ · server di riserva \(Render\)$/);
+  page.get('document.hidden = true');
+  const end = page.pageNow() + MIN5 + 30000;
+  while (page.pageNow() < end) { await page.tick(); await sleep(10); }
+  assert.equal(on(page, VM.url).length, 0, 'scheda nascosta: nessuna prova');
+  page.get('document.hidden = false');
+  await page.tick();
+  await until(() => on(page, VM.url).length === 1 && on(page, VM.url)[0].outcome === 200, 'prova appena visibile', 1000);
+  for (let i = 0; i < 3; i++) await page.tick();
+  assert.match(page.status(), /server di riserva \(Render\)$/, 'hasKey false: resta su Render');
+  assert.equal(on(page, VM.url).length, 1);
+  vmStatus = { body: () => ({ serverTime: page.pageNow() }) };   // risponde, ma senza il campo hasKey
+  await ticksUntil(page, () => on(page, VM.url).some(isView), 'ritorno alla VM', MIN5 + 30000);
+  assert.equal(page.storage.get(KEY), VM.url);
+  await until(() => page.markers().has(606), 'navi della VM', 1000);
 });

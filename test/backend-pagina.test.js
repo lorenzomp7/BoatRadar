@@ -1,6 +1,7 @@
 // Punto 86 (b): scelta del backend nella pagina, funzioni pure di public/ais-logic.js.
 // apiList legge config.js (window.BOATRADAR_APIS / BOATRADAR_API); createFailover decide quando passare al
-// server successivo (solo su errore della richiesta della vista) e quanto aspettare prima di riprovare.
+// server successivo (solo su errore della richiesta della vista), quanto aspettare prima di riprovare e quando provare
+// il primo per tornarci (shouldRecheck, recheckOk, recheckFailed).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { apiList, createFailover } = require('../public/ais-logic');
@@ -95,7 +96,7 @@ test('createFailover: la risposta di Render chiude l\'avvio; dopo, un suo errore
   assert.equal(f.waking(), false);
   assert.equal(f.canTry(1001), true);
   assert.equal(f.retryIn(1001), 0, 'ok azzera l\'attesa');
-  assert.equal(f.current().url, RENDER.url, 'nessun ritorno automatico alla VM');
+  assert.equal(f.current().url, RENDER.url, 'la risposta di Render non riporta alla VM (lo fa solo la prova del primo)');
   f.fail(RENDER.url, 20000);
   assert.equal(f.current().url, VM.url, 'Render ha già risposto: niente attesa di avvio');
 });
@@ -140,7 +141,7 @@ test('createFailover: errori o risposte in ritardo di un server non più attivo 
   f.fail(VM.url, 10);     // seconda richiesta alla VM partita prima del cambio
   assert.equal(f.current().url, RENDER.url);
   assert.equal(f.retryIn(10), 0);
-  f.ok(VM.url);           // risposta tardiva della VM: niente ritorno automatico
+  f.ok(VM.url);           // risposta tardiva della VM: non riporta alla VM (lo fa solo la prova del primo)
   assert.equal(f.current().url, RENDER.url);
   assert.deepEqual(changes, [RENDER.url]);
 });
@@ -177,4 +178,121 @@ test('createFailover: parametri baseMs, maxMs e wakeGraceMs', () => {
   f.fail(RENDER.url, 300); assert.equal(f.retryIn(300), 300);
   f.fail(RENDER.url, 1000);
   assert.equal(f.current().url, VM.url);
+});
+
+// Ritorno automatico al server principale (quota di Render): su un server diverso dal primo, ogni recheckMs (5 min) una
+// sola prova leggera del primo; se va bene si torna al primo, se no si resta e si riprova dopo altri recheckMs.
+const MIN5 = 5 * 60 * 1000;
+
+test('createFailover: sul primo server nessuna prova del primo', () => {
+  const f = createFailover([VM, RENDER]);
+  for (const t of [0, MIN5, 10 * MIN5, 100 * MIN5]) assert.equal(f.shouldRecheck(t), false, `t = ${t}`);
+  f.ok(VM.url);
+  assert.equal(f.shouldRecheck(1000 * MIN5), false);
+  const solo = createFailover([RENDER]);
+  solo.fail(RENDER.url, 0);
+  assert.equal(solo.shouldRecheck(MIN5), false, 'un solo server: è già il primo');
+});
+
+test('createFailover: su Render dopo 5 min una prova del primo; risponde → si torna al primo (onChange)', () => {
+  const changes = [];
+  const f = createFailover([VM, RENDER], { onChange: b => changes.push(b.url) });
+  f.fail(VM.url, 1000);
+  f.ok(RENDER.url);
+  assert.equal(f.shouldRecheck(1000), false);
+  assert.equal(f.shouldRecheck(1000 + MIN5 - 1), false, 'prima di 5 min no');
+  assert.equal(f.shouldRecheck(1000 + MIN5), true, 'a 5 min dal passaggio sì');
+  assert.equal(f.current().url, RENDER.url, 'la prova da sola non cambia server');
+  f.recheckOk(VM.url);
+  assert.equal(f.current().url, VM.url, 'torna al primo');
+  assert.deepEqual(changes, [RENDER.url, VM.url]);
+  assert.equal(f.canTry(1000 + MIN5), true, 'il primo si può chiedere subito');
+  assert.equal(f.retryIn(1000 + MIN5), 0);
+  assert.equal(f.waking(), false);
+  assert.equal(f.shouldRecheck(1000 + 3 * MIN5), false, 'di nuovo sul primo: niente prove');
+});
+
+test('createFailover: mai più di una prova in corso', () => {
+  const f = createFailover([VM, RENDER]);
+  f.fail(VM.url, 0);
+  assert.equal(f.shouldRecheck(MIN5), true);
+  assert.equal(f.shouldRecheck(MIN5), false, 'stessa ora: già in corso');
+  assert.equal(f.shouldRecheck(3 * MIN5), false, 'anche molto dopo, finché la prova non finisce');
+  f.recheckFailed(3 * MIN5);
+  assert.equal(f.shouldRecheck(3 * MIN5), false, 'appena fallita: si aspetta');
+  assert.equal(f.shouldRecheck(4 * MIN5), true);
+});
+
+test('createFailover: prova fallita → si resta, riprova dopo altri 5 min, e non conta come errore del server attivo', () => {
+  const changes = [];
+  const f = createFailover([VM, RENDER], { onChange: b => changes.push(b.url) });
+  f.fail(VM.url, 0);
+  f.fail(RENDER.url, 1000);                  // Render in avvio
+  f.ok(RENDER.url);
+  const t = MIN5;
+  assert.equal(f.shouldRecheck(t), true);
+  f.recheckFailed(t + 8000);                 // nessuna risposta in 8 s
+  assert.equal(f.current().url, RENDER.url, 'resta su Render');
+  assert.equal(f.canTry(t + 8000), true, 'Render non ha nuove attese');
+  assert.equal(f.retryIn(t + 8000), 0);
+  assert.equal(f.waking(), false);
+  assert.equal(f.shouldRecheck(t + 8000 + MIN5 - 1), false);
+  assert.equal(f.shouldRecheck(t + 8000 + MIN5), true, 'altri 5 min dopo la prova fallita');
+  f.recheckFailed(t + 8000 + MIN5 + 50);
+  assert.equal(f.shouldRecheck(t + 8000 + 2 * MIN5 + 50), true, 'e così ogni 5 min');
+  assert.deepEqual(changes, [RENDER.url]);
+});
+
+test('createFailover: partendo da Render salvato nella sessione la prima prova arriva 5 min dopo il primo controllo', () => {
+  const f = createFailover([VM, RENDER], { saved: RENDER.url });
+  assert.equal(f.shouldRecheck(50000), false, 'primo controllo: fissa l\'ora');
+  assert.equal(f.shouldRecheck(50000 + MIN5 - 1), false);
+  assert.equal(f.shouldRecheck(50000 + MIN5), true);
+});
+
+test('createFailover: prova finita quando si è già tornati al primo per un errore → nessun cambio in più', () => {
+  const changes = [];
+  const f = createFailover([VM, RENDER], { onChange: b => changes.push(b.url) });
+  f.fail(VM.url, 0);
+  f.ok(RENDER.url);
+  assert.equal(f.shouldRecheck(MIN5), true);
+  f.fail(RENDER.url, MIN5 + 100);            // intanto Render sbaglia: si torna alla VM
+  assert.equal(f.current().url, VM.url);
+  f.recheckOk(VM.url);                       // la prova arriva dopo
+  assert.equal(f.current().url, VM.url);
+  assert.deepEqual(changes, [RENDER.url, VM.url], 'onChange una volta sola per il ritorno');
+  // la VM cade di nuovo: le prove ripartono 5 min dopo il nuovo passaggio
+  f.fail(VM.url, 2 * MIN5);
+  assert.equal(f.current().url, RENDER.url);
+  assert.equal(f.shouldRecheck(3 * MIN5 - 1), false);
+  assert.equal(f.shouldRecheck(3 * MIN5), true);
+});
+
+test('createFailover: recheckOk di un indirizzo che non è il primo non sposta nulla', () => {
+  const f = createFailover([VM, RENDER]);
+  f.fail(VM.url, 0);
+  assert.equal(f.shouldRecheck(MIN5), true);
+  f.recheckOk('https://altro.example/api');
+  assert.equal(f.current().url, RENDER.url);
+  assert.equal(f.shouldRecheck(MIN5 + 1), false, 'la prova è finita: si riprova dopo altri 5 min');
+  assert.equal(f.shouldRecheck(2 * MIN5 + 1), true);
+});
+
+test('createFailover: con tre server le prove riguardano solo il primo e non ripartono da capo fra secondo e terzo', () => {
+  const A = { url: 'https://a/api', name: 'A', sleeps: false }, B = { url: 'https://b/api', name: 'B', sleeps: false },
+    C = { url: 'https://c/api', name: 'C', sleeps: false };
+  const f = createFailover([A, B, C]);
+  f.fail(A.url, 0);
+  f.fail(B.url, 1000);                       // B → C: l'ora della prova resta quella del passaggio da A
+  assert.equal(f.current().url, C.url);
+  assert.equal(f.shouldRecheck(MIN5), true);
+  f.recheckOk(A.url);
+  assert.equal(f.current().url, A.url);
+});
+
+test('createFailover: parametro recheckMs', () => {
+  const f = createFailover([VM, RENDER], { recheckMs: 1000 });
+  f.fail(VM.url, 0);
+  assert.equal(f.shouldRecheck(999), false);
+  assert.equal(f.shouldRecheck(1000), true);
 });

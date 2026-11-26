@@ -378,14 +378,21 @@
   // errore (t = ora in ms), ok(url) dopo una risposta. Dopo un errore il server si riprova solo da t + baseMs·2^(errori−1),
   // al massimo maxMs (canTry, retryIn). Un server che dorme (sleeps, Render) e non ha ancora risposto da quando è attivo
   // resta attivo per wakeGraceMs dal primo errore (waking: «in avvio»); altrimenti si passa al successivo, in giro, che
-  // si possa già riprovare, e se nessuno si può riprovare si resta su quello pronto per primo. Nessun ritorno automatico
-  // al primo: si cambia solo dopo un errore, e una risposta (anche tardiva) di un altro server non sposta l'attivo.
+  // si possa già riprovare, e se nessuno si può riprovare si resta su quello pronto per primo. Un errore fa cambiare
+  // server, e una risposta (anche tardiva) di un altro server non sposta l'attivo.
   // Errori di un server non più attivo, o arrivati durante l'attesa (richieste partite prima dell'errore precedente),
   // sono ignorati: due richieste fallite insieme contano una volta. onChange(server) ai cambi.
-  function createFailover(list, { saved = null, onChange = () => {}, baseMs = 5000, maxMs = 60000, wakeGraceMs = 90000 } = {}) {
+  // Ritorno al primo (quota di Render): su un server diverso dal primo, recheckMs dopo il passaggio (o dopo il primo
+  // shouldRecheck, se si parte da un server salvato) shouldRecheck(t) dice true una volta e segna la prova in corso;
+  // finché non arriva recheckOk(url) o recheckFailed(t) non ne dice altre. recheckOk(url del primo) torna al primo;
+  // recheckFailed(t) riprova da t + recheckMs (recheckOk di un altro indirizzo: dall'inizio della prova). La prova non
+  // conta come errore né come risposta del server attivo.
+  function createFailover(list, { saved = null, onChange = () => {}, baseMs = 5000, maxMs = 60000, wakeGraceMs = 90000,
+    recheckMs = 300000 } = {}) {
     const st = list.map(() => ({ failures: 0, retryAt: 0, firstErrorAt: null, answered: false }));
     let idx = Math.max(0, list.findIndex(b => b.url === saved));
     let wakingNow = false;
+    let recheckAt = null, rechecking = false;   // prossima prova del primo (null: da fissare), prova in corso
     const indexOf = url => list.findIndex(b => b.url === url);
     function fail(url, t) {
       if (indexOf(url) !== idx || t < st[idx].retryAt) return;
@@ -402,6 +409,8 @@
         if (next < 0 || st[j].retryAt < st[next].retryAt) next = j;
       }
       if (next === idx) return;
+      if (next === 0) recheckAt = null;
+      else if (idx === 0 || recheckAt == null) recheckAt = t + recheckMs;   // fra secondo e terzo l'ora resta
       idx = next;
       // appena attivo: un server che dorme può essersi riaddormentato, l'attesa di avvio riparte dal suo prossimo errore
       st[idx].firstErrorAt = null; st[idx].answered = false;
@@ -413,12 +422,30 @@
       Object.assign(st[i], { failures: 0, retryAt: 0, firstErrorAt: null, answered: true });
       if (i === idx) wakingNow = false;
     }
+    function shouldRecheck(t) {
+      if (idx === 0 || rechecking) return false;
+      if (recheckAt == null) { recheckAt = t + recheckMs; return false; }
+      if (t < recheckAt) return false;
+      rechecking = true; recheckAt = t + recheckMs;   // se la prova non finisce bene, la prossima fra recheckMs
+      return true;
+    }
+    function recheckOk(url) {
+      rechecking = false;
+      if (url !== list[0].url || idx === 0) return;
+      Object.assign(st[0], { failures: 0, retryAt: 0, firstErrorAt: null, answered: true });
+      idx = 0; recheckAt = null; wakingNow = false;
+      onChange(list[0]);
+    }
+    function recheckFailed(t) {
+      rechecking = false;
+      recheckAt = t + recheckMs;
+    }
     return {
       current: () => list[idx],
       canTry: t => t >= st[idx].retryAt,
       retryIn: t => Math.max(0, st[idx].retryAt - t),
       waking: () => wakingNow,
-      ok, fail,
+      ok, fail, shouldRecheck, recheckOk, recheckFailed,
     };
   }
 

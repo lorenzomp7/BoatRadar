@@ -10,7 +10,10 @@
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
 #      secondo quello di prova, la pagina passi al secondo: navi in mappa e «server di riserva (Render)» nella riga di
-#      stato, a desktop e telefono; con il primo buono resti sul primo senza chiedere nulla al secondo.
+#      stato, a desktop e telefono; con il primo buono resti sul primo senza chiedere nulla al secondo;
+#   6. (solo con il server locale, punto 86) sul secondo server, prima di 5 min nessuna prova del primo; con il primo
+#      tornato e l'orologio della pagina (e serverTime) 5 min avanti, una prova leggera (/status) del primo e, dal giro
+#      dopo, ritorno al primo: niente «server di riserva» e sessionStorage aggiornato, a desktop e telefono.
 # Esce con 0 se tutto va bene, con 1 al primo controllo fallito. Screenshot in diagnosi/smoke/.
 #
 #   bash tools/smoke-browser.sh                 # server locale con la fixture di esempio
@@ -35,7 +38,7 @@ TMP="$(mktemp -d)"
 cleanup() {
   agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
   agent-browser --session "$SESSION-40min" close >/dev/null 2>&1 || true
-  for s in riserva-desktop riserva-telefono primo-buono; do agent-browser --session "$SESSION-$s" close >/dev/null 2>&1 || true; done
+  for s in riserva-desktop riserva-telefono primo-buono ritorno-desktop ritorno-telefono; do agent-browser --session "$SESSION-$s" close >/dev/null 2>&1 || true; done
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
@@ -302,5 +305,70 @@ if [ -z "${SMOKE_URL:-}" ]; then
   ok "primo buono: resta sul primo, nessuna richiesta al secondo · stato «$status»"
   problems=$(page_problems)
   [ -z "$problems" ] || fail "primo buono: $problems"
+
+  # ritorno al primo dopo 5 min (PRIMARY_RECHECK_MS): il primo «torna» quando window.__smokePrimaryUp è vero (le sue
+  # richieste vanno allora al server di prova, ma la pagina vede sempre il suo indirizzo); window.__smokeShift sposta
+  # avanti l'ora della pagina e serverTime di /api/status, così l'orologio corretto della pagina va avanti di tanto.
+  cat > "$TMP/ritorno.js" <<JS
+(function () {
+  if (window.top !== window) return;
+  window.BOATRADAR_APIS = [{"url":"$DEAD_API","name":"VM Oracle","sleeps":false},{"url":"$GOOD_API","name":"Render","sleeps":true}];
+  try { sessionStorage.removeItem('boatradar:api'); } catch (e) {}
+  window.__smokeShift = 0; window.__smokePrimaryUp = false; window.__smokeFetched = [];
+  var RealDate = Date, realNow = RealDate.now.bind(RealDate);
+  function ShiftedDate() {
+    var a = Array.prototype.slice.call(arguments);
+    if (!(this instanceof ShiftedDate)) return new RealDate(realNow() + window.__smokeShift).toString();
+    return a.length ? new (Function.prototype.bind.apply(RealDate, [null].concat(a)))() : new RealDate(realNow() + window.__smokeShift);
+  }
+  ShiftedDate.prototype = RealDate.prototype;
+  ShiftedDate.now = function () { return realNow() + window.__smokeShift; };
+  ShiftedDate.parse = RealDate.parse; ShiftedDate.UTC = RealDate.UTC;
+  window.Date = ShiftedDate;
+  var realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = String(input && input.url || input);
+    window.__smokeFetched.push(url);
+    if (window.__smokePrimaryUp && url.indexOf('$DEAD_API') === 0) input = '$GOOD_API' + url.slice('$DEAD_API'.length);
+    return realFetch(input, init).then(function (res) {
+      if (!/\/api\/status/.test(url) || !res.ok) return res;
+      return res.clone().json().then(function (j) {
+        if (typeof j.serverTime === 'number') j.serverTime += window.__smokeShift;
+        return new Response(JSON.stringify(j), { status: res.status, headers: { 'Content-Type': 'application/json' } });
+      });
+    });
+  };
+})();
+JS
+  for size in "desktop 1280 800" "telefono 390 844"; do
+    set -- $size
+    AB=(agent-browser --session "$SESSION-ritorno-$1" "${INIT[@]}" --init-script "$TMP/ritorno.js")
+    "${AB[@]}" set viewport "$2" "$3" >/dev/null
+    "${AB[@]}" open "$URL" >/dev/null || fail "ritorno $1: la pagina non si apre"
+    "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0
+      && / · server di riserva \(Render\)$/.test(document.getElementById('status').textContent)" >/dev/null \
+      || fail "ritorno $1: la pagina non passa al secondo · stato: $(js "document.getElementById('status')?.textContent")"
+    [ "$(js "document.hidden")" = false ] || fail "ritorno $1: la scheda risulta nascosta, la prova non partirebbe"
+    # il primo torna, ma prima di 5 min la pagina non lo prova
+    js "window.__smokePrimaryUp = true" >/dev/null
+    js "tick().then(() => tick()).then(() => true)" >/dev/null
+    early=$(js "window.__smokeFetched.filter(u => u === '$DEAD_API/status').length")
+    [ "$early" = 1 ] || fail "ritorno $1: $early richieste a /status del primo prima di 5 min (attesa 1, quella del primo giro)"
+    # 5 min e 5 s dopo: il giro successivo fa la prova, quello dopo ancora torna al primo
+    js "window.__smokeShift = 305000" >/dev/null
+    js "tick().then(() => true)" >/dev/null
+    "${AB[@]}" wait --fn "sessionStorage.getItem('boatradar:api') === '$DEAD_API'" >/dev/null \
+      || fail "ritorno $1: dopo la prova il primo non è ricordato · prove $(js "window.__smokeFetched.filter(u => u === '$DEAD_API/status').length")"
+    js "tick().then(() => true)" >/dev/null
+    "${AB[@]}" wait --fn "markers.size > 0 && !/riserva/.test(document.getElementById('status').textContent)" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/ritorno-$1-errore.png" >/dev/null || true
+           fail "ritorno $1: ancora sul secondo · stato: $(js "document.getElementById('status').textContent")"; }
+    views=$(js "window.__smokeFetched.filter(u => u.startsWith('$DEAD_API/locations?bbox=')).length")
+    [ "$views" -ge 2 ] || fail "ritorno $1: la vista non è stata chiesta di nuovo al primo ($views)"
+    ok "ritorno $1: dopo 5 min una prova e il ritorno al primo · $(js "markers.size") navi · stato «$(js "document.getElementById('status').textContent" | tr -d '"')»"
+    "${AB[@]}" screenshot "$OUT/ritorno-$1.png" >/dev/null
+    problems=$(page_problems)
+    [ -z "$problems" ] || fail "ritorno $1: $problems"
+  done
 fi
 echo "Verifica nel browser riuscita · screenshot in $OUT/"

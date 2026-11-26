@@ -24,9 +24,11 @@ async function until(fn, what, ms = 5000) {
 // Avvia la pagina. config = proprietà di window scritte da config.js (es. { BOATRADAR_APIS: [...] }); session = contenuto
 // iniziale di sessionStorage, oppure 'throw' per un sessionStorage che lancia (Safari privato); routes(url, pageNow) →
 // { body, delay, status } | { fail: true } (rete giù) | { hang: true } (nessuna risposta) | undefined (404).
-function startPage({ routes, config = {}, session = {} }) {
+// timeScale: quante volte l'ora e i timer della pagina corrono più veloci di quelli veri (TIME_SCALE; di più per i test
+// che devono far passare minuti, come il ritorno al server principale dopo 5 min).
+function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE }) {
   const realStart = Date.now();
-  const pageNow = () => realStart + (Date.now() - realStart) * TIME_SCALE;
+  const pageNow = () => realStart + (Date.now() - realStart) * timeScale;
   const elements = new Map();
   const document = { activeElement: null, getElementById: id => el(id),
     body: { classList: { add() {}, remove() {}, contains: () => false, toggle() {} } }, addEventListener() {} };
@@ -83,7 +85,7 @@ function startPage({ routes, config = {}, session = {} }) {
     setTimeout: (fn, ms, ...a) => {
       if (stopped) return 0;
       const isTick = fn === ctx.tick;
-      const id = setTimeout((...b) => { retryTimers.delete(id); allTimers.delete(id); if (!stopped) fn(...b); }, (ms || 0) / TIME_SCALE, ...a);
+      const id = setTimeout((...b) => { retryTimers.delete(id); allTimers.delete(id); if (!stopped) fn(...b); }, (ms || 0) / timeScale, ...a);
       allTimers.add(id);
       if (isTick) retryTimers.add(id);
       return id;
