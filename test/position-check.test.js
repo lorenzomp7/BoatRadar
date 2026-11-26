@@ -17,7 +17,7 @@ function run(fixes) {
   let prev, candidate;
   return fixes.map(f => {
     const r = step(prev, candidate, f);
-    if (r.accept) prev = f;
+    if (r.accept) prev = r.moving ? { ...f, moving: true } : f;
     candidate = r.candidate || undefined;
     return r.accept;
   });
@@ -66,7 +66,7 @@ test('judge: dopo più di 30 minuti il confronto non si può fare', () => {
 });
 
 test('step: senza posizione precedente accetta', () => {
-  assert.deepEqual(step(undefined, undefined, fix(43, 10, 0)), { accept: true, candidate: null });
+  assert.deepEqual(step(undefined, undefined, fix(43, 10, 0)), { accept: true, candidate: null, moving: false });
 });
 
 test('step: un salto senza candidato viene rifiutato e diventa candidato', () => {
@@ -77,7 +77,7 @@ test('step: un salto senza candidato viene rifiutato e diventa candidato', () =>
 test('step: un salto confermato da un candidato nello stesso punto viene accettato', () => {
   const candidate = fix(43 + 500 / 60, 10, 10 * S);
   const next = fix(43 + 500 / 60, 10, 20 * S);
-  assert.deepEqual(step(fix(43, 10, 0), candidate, next), { accept: true, candidate: null });
+  assert.deepEqual(step(fix(43, 10, 0), candidate, next), { accept: true, candidate: null, moving: true });
 });
 
 test('step: un candidato lontano non conferma il salto e viene sostituito', () => {
@@ -98,7 +98,25 @@ test('step: nave in moto che trasmette sempre SOG 0 (ogni 3 min, ~555 m) viene c
   const candidate = fix(45 + 555 * M, 12, 3 * MIN, 0);
   const next = fix(45 + 1110 * M, 12, 6 * MIN, 0);
   assert.equal(judge(prev, next), 'jump', 'per la regola della nave ferma è un salto');
-  assert.deepEqual(step(prev, candidate, next), { accept: true, candidate: null });
+  assert.deepEqual(step(prev, candidate, next), { accept: true, candidate: null, moving: true });
+});
+
+test('step: con SOG bloccata a 0 dopo la conferma passano tutti i report, non uno sì e uno no', () => {
+  // un report ogni 3 minuti, ~555 m l'uno dall'altro, per un'ora
+  const fixes = Array.from({ length: 21 }, (_, i) => fix(45 + i * 555 * M, 12, i * 3 * MIN, 0));
+  const esiti = run(fixes);
+  assert.deepEqual(esiti.slice(0, 3), [true, false, true], 'solo il primo spostamento aspetta la conferma');
+  assert.ok(esiti.slice(3).every(Boolean), `rifiutati dopo la conferma: ${esiti.slice(3).filter(e => !e).length}`);
+});
+
+test('step: quando la nave «in moto con SOG 0» si ferma, la regola della nave ferma torna a valere', () => {
+  const prev = { ...fix(45, 12, 0, 0), moving: true };
+  const fermo = fix(45 + 50 * M, 12, 3 * MIN, 0);            // 50 m: si è fermata
+  const r = step(prev, undefined, fermo);
+  assert.equal(r.accept, true);
+  assert.equal(r.moving, false);
+  const balzo = fix(45 + 50 * M + 300 * M, 12, 4 * MIN, 0);  // poi 300 m in un minuto con SOG 0
+  assert.equal(step(fermo, undefined, balzo).accept, false);
 });
 
 test('step: tre salti diversi di fila, poi la conferma del terzo', () => {

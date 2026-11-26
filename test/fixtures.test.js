@@ -35,7 +35,7 @@ for (const file of files) {
         if (!pos || !mmsi || !isValidFix(pos)) return;
         const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, ts: i };
         const r = step(accepted.get(mmsi), candidates.get(mmsi), fix);
-        if (r.accept) accepted.set(mmsi, fix);
+        if (r.accept) accepted.set(mmsi, r.moving ? { ...fix, moving: true } : fix);
         if (r.candidate) candidates.set(mmsi, r.candidate); else candidates.delete(mmsi);
       });
       const res = await s.get('/api/locations');

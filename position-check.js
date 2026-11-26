@@ -33,7 +33,8 @@ function judge(prev, next, { speedOnly = false } = {}) {
   if (d > MAX_SPEED_KN * (dt + 1) / 3600 + MARGIN_NM) return 'jump';
   if (speedOnly) return 'ok';
   // nave ferma (102.3 = velocità non disponibile, non conta) che si sposta di colpo
-  const still = typeof prev.sog === 'number' && prev.sog <= STILL_SOG_KN;
+  // (prev.moving: la nave si è già spostata davvero pur dichiarando SOG 0, la regola non vale)
+  const still = !prev.moving && typeof prev.sog === 'number' && prev.sog <= STILL_SOG_KN;
   if (still && dt <= STILL_WINDOW_S && d * 1852 > STILL_MAX_M) return 'jump';
   return 'ok';
 }
@@ -41,10 +42,16 @@ function judge(prev, next, { speedOnly = false } = {}) {
 // Decide se accettare next. Un salto diventa candidato: lo accetto quando la posizione successiva
 // è coerente con il candidato (la nave si è davvero spostata, oppure la precedente era sbagliata).
 // Per la conferma conta solo la velocità: una nave in moto che trasmette sempre SOG 0 non resta bloccata.
+// moving (da salvare con la posizione accettata) dice che la nave si sta spostando nonostante SOG 0:
+// vale dopo una conferma e resta finché continua a spostarsi di più di STILL_MAX_M per report.
 function step(prev, candidate, next) {
-  if (!prev) return { accept: true, candidate: null };
-  if (judge(prev, next) !== 'jump') return { accept: true, candidate: null };
-  if (candidate && judge(candidate, next, { speedOnly: true }) === 'ok') return { accept: true, candidate: null };
+  if (!prev) return { accept: true, candidate: null, moving: false };
+  const verdict = judge(prev, next);
+  if (verdict !== 'jump') {
+    const moving = verdict === 'ok' && !!prev.moving && distanceNm(prev, next) * 1852 > STILL_MAX_M;
+    return { accept: true, candidate: null, moving };
+  }
+  if (candidate && judge(candidate, next, { speedOnly: true }) === 'ok') return { accept: true, candidate: null, moving: true };
   return { accept: false, candidate: next };
 }
 

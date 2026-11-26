@@ -68,7 +68,7 @@ function handle(msg) {
     if (!isValidFix(pos)) status.rejected++;
     else {
       const r = step(positions.get(mmsi), candidates.get(mmsi), fix);
-      if (r.accept) positions.set(mmsi, fix); else status.rejected++;
+      if (r.accept) positions.set(mmsi, r.moving ? { ...fix, moving: true } : fix); else status.rejected++;
       if (r.candidate) candidates.set(mmsi, r.candidate); else candidates.delete(mmsi);
     }
   }
