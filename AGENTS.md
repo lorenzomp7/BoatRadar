@@ -16,7 +16,10 @@ Lavora su `main_claude` salvo indicazione diversa.
   messaggio AIS, 429), stato in
   memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione per importanza con `limit` (`sample.js`), in cache; con
   `include=mmsi,…`, al massimo 50, solo quelle navi, fuori dalla cache; filtri del punto 9 `types`, `status`, `minSog`,
-  `maxSog`, `seen`, `moving` applicati prima del campione, con `parseFilter`/`passesFilter` di `public/ais-logic.js`),
+  `maxSog`, `seen`, `moving` applicati prima del campione, con `parseFilter`/`passesFilter` di `public/ais-logic.js`;
+  `moving=1` vuol dire «non ferma» (`!isStill`, comprese le navi con velocità non disponibile), `moving=0` ferme;
+  il filtro applicato torna in `filter` della risposta; le voci filtrate hanno in cache una quota loro,
+  `LOCATIONS_CACHE_FILTERED`, e non espellono mai quelle senza filtro),
   `/api/vessel`, `/api/search`, `/api/status`. Conservazione (punto 8): posizioni di navi in moto 30 min, ferme
   (`isStill`) 6 h (`STALE_MOVING_MS`, `STALE_STILL_MS`, `limits` effettivi in `/api/status`, usati anche dalla pagina
   per le navi del server); le risposte escludono le scadute

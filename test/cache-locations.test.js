@@ -319,3 +319,96 @@ test('se gzip fallisce la risposta arriva non compressa e la voce non resta in c
     assert.equal(st.bytes, 0);
   } finally { await c.stop(); }
 });
+
+// Punto 9 (a), correzioni: quota separata per le voci con filtro (LOCATIONS_CACHE_FILTERED, default 20, al massimo
+// LOCATIONS_CACHE_SIZE; 0 = le richieste filtrate non entrano in cache). Una voce filtrata nuova espelle la più vecchia
+// FILTRATA, anche quando si supera il tetto totale di voci o di byte: il traffico filtrato non espelle mai le voci senza
+// filtro. locationsCache di /api/status riporta anche filtered.
+const VIEW = '/api/locations?bbox=10,40,15,50';
+const filtered = i => `${VIEW}&seen=${i}`;   // filtri diversi: una voce ciascuno
+const xc = async (server, url, headers = GZ) => (await server.get(url, headers)).headers['x-cache'];
+
+test('50 richieste con filtri diversi non espellono la voce senza filtro; al massimo 20 voci filtrate', async () => {
+  const c = await startServer();
+  try {
+    await sendAll(c, position(247100181, 45.43, 12.33));
+    assert.equal(await xc(c, VIEW), 'miss');
+    for (let i = 1; i <= 50; i++) assert.equal(await xc(c, filtered(i)), 'miss', `seen=${i}`);
+    const st = await cache(c);
+    assert.equal(st.filtered, 20, 'quota di default');
+    assert.equal(st.size, 21, 'la voce senza filtro più le 20 filtrate');
+    assert.equal(await xc(c, VIEW), 'hit', 'la voce senza filtro è ancora in cache');
+    assert.equal(await xc(c, filtered(50)), 'hit', 'le filtrate più recenti restano');
+    assert.equal(await xc(c, filtered(31)), 'hit');
+    assert.equal(await xc(c, filtered(30)), 'miss', 'la più vecchia filtrata è uscita');
+    assert.equal((await cache(c)).filtered, 20);
+  } finally { await c.stop(); }
+});
+
+test('tetto totale di voci: una voce filtrata in più espelle la filtrata più vecchia, non quelle senza filtro', async () => {
+  const c = await startServer({ LOCATIONS_CACHE_SIZE: '3', LOCATIONS_CACHE_FILTERED: '2' });
+  try {
+    const u1 = VIEW, u2 = '/api/locations?bbox=0,0,5,5';
+    for (const url of [u1, u2, filtered(1), filtered(2)]) assert.equal(await xc(c, url), 'miss', url);
+    let st = await cache(c);
+    assert.deepEqual([st.size, st.filtered], [3, 1], 'tre voci in tutto: è uscita la filtrata più vecchia');
+    assert.equal(await xc(c, u1), 'hit');
+    assert.equal(await xc(c, u2), 'hit');
+    assert.equal(await xc(c, filtered(2)), 'hit');
+    assert.equal(await xc(c, filtered(1)), 'miss');
+    assert.equal(await xc(c, u1), 'hit', 'rientrando seen=1 è uscita seen=2, non u1');
+    assert.equal(await xc(c, u2), 'hit');
+    st = await cache(c);
+    assert.deepEqual([st.size, st.filtered], [3, 1]);
+    // una voce senza filtro oltre il tetto espelle la più vecchia in assoluto, come prima
+    assert.equal(await xc(c, '/api/locations?bbox=20,20,25,25'), 'miss');
+    assert.equal(await xc(c, u1), 'miss', 'u1 era la voce più vecchia');
+  } finally { await c.stop(); }
+});
+
+test('tetto in byte: le voci filtrate espellono solo voci filtrate', async () => {
+  const LIMIT = 1500;
+  const c = await startServer({ LOCATIONS_CACHE_BYTES: String(LIMIT) });
+  try {
+    await sendAll(c, position(247100191, 45.43, 12.33));
+    const plain = await c.get(VIEW);                 // senza gzip: la voce tiene il JSON
+    assert.ok(plain.body.length < LIMIT / 3, `voce senza filtro di ${plain.body.length} byte`);
+    for (let i = 1; i <= 30; i++) {
+      await c.get(filtered(i), i % 2 ? GZ : {});
+      assert.ok((await cache(c)).bytes <= LIMIT, `sotto il tetto dopo ${i} filtrate`);
+    }
+    const st = await cache(c);
+    assert.ok(st.filtered < 20, `qualche filtrata espulsa per i byte (${st.filtered} restano)`);
+    assert.equal(await xc(c, VIEW, {}), 'hit', 'la voce senza filtro resta');
+    assert.equal(await xc(c, filtered(30)), 'hit', 'la filtrata più recente resta');
+  } finally { await c.stop(); }
+});
+
+test('LOCATIONS_CACHE_FILTERED=0: le richieste filtrate non entrano in cache, le altre sì', async () => {
+  const c = await startServer({ LOCATIONS_CACHE_FILTERED: '0' });
+  try {
+    await sendAll(c, position(247100201, 45.43, 12.33));
+    for (let i = 0; i < 3; i++) assert.equal(await xc(c, filtered(5)), 'miss', 'filtrata: sempre miss');
+    assert.equal(await xc(c, VIEW), 'miss');
+    assert.equal(await xc(c, VIEW), 'hit');
+    const st = await cache(c);
+    assert.deepEqual([st.size, st.filtered], [1, 0]);
+    assert.deepEqual(body(await c.get(filtered(5), GZ)).features.map(f => f.mmsi), [247100201], 'risposta comunque giusta');
+  } finally { await c.stop(); }
+});
+
+test('LOCATIONS_CACHE_FILTERED non valido = 20, decimali per difetto; oltre LOCATIONS_CACHE_SIZE vale LOCATIONS_CACHE_SIZE', async () => {
+  for (const [env, size, quota] of [[{ LOCATIONS_CACHE_FILTERED: 'abc' }, 50, 20], [{ LOCATIONS_CACHE_FILTERED: '-1' }, 50, 20],
+    [{ LOCATIONS_CACHE_FILTERED: '' }, 50, 20], [{ LOCATIONS_CACHE_FILTERED: '2.7' }, 50, 2],
+    [{ LOCATIONS_CACHE_SIZE: '4', LOCATIONS_CACHE_FILTERED: '10' }, 4, 3]]) {
+    const c = await startServer(env);
+    try {
+      assert.equal(await xc(c, VIEW), 'miss');
+      for (let i = 1; i <= 25; i++) await c.get(filtered(i), GZ);
+      const st = await cache(c);
+      assert.equal(st.filtered, quota, JSON.stringify(env));
+      assert.equal(st.size, Math.min(size, quota + 1), JSON.stringify(env));
+      assert.equal(await xc(c, VIEW), 'hit', `${JSON.stringify(env)}: la voce senza filtro resta`);
+    } finally { await c.stop(); }
+  }
+});

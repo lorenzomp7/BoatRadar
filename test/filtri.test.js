@@ -158,3 +158,24 @@ test('parametri estremi o non validi: 200, nessun filtro, nessun errore', async 
   }
   assert.equal((await srv.get('/api/status')).status, 200, 'il server è ancora vivo');
 });
+
+// Correzioni del punto 9 (a): la FeatureCollection riporta in filter il filtro effettivamente applicato
+// (filterKey, '' senza filtro), anche quando viene dalla cache. I valori sono sensibili alle maiuscole.
+test('filter nella risposta: il filtro effettivo in forma canonica, anche dalla cache', async () => {
+  const plain = ids(await srv.getJson(ZONE));
+  const cases = [
+    ['', ''],
+    ['types=Tanker', ''],                                   // maiuscola: chiave sconosciuta, nessun filtro
+    ['minSog=5,5', ''],                                     // virgola decimale: non valido
+    ['types=tanker&minSog=5.0', 'types=tanker&minSog=5'],
+    ['minSog=5.0&types=tanker', 'types=tanker&minSog=5'],
+    ['moving=1&types=cargo&types=tanker&seen=10.001', 'types=cargo,tanker&seen=10&moving=1'],
+  ];
+  for (const [q, want] of cases) {
+    const url = q ? `${ZONE}&${q}` : ZONE;
+    const a = await srv.get(url), b = await srv.get(url);
+    assert.equal(b.headers['x-cache'], 'hit', `${q}: seconda richiesta dalla cache`);
+    for (const res of [a, b]) assert.equal(JSON.parse(res.body).filter, want, q);
+    if (!want) assert.deepEqual(ids(JSON.parse(a.body)), plain, `${q}: come senza filtro`);
+  }
+});

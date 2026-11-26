@@ -20,7 +20,9 @@ const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
 // Cache di /api/locations (punto 84): una risposta si riusa per LOCATIONS_CACHE_MS, oppure finché i dati
 // non cambiano (al massimo LOCATIONS_CACHE_STABLE_MS, 60 s). LOCATIONS_CACHE_SIZE = numero di viste tenute
 // (0 = cache spenta), LOCATIONS_CACHE_BYTES = tetto in byte (JSON + gzip tenuti). Ogni LOCATIONS_CACHE_CLEANUP_MS
-// si tolgono le voci che non si possono più riusare. Valori non validi = default (deploy/README.md).
+// si tolgono le voci che non si possono più riusare. LOCATIONS_CACHE_FILTERED (punto 9) = quante di queste voci possono
+// avere un filtro (al massimo LOCATIONS_CACHE_SIZE; 0 = le richieste filtrate non entrano in cache). Valori non validi =
+// default (deploy/README.md).
 const envNumber = (name, def) => {
   const n = Number(process.env[name]);
   return process.env[name] && Number.isFinite(n) && n >= 0 ? n : def;
@@ -30,6 +32,7 @@ const LOCATIONS_CACHE_SIZE = envNumber('LOCATIONS_CACHE_SIZE', 50);
 const LOCATIONS_CACHE_BYTES = envNumber('LOCATIONS_CACHE_BYTES', 32 * 1024 * 1024);
 const LOCATIONS_CACHE_STABLE_MS = envNumber('LOCATIONS_CACHE_STABLE_MS', 60000);
 const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000) || 60000;
+const LOCATIONS_CACHE_FILTERED = Math.min(Math.floor(envNumber('LOCATIONS_CACHE_FILTERED', 20)), LOCATIONS_CACHE_SIZE);
 // Conservazione delle posizioni (punto 8, retentionMs di public/ais-logic.js): navi in moto STALE_MOVING_MS
 // (30 min), ferme, all'ancora o ormeggiate STALE_STILL_MS (6 h); 0 o valori non validi = default. I candidati di
 // position-check.js restano movingMs, i dati statici 48 h. Ogni POSITIONS_CLEANUP_MS (60 s) la pulizia toglie dalla
@@ -331,7 +334,8 @@ function locations({ box, limit, filter }, now = Date.now()) {
   }
   // campione per importanza (punto 4, sample.js): oltre limit le navi più importanti, con un massimo per cella
   const shown = sampleByImportance(hits, limit, box, { staticOf: (m, p) => p.staticScore, now });
-  return { fc: { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) }, expires };
+  // filter: il filtro applicato in forma canonica ('' senza filtro), così chi usa l'API vede cosa è stato accettato
+  return { fc: { type: 'FeatureCollection', filter: filterKey(filter), total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) }, expires };
 }
 
 // Navi chieste con include= (punto 3: la nave selezionata, più avanti le preferite): solo quelle che hanno una
@@ -347,8 +351,11 @@ function included(include) {
 // Cache di /api/locations. Una voce tiene la risposta compressa (gz); il JSON (raw) resta solo finché serve
 // per comprimere, oppure se la voce è nata da una richiesta senza gzip. Ai client senza gzip una voce che ha
 // solo gz si serve decomprimendola. Tetti: LOCATIONS_CACHE_SIZE voci e LOCATIONS_CACHE_BYTES byte (raw + gz);
-// oltre esce la voce inserita per prima.
-const locationsCache = new Map(); // chiave -> { key, version, t, expires, raw, keepRaw, gz: Promise<Buffer> | null, gzBuf, bytes }
+// oltre esce la voce inserita per prima. Le voci con filtro (punto 9) hanno in più una quota loro,
+// LOCATIONS_CACHE_FILTERED, e una voce filtrata che supera quota o tetti espelle la filtrata più vecchia: il traffico
+// filtrato (combinazioni quasi infinite) non espelle mai le viste senza filtro, quelle della maggior parte delle pagine.
+const locationsCache = new Map(); // chiave -> { key, filtered, version, t, expires, raw, keepRaw, gz: Promise<Buffer> | null, gzBuf, bytes }
+const filteredKeys = new Set();   // chiavi delle voci con filtro, nell'ordine di inserimento
 const cacheStats = { hits: 0, misses: 0, compressions: 0 };
 let cacheBytes = 0;
 const gzipAsync = require('util').promisify(zlib.gzip);
@@ -359,6 +366,7 @@ function cacheRemove(key) {
   if (!entry) return;
   cacheBytes -= entry.bytes;
   locationsCache.delete(key);
+  filteredKeys.delete(key);
 }
 
 // ricalcola i byte di una voce ancora in cache (dopo la compressione o dopo aver lasciato il JSON) ed espelle
@@ -368,8 +376,11 @@ function cacheResize(entry) {
     cacheBytes += bytes - entry.bytes;
     entry.bytes = bytes;
   }
+  while (filteredKeys.size > LOCATIONS_CACHE_FILTERED) cacheRemove(filteredKeys.values().next().value);
   while (locationsCache.size && (locationsCache.size > LOCATIONS_CACHE_SIZE || cacheBytes > LOCATIONS_CACHE_BYTES)) {
-    cacheRemove(locationsCache.keys().next().value);
+    // oltre un tetto per colpa di una voce filtrata escono solo voci filtrate (al limite lei stessa)
+    const oldest = entry.filtered && filteredKeys.size ? filteredKeys.values() : locationsCache.keys();
+    cacheRemove(oldest.next().value);
   }
 }
 
@@ -397,8 +408,9 @@ function sendLocations(req, res, query) {
   const params = locationsParams(query);
   // include: risposta piccola e diversa per ogni utente, fuori dalla cache condivisa (non crea voci)
   if (params.include) return json(req, res, included(params.include));
-  const key = params.key, now = Date.now(), gzip = acceptsGzip(req);
-  let entry = LOCATIONS_CACHE_SIZE > 0 ? locationsCache.get(key) : undefined;
+  const key = params.key, now = Date.now(), gzip = acceptsGzip(req), filtered = !!params.filter;
+  const cached = (filtered ? LOCATIONS_CACHE_FILTERED : LOCATIONS_CACHE_SIZE) > 0;
+  let entry = cached ? locationsCache.get(key) : undefined;
   // a dati fermi la voce vale al massimo 60 s e solo finché nessuna delle sue navi è scaduta (expires): senza
   // messaggi nuovi dataVersion non cambia, ma le navi oltre il loro limite devono comunque sparire. Entro
   // LOCATIONS_CACHE_MS (3 s) invece la voce si riusa comunque, come per i dati nuovi: una nave può restare fino a 3 s
@@ -410,11 +422,12 @@ function sendLocations(req, res, query) {
   else {
     cacheStats.misses++;
     const { fc, expires } = locations(params, now);
-    entry = { key, version: dataVersion, t: now, expires, raw: Buffer.from(JSON.stringify(fc)),
+    entry = { key, filtered, version: dataVersion, t: now, expires, raw: Buffer.from(JSON.stringify(fc)),
       keepRaw: !gzip, gz: null, gzBuf: null, bytes: 0 };
-    if (LOCATIONS_CACHE_SIZE > 0) {
+    if (cached) {
       cacheRemove(key);   // ricalcolata: torna in fondo all'ordine di inserimento
       locationsCache.set(key, entry);
+      if (filtered) filteredKeys.add(key);
       cacheResize(entry);
     }
   }
@@ -481,7 +494,7 @@ http.createServer((req, res) => {
   // serverTime: ora del server in ms, con cui la pagina corregge l'orologio del telefono (punto 43).
   // Solo qui e non in /api/locations, che può essere servita dalla cache con un'ora vecchia.
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size,
-    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes }, limits: LIMITS, serverTime: Date.now() });
+    locationsCache: { ...cacheStats, size: locationsCache.size, filtered: filteredKeys.size, bytes: cacheBytes }, limits: LIMITS, serverTime: Date.now() });
   if (url === '/config.js') {
     // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
