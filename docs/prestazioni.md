@@ -62,8 +62,18 @@ Prima misura (sessione cloud di Claude Code, 23/11/2026 UTC, 30.000 navi):
 
 Punto 84 (26/11/2026, cache di `/api/locations`): la risposta, anche compressa, si riusa per
 `LOCATIONS_CACHE_MS` (default 3000 ms) o finché i dati non cambiano (al massimo 60 s); il bbox è
-arrotondato verso l'esterno a 0,25°; `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenute;
-`hits`, `misses` e `size` in `locationsCache` di `/api/status`, intestazione `X-Cache: hit|miss`.
+arrotondato verso l'esterno a un passo proporzionale alla vista (potenza di 2 ≥ 1/8 del lato maggiore,
+fra 1/64° e 0,25°); `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenute e
+`LOCATIONS_CACHE_BYTES` (default 32 MB) byte al massimo; `hits`, `misses`, `compressions`, `size` e
+`bytes` in `locationsCache` di `/api/status`, intestazione `X-Cache: hit|miss`. Variabili in `deploy/README.md`.
+
+- Correzioni da revisione e QA (26/11/2026): una voce chiesta con gzip tiene solo la risposta
+  compressa (vista mondo con 30.000 navi: circa 0,23 MB invece di 1,7 MB con il JSON), i client senza
+  gzip la ricevono decompressa al volo; le voci non più riusabili si tolgono ogni minuto; la chiave
+  contiene solo bbox arrotondato e `limit` effettivo. Riga «dopo correzioni»: stesso caso migliore di
+  prima (1,1 ms mondo, 0,5 ms porto). Con `LOCATIONS_CACHE_SIZE=0`, nella stessa sessione: mondo
+  35,9 / 50,6 ms, porto 10,3 / 13,8 ms (mediana / p95), come la riga con la cache spenta qui sotto.
+  La vista porto di `tools/carico.js` (Rotterdam, 1,1°) ha ancora passo 0,25°: 1427 navi come prima.
 
 - La riga «dopo punto 84» è il **caso migliore**: `tools/carico.js` chiede sempre la stessa vista
   senza messaggi AIS nel frattempo, quindi tutte le richieste tranne la prima sono servite dalla cache.
@@ -83,4 +93,5 @@ arrotondato verso l'esterno a 0,25°; `LOCATIONS_CACHE_SIZE` (default 50, 0 = sp
 | 2026-11-26 | prima punto 84 (cache /api/locations), con punti 1, 7, 11 | 30000 | 0.5 | 169 | 5979 | 227.1 (1459.5) | 28.8 / 33.6 | 1427 | 53 (346.9) | 8.4 / 11.8 | v22.23.5 |
 | 2026-11-26 | dopo punto 84 (cache /api/locations, caso migliore: vista ripetuta senza messaggi) | 30000 | 0.5 | 168.9 | 5979 | 227.8 (1459.5) | 0.9 / 1.5 | 1427 | 53.3 (346.9) | 0.5 / 0.8 | v22.23.5 |
 | 2026-11-26 | dopo punto 84 con LOCATIONS_CACHE_SIZE=0 (cache spenta, gzip asincrono) | 30000 | 0.5 | 167.7 | 5979 | 227.3 (1459.5) | 34.5 / 40.6 | 1427 | 53.1 (346.9) | 11.5 / 16.2 | v22.23.5 |
+| 2026-11-26 | dopo correzioni revisione/QA punti 7, 11, 84 (caso migliore: vista ripetuta) | 30000 | 0.5 | 167.5 | 5979 | 227.5 (1459.5) | 1.1 / 1.8 | 1427 | 53.2 (346.9) | 0.5 / 0.8 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->

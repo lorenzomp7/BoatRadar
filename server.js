@@ -16,14 +16,18 @@ const MAX_FEATURES = 6000; // oltre questo numero la pagina riceve un campione d
 const STALE_MS = 30 * 60 * 1000;
 const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
 // Cache di /api/locations (punto 84): una risposta si riusa per LOCATIONS_CACHE_MS, oppure finché i dati
-// non cambiano (al massimo 60 s). LOCATIONS_CACHE_SIZE = numero di viste tenute; 0 = cache spenta.
+// non cambiano (al massimo LOCATIONS_CACHE_STABLE_MS, 60 s). LOCATIONS_CACHE_SIZE = numero di viste tenute
+// (0 = cache spenta), LOCATIONS_CACHE_BYTES = tetto in byte (JSON + gzip tenuti). Ogni LOCATIONS_CACHE_CLEANUP_MS
+// si tolgono le voci che non si possono più riusare. Valori non validi = default (deploy/README.md).
 const envNumber = (name, def) => {
   const n = Number(process.env[name]);
   return process.env[name] && Number.isFinite(n) && n >= 0 ? n : def;
 };
 const LOCATIONS_CACHE_MS = envNumber('LOCATIONS_CACHE_MS', 3000);
 const LOCATIONS_CACHE_SIZE = envNumber('LOCATIONS_CACHE_SIZE', 50);
-const LOCATIONS_CACHE_STABLE_MS = 60000;
+const LOCATIONS_CACHE_BYTES = envNumber('LOCATIONS_CACHE_BYTES', 32 * 1024 * 1024);
+const LOCATIONS_CACHE_STABLE_MS = envNumber('LOCATIONS_CACHE_STABLE_MS', 60000);
+const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000) || 60000;
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, navStat, ts }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
@@ -49,10 +53,13 @@ function setDimensions(v, d) {
   if (width > 0) v.width = width;
 }
 
-// ETA AIS: mese, giorno, ora e minuto in UTC, senza anno (0 / 24 / 60 = non disponibile)
+// ETA AIS: mese, giorno, ora e minuto in UTC, senza anno (0 / 24 / 60 = non disponibile).
+// Ogni campo deve essere un intero nel suo intervallo: altrimenti null (mese o giorno non validi = ETA null)
+const intIn = (x, min, max) => Number.isInteger(x) && x >= min && x <= max ? x : null;
 function etaOf(e) {
-  if (!e || !(e.Month >= 1 && e.Month <= 12) || !(e.Day >= 1 && e.Day <= 31)) return null;
-  return { month: e.Month, day: e.Day, hour: e.Hour < 24 ? e.Hour : null, minute: e.Minute < 60 ? e.Minute : null };
+  const month = intIn(e?.Month, 1, 12), day = intIn(e?.Day, 1, 31);
+  if (month === null || day === null) return null;
+  return { month, day, hour: intIn(e.Hour, 0, 23), minute: intIn(e.Minute, 0, 59) };
 }
 
 // IMO: 7 cifre, l'ultima è la cifra di controllo (somma delle prime sei per 7, 6, 5, 4, 3, 2, modulo 10)
@@ -207,7 +214,12 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 const apiHeaders = () => ({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
   'Access-Control-Allow-Origin': CORS_ORIGIN, ...(CORS_ORIGIN === '*' ? {} : { Vary: 'Origin' }) });
-const acceptsGzip = req => /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+// Accept-Encoding: «gzip» senza distinzione di maiuscole, escluso con q=0 (x-gzip e * non contano)
+const acceptsGzip = req => (req.headers['accept-encoding'] || '').split(',').some(part => {
+  const [name, ...params] = part.split(';').map(x => x.trim().toLowerCase());
+  const q = params.find(p => p.startsWith('q='));
+  return name === 'gzip' && !(q && Number(q.slice(2)) === 0);
+});
 
 function json(req, res, body) {
   const headers = apiHeaders();
@@ -225,11 +237,35 @@ function inBox(box, p) {
   return w <= e ? p.lon >= w && p.lon <= e : p.lon >= w || p.lon <= e;
 }
 
-function locations(query) {
-  const box = query.get('bbox')?.split(',').map(Number);
+// Parametri di /api/locations, letti solo qui: gli stessi valori filtrano le navi in locations() e formano la
+// chiave della cache, quindi due richieste con la stessa chiave hanno la stessa risposta e i parametri
+// sconosciuti non creano voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui (anche nella chiave).
+function locationsParams(query) {
+  const box = roundBox(query.get('bbox')?.split(',').map(Number));
   const limit = Math.min(Number(query.get('limit')) || MAX_FEATURES, MAX_FEATURES);
+  return { box, limit, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
+}
+
+// bbox arrotondato verso l'esterno, così viste quasi uguali (piccoli spostamenti della mappa) condividono la
+// stessa voce. Passo = potenza di 2 di grado ≥ 1/8 del lato maggiore, fra 1/64° e 0,25°: una vista di porto
+// si allarga di poco, una vista grande di al massimo 0,25° per lato. bbox non valido = null (tutto il mondo).
+function roundBox(box) {
+  if (box?.length !== 4 || box.some(isNaN)) return null;
+  let [w, s, e, n] = box;
+  const crosses = w > e;   // attraversa l'antimeridiano
+  const side = Math.max(crosses ? e - w + 360 : e - w, n - s);
+  const step = Math.min(0.25, Math.max(1 / 64, 2 ** Math.ceil(Math.log2(side / 8)))) || 0.25; // NaN con ±Infinity
+  const clamp = (x, m) => Math.max(-m, Math.min(m, x));
+  w = clamp(Math.floor(w / step) * step, 180); e = clamp(Math.ceil(e / step) * step, 180);
+  // sud > nord non contiene navi: arrotondare potrebbe farlo diventare una striscia valida
+  if (s <= n) { s = clamp(Math.floor(s / step) * step, 90); n = clamp(Math.ceil(n / step) * step, 90); }
+  if (crosses && w <= e) { w = -180; e = 180; } // attraversava l'antimeridiano e ora copre tutto
+  return [w, s, e, n];
+}
+
+function locations({ box, limit }) {
   const hits = [];
-  for (const [mmsi, p] of positions) if (inBox(box?.length === 4 && !box.some(isNaN) ? box : null, p)) hits.push([mmsi, p]);
+  for (const [mmsi, p] of positions) if (inBox(box, p)) hits.push([mmsi, p]);
   // campione stabile per MMSI, così le navi mostrate non cambiano a ogni aggiornamento
   const k = Math.ceil(hits.length / limit);
   const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : hits;
@@ -241,58 +277,90 @@ function locations(query) {
   }) };
 }
 
-// Cache di /api/locations: chiave = parametri con il bbox arrotondato verso l'esterno a 0,25°, così viste
-// quasi uguali (piccoli spostamenti della mappa) condividono la stessa risposta. Il bbox arrotondato è anche
-// quello usato per filtrare: la risposta è identica per tutte le viste con la stessa chiave.
-const locationsCache = new Map(); // chiave -> { version, t, raw: Buffer, gz: Promise<Buffer> | null }
-const cacheStats = { hits: 0, misses: 0 };
+// Cache di /api/locations. Una voce tiene la risposta compressa (gz); il JSON (raw) resta solo finché serve
+// per comprimere, oppure se la voce è nata da una richiesta senza gzip. Ai client senza gzip una voce che ha
+// solo gz si serve decomprimendola. Tetti: LOCATIONS_CACHE_SIZE voci e LOCATIONS_CACHE_BYTES byte (raw + gz);
+// oltre esce la voce inserita per prima.
+const locationsCache = new Map(); // chiave -> { key, version, t, raw, keepRaw, gz: Promise<Buffer> | null, gzBuf, bytes }
+const cacheStats = { hits: 0, misses: 0, compressions: 0 };
+let cacheBytes = 0;
 const gzipAsync = require('util').promisify(zlib.gzip);
+const gunzipAsync = require('util').promisify(zlib.gunzip);
 
-function locationsKey(query) {
-  const q = new URLSearchParams(query);
-  const box = q.get('bbox')?.split(',').map(Number);
-  q.delete('bbox');   // bbox non valido = nessun filtro: stessa voce del mondo
-  if (box?.length === 4 && !box.some(isNaN)) {
-    const clamp = (x, m) => Math.max(-m, Math.min(m, x));
-    let w = clamp(Math.floor(box[0] * 4) / 4, 180), s = clamp(Math.floor(box[1] * 4) / 4, 90);
-    let e = clamp(Math.ceil(box[2] * 4) / 4, 180), n = clamp(Math.ceil(box[3] * 4) / 4, 90);
-    if (box[0] > box[2] && w <= e) { w = -180; e = 180; } // attraversava l'antimeridiano e ora copre tutto
-    q.set('bbox', [w, s, e, n].join(','));
-  }
-  q.sort();
-  return q;
+function cacheRemove(key) {
+  const entry = locationsCache.get(key);
+  if (!entry) return;
+  cacheBytes -= entry.bytes;
+  locationsCache.delete(key);
 }
 
+// ricalcola i byte di una voce ancora in cache (dopo la compressione o dopo aver lasciato il JSON) ed espelle
+function cacheResize(entry) {
+  if (locationsCache.get(entry.key) === entry) {
+    const bytes = (entry.raw?.length || 0) + (entry.gzBuf?.length || 0);
+    cacheBytes += bytes - entry.bytes;
+    entry.bytes = bytes;
+  }
+  while (locationsCache.size && (locationsCache.size > LOCATIONS_CACHE_SIZE || cacheBytes > LOCATIONS_CACHE_BYTES)) {
+    cacheRemove(locationsCache.keys().next().value);
+  }
+}
+
+// gzip asincrono; la Promise è salvata subito, così le richieste contemporanee la condividono
+function compress(entry) {
+  if (!entry.gz) {
+    cacheStats.compressions++;
+    entry.gz = gzipAsync(entry.raw).then(buf => {
+      entry.gzBuf = buf;
+      if (!entry.keepRaw) entry.raw = null;
+      cacheResize(entry);
+      return buf;
+    });
+  }
+  return entry.gz;
+}
+
+// le voci con almeno questa età non possono più essere un hit (vedi sendLocations)
+setInterval(() => {
+  const limit = Date.now() - Math.max(LOCATIONS_CACHE_MS, LOCATIONS_CACHE_STABLE_MS);
+  for (const [key, entry] of locationsCache) if (entry.t <= limit) cacheRemove(key);
+}, LOCATIONS_CACHE_CLEANUP_MS).unref();
+
 function sendLocations(req, res, query) {
-  const q = locationsKey(query);
-  const key = q.toString(), now = Date.now();
+  const params = locationsParams(query);
+  const key = params.key, now = Date.now(), gzip = acceptsGzip(req);
   let entry = LOCATIONS_CACHE_SIZE > 0 ? locationsCache.get(key) : undefined;
   const hit = !!entry && (now - entry.t < LOCATIONS_CACHE_MS
     || (entry.version === dataVersion && now - entry.t < LOCATIONS_CACHE_STABLE_MS));
   if (hit) cacheStats.hits++;
   else {
     cacheStats.misses++;
-    entry = { version: dataVersion, t: now, raw: Buffer.from(JSON.stringify(locations(q))), gz: null };
+    entry = { key, version: dataVersion, t: now, raw: Buffer.from(JSON.stringify(locations(params))),
+      keepRaw: !gzip, gz: null, gzBuf: null, bytes: 0 };
     if (LOCATIONS_CACHE_SIZE > 0) {
-      locationsCache.delete(key);   // ricalcolata: torna in fondo all'ordine di inserimento
+      cacheRemove(key);   // ricalcolata: torna in fondo all'ordine di inserimento
       locationsCache.set(key, entry);
-      while (locationsCache.size > LOCATIONS_CACHE_SIZE) locationsCache.delete(locationsCache.keys().next().value);
+      cacheResize(entry);
     }
   }
   const headers = apiHeaders();
   headers.Vary = headers.Vary ? headers.Vary + ', Accept-Encoding' : 'Accept-Encoding';
   headers['X-Cache'] = hit ? 'hit' : 'miss';
-  if (!acceptsGzip(req)) { res.writeHead(200, headers); return res.end(entry.raw); }
-  // gzip asincrono; la Promise è salvata subito, così le richieste contemporanee la condividono
-  entry.gz ??= gzipAsync(entry.raw);
-  entry.gz.then(data => {
-    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
+  headers['Access-Control-Expose-Headers'] = 'X-Cache';
+  const send = (data, extra = {}) => {
+    res.writeHead(200, { ...headers, ...extra, 'Content-Length': data.length });
     res.end(data);
-  }, () => {
-    if (locationsCache.get(key) === entry) locationsCache.delete(key);
+  };
+  if (!gzip) {
+    if (entry.raw) return send(entry.raw);
+    // la voce ha solo il gzip: lo decomprimo (se non riesce la tolgo e ricalcolo)
+    return gunzipAsync(entry.gzBuf).then(send, () => { cacheRemove(key); sendLocations(req, res, query); });
+  }
+  compress(entry).then(data => send(data, { 'Content-Encoding': 'gzip' }), () => {
+    // gzip non riuscito: la voce non resta in cache e rispondo non compresso
+    if (locationsCache.get(key) === entry) cacheRemove(key);
     entry.gz = null;
-    res.writeHead(200, headers);
-    res.end(entry.raw);
+    send(entry.raw);
   });
 }
 
@@ -316,7 +384,7 @@ http.createServer((req, res) => {
   if (url === '/api/vessel') return json(req, res, vessels.get(Number(query.get('mmsi'))) || null);
   if (url === '/api/search') return json(req, res, search(query.get('q') || ''));
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size,
-    locationsCache: { ...cacheStats, size: locationsCache.size } });
+    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes } });
   if (url === '/config.js') {
     // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });

@@ -151,6 +151,42 @@ test('un IMO con cifra di controllo sbagliata o di 8 cifre diventa null e non si
   assert.equal((await getJson('/api/vessel?mmsi=248000011')).imo, null, '8 cifre');
 });
 
+test('ETA: mese, giorno, ora e minuto devono essere interi ≥ 0', async () => {
+  const eta = async (mmsi, e) => {
+    await send({ MetaData: { MMSI: mmsi }, Message: { ShipStaticData: { Name: 'ETA', Eta: e } } });
+    return (await getJson('/api/vessel?mmsi=' + mmsi)).eta;
+  };
+  assert.equal(await eta(248000020, { Month: 1.5, Day: 3, Hour: 10, Minute: 0 }), null, 'mese 1,5');
+  assert.equal(await eta(248000021, { Month: 2, Day: 2.5, Hour: 10, Minute: 0 }), null, 'giorno 2,5');
+  assert.deepEqual(await eta(248000022, { Month: 3, Day: 4, Hour: -1, Minute: 30 }), { month: 3, day: 4, hour: null, minute: 30 }, 'ora -1');
+  assert.deepEqual(await eta(248000023, { Month: 3, Day: 4, Hour: 1.5, Minute: -2 }), { month: 3, day: 4, hour: null, minute: null }, 'ora 1,5 e minuto -2');
+  assert.deepEqual(await eta(248000024, { Month: 3, Day: 4, Hour: 0, Minute: 0 }), { month: 3, day: 4, hour: 0, minute: 0 }, 'mezzanotte');
+  assert.deepEqual(await eta(248000025, { Month: 3, Day: 4, Hour: '5', Minute: 7.5 }), { month: 3, day: 4, hour: null, minute: null }, 'non numeri interi');
+});
+
+test('IMO ai limiti: 1000007 e 9999993 validi, 1000000 e 9999999 no', async () => {
+  const imo = async n => {
+    await send({ MetaData: { MMSI: 248000030 }, Message: { ShipStaticData: { Name: 'LIMITI', ImoNumber: n } } });
+    return (await getJson('/api/vessel?mmsi=248000030')).imo;
+  };
+  assert.equal(await imo(1000007), 1000007);
+  assert.equal(await imo(9999993), 9999993);
+  assert.equal(await imo(1000000), null);
+  assert.equal(await imo(9999999), null);
+});
+
+test('StaticDataReport (classe B) non tocca IMO ed ETA', async () => {
+  await send({ MetaData: { MMSI: 248000040 }, Message: { ShipStaticData: { Name: 'CLASSE B', ImoNumber: 9074729,
+    Eta: { Month: 5, Day: 6, Hour: 7, Minute: 8 } } } });
+  await send({ MetaData: { MMSI: 248000040 }, Message: { StaticDataReport: { ReportA: { Name: 'CLASSE B NUOVO' },
+    ReportB: { CallSign: 'IXYZ', ShipType: 37 } } } });
+  const v = await getJson('/api/vessel?mmsi=248000040');
+  assert.equal(v.name, 'CLASSE B NUOVO');
+  assert.equal(v.callSign, 'IXYZ');
+  assert.equal(v.imo, 9074729);
+  assert.deepEqual(v.eta, { month: 5, day: 6, hour: 7, minute: 8 });
+});
+
 test('il filtro bbox gestisce anche l\'antimeridiano', async () => {
   await send(position(311000001, -17.5, 179.5));   // Figi, a est dell'antimeridiano
   await send(position(311000002, -17.5, -179.5));  // a ovest dell'antimeridiano

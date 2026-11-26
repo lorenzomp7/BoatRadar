@@ -46,13 +46,14 @@ async function startServer(env = {}, aisOptions = {}) {
   child.stderr.on('data', d => { log += d; });
 
   // agent: false = connessione diretta anche se l'ambiente del test ha NODE_USE_ENV_PROXY e un proxy
-  const get = (pathname, headers = {}) => new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path: pathname, headers, agent: false }, res => {
+  const request = (method, pathname, headers = {}) => new Promise((resolve, reject) => {
+    http.request({ method, host: '127.0.0.1', port, path: pathname, headers, agent: false }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
-    }).on('error', reject);
+    }).on('error', reject).end();
   });
+  const get = (pathname, headers = {}) => request('GET', pathname, headers);
   const getJson = async p => JSON.parse((await get(p)).body.toString('utf8'));
   const exited = new Promise(resolve => child.once('exit', resolve));
   const stop = async () => {
@@ -66,7 +67,7 @@ async function startServer(env = {}, aisOptions = {}) {
     const timeout = new Promise((_, reject) => setTimeout(() =>
       reject(new Error('timeout in attesa di: sottoscrizione al finto aisstream\n' + log)), 5000).unref());
     const { socket, subscription } = await Promise.race([connected, timeout]);
-    return { fakeAis, socket, subscription, get, getJson, log: () => log, stop };
+    return { fakeAis, socket, subscription, port, request, get, getJson, log: () => log, stop };
   } catch (err) {
     await stop();
     throw err;

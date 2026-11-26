@@ -48,3 +48,27 @@ test('dopo la conferma una PositionReport viene contata e la nave compare', asyn
     await waitFor(() => /arrivano i dati/.test(s.log()), 'log dei dati');
   } finally { await s.stop(); }
 });
+
+test('CompressionEnabled assente nella conferma = confirmed false', async () => {
+  const s = await startServer({}, { perMessageDeflate: true });
+  try {
+    s.socket.send(JSON.stringify({ MessageType: 'SubscriptionConfirmation', Message: {} }));
+    await waitFor(async () => (await s.getJson('/api/status')).compression?.confirmed === false, 'conferma ricevuta');
+    assert.deepEqual((await s.getJson('/api/status')).compression, { negotiated: true, confirmed: false });
+  } finally { await s.stop(); }
+});
+
+test('riconnessione: alla chiusura resta l\'ultimo valore, alla riapertura confirmed torna null', async () => {
+  const s = await startServer({}, { perMessageDeflate: true });
+  try {
+    s.socket.send(confirmation(true));
+    await waitFor(async () => (await s.getJson('/api/status')).compression?.confirmed === true, 'conferma ricevuta');
+    const reopened = new Promise(resolve => s.fakeAis.once('connection', ws => ws.once('message', () => resolve(ws))));
+    s.socket.close();
+    await waitFor(async () => (await s.getJson('/api/status')).connected === false, 'chiusura vista dal server');
+    assert.deepEqual((await s.getJson('/api/status')).compression, { negotiated: true, confirmed: true }, 'ultimo valore');
+    await reopened;
+    await waitFor(async () => (await s.getJson('/api/status')).connected === true, 'riconnesso');
+    assert.deepEqual((await s.getJson('/api/status')).compression, { negotiated: true, confirmed: null }, 'nuova connessione');
+  } finally { await s.stop(); }
+});
