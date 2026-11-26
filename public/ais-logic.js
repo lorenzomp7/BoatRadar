@@ -352,7 +352,93 @@
     return w <= e ? lon >= w && lon <= e : lon >= w || lon <= e;
   }
 
+  // Punto 9: filtri su tipo, stato di navigazione, velocità, ricezione recente e movimento. Gli stessi in /api/locations
+  // (parametri types, status, minSog, maxSog, seen, moving, applicati prima del campione) e nella pagina.
+  // Test in test/filtri-logica.test.js e test/filtri.test.js.
+  // Gruppi dello stato di navigazione AIS (0-15); 'other' prende 9-15, stato mancante o non valido e la classe B.
+  const NAV_GROUPS = [
+    { key: 'underway', label: 'In navigazione', codes: [0, 8] },
+    { key: 'anchor', label: 'All\'ancora', codes: [1] },
+    { key: 'moored', label: 'Ormeggiata', codes: [5] },
+    { key: 'fishing', label: 'In pesca', codes: [7] },
+    { key: 'limited', label: 'Manovra limitata o incagliata', codes: [2, 3, 4, 6] },
+    { key: 'other', label: 'Altro / non indicato', codes: [] },
+  ];
+  const navGroup = navStat => (NAV_GROUPS.find(g => g.codes.includes(navStat)) || NAV_GROUPS[NAV_GROUPS.length - 1]).key;
+
+  // Testo di un parametro (null, numero o stringa); qualunque altra cosa o un errore = ''
+  function paramText(x) {
+    if (x == null) return '';
+    if (typeof x === 'number') return String(x);
+    if (typeof x !== 'string') return '';
+    return x.trim();
+  }
+  // Numero decimale scritto per esteso (anche con esponente); '', esadecimale, Infinity, NaN, '5kn' = null
+  function decimal(x) {
+    const s = paramText(x);
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  // Chiavi valide fra quelle separate da virgola, nell'ordine di list e senza doppioni; nessuna o tutte = null
+  function keysOf(x, list) {
+    const asked = new Set(paramText(x).split(',').map(k => k.trim()));
+    const keys = list.map(t => t.key).filter(k => asked.has(k));
+    return keys.length && keys.length < list.length ? keys : null;
+  }
+  // Arrotondamento a 1/scale; + 0 trasforma -0 in 0
+  const roundTo = (n, scale) => Math.round(n * scale) / scale + 0;
+
+  // Filtro normalizzato dai parametri q = { types, status, minSog, maxSog, seen, moving } (stringhe, come da URL):
+  // { types, status, minSog, maxSog, seen, moving } con null = nessun vincolo, oppure null se nessun vincolo resta.
+  // types e status: chiavi di TYPES e NAV_GROUPS separate da virgola (sconosciute scartate, tutte = nessun vincolo);
+  // minSog e maxSog in nodi fra 0 e 102,2 arrotondati a 0,1 (minimo 0 = nessuno; minimo oltre il massimo = entrambi
+  // ignorati); seen in minuti, > 0 e ≤ 1440, arrotondato a 0,01; moving '1' = in moto, '0' = ferme. Mai eccezioni.
+  function parseFilter(q) {
+    if (!q || typeof q !== 'object') return null;
+    const sog = x => { const n = decimal(x); if (n === null) return null; const r = roundTo(n, 10); return r >= 0 && r <= 102.2 ? r : null; };
+    let minSog = sog(q.minSog), maxSog = sog(q.maxSog);
+    if (minSog === 0) minSog = null;
+    if (minSog !== null && maxSog !== null && minSog > maxSog) minSog = maxSog = null;
+    const seenN = decimal(q.seen), seenR = seenN === null ? null : roundTo(seenN, 100);
+    const mv = paramText(q.moving);
+    const f = { types: keysOf(q.types, TYPES), status: keysOf(q.status, NAV_GROUPS), minSog, maxSog,
+      seen: seenR > 0 && seenR <= 1440 ? seenR : null, moving: mv === '1' ? true : mv === '0' ? false : null };
+    return Object.values(f).some(v => v !== null) ? f : null;
+  }
+
+  // Forma canonica del filtro, solo i campi presenti in ordine fisso:
+  // 'types=cargo,tanker&status=moored&minSog=5&maxSog=20&seen=15&moving=1'; '' senza filtro.
+  // parseFilter dei suoi parametri restituisce lo stesso filtro (la usano la chiave della cache e localStorage).
+  function filterKey(f) {
+    if (!f) return '';
+    const parts = [];
+    if (f.types) parts.push('types=' + f.types.join(','));
+    if (f.status) parts.push('status=' + f.status.join(','));
+    for (const k of ['minSog', 'maxSog', 'seen']) if (f[k] != null) parts.push(`${k}=${f[k]}`);
+    if (f.moving != null) parts.push('moving=' + (f.moving ? 1 : 0));
+    return parts.join('&');
+  }
+
+  // true se la posizione p = { sog, navStat, ts } della nave v = { shipType } passa il filtro f all'ora now (ms).
+  // Velocità non nota (mancante o 102,3) non passa né minimo né massimo; seen: età ≤ seen minuti, ora non valida no;
+  // moving: in moto = non ferma (isStill del punto 8), così in moto e ferme dividono tutte le navi. f null = passa.
+  function passesFilter(p, v, f, now) {
+    if (!f) return true;
+    if (f.types && !f.types.includes(typeOf(v?.shipType).key)) return false;
+    if (f.status && !f.status.includes(navGroup(p.navStat))) return false;
+    if (f.minSog != null && !(validSog(p.sog) && p.sog >= f.minSog)) return false;
+    if (f.maxSog != null && !(validSog(p.sog) && p.sog <= f.maxSog)) return false;
+    if (f.seen != null && !(now - toMs(p.ts) <= f.seen * MIN_MS)) return false;
+    if (f.moving != null && isStill(p) === f.moving) return false;
+    return true;
+  }
+
+  // Quanti criteri sono attivi (per «· 2 attivi»): tipi, stato, velocità (da e a contano una volta), ricezione, movimento
+  const filterCount = f => !f ? 0 : [f.types, f.status, f.minSog ?? f.maxSog, f.seen, f.moving].filter(x => x != null).length;
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
-    KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox };
+    KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
+    NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount };
 });

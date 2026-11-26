@@ -10,7 +10,7 @@ const zlib = require('zlib');
 const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
 const { sampleByImportance, staticImportance } = require('./sample');
-const { DEFAULT_LIMITS, retentionMs } = require('./public/ais-logic');
+const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter } = require('./public/ais-logic');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -264,8 +264,10 @@ function inBox(box, p) {
 
 // Parametri di /api/locations, letti solo qui: gli stessi valori filtrano le navi e formano la chiave della
 // cache, quindi due richieste con la stessa chiave hanno la stessa risposta e i parametri sconosciuti non creano
-// voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui; nella chiave entrano bbox e limit, non
-// include, perché le richieste con include non passano dalla cache (vedi sendLocations).
+// voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui; nella chiave entrano bbox, limit e, solo se un
+// filtro è attivo, la sua forma canonica (filterKey); non include, perché le richieste con include non passano dalla
+// cache (vedi sendLocations) e ignorano i filtri. Senza filtro (o con soli filtri non validi) la chiave resta
+// `bbox=…&limit=…` come prima del punto 9.
 function locationsParams(query) {
   const box = roundBox(query.get('bbox')?.split(',').map(Number));
   // limit valido: intero da 1 a MAX_FEATURES; negativo, zero o non intero vale come il massimo
@@ -276,7 +278,13 @@ function locationsParams(query) {
   const parts = query.getAll('include').flatMap(v => v.split(',')).map(x => x.trim()).filter(Boolean);
   const include = parts.length
     ? [...new Set(parts.filter(x => /^\d{1,9}$/.test(x)).map(Number).filter(n => n > 0))].slice(0, MAX_INCLUDE) : null;
-  return { box, limit, include, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
+  // filtri (punto 9, parseFilter di public/ais-logic.js): types e status anche ripetuti (valori uniti); gli altri
+  // valgono solo se compaiono una volta. Non validi = nessun vincolo; nessun vincolo = filter null.
+  const one = name => { const all = query.getAll(name); return all.length === 1 ? all[0] : null; };
+  const filter = parseFilter({ types: query.getAll('types').join(','), status: query.getAll('status').join(','),
+    minSog: one('minSog'), maxSog: one('maxSog'), seen: one('seen'), moving: one('moving') });
+  return { box, limit, include, filter,
+    key: `bbox=${box ? box.join(',') : ''}&limit=${limit}${filter ? '&' + filterKey(filter) : ''}` };
 }
 
 // bbox arrotondato verso l'esterno, così viste quasi uguali (piccoli spostamenti della mappa) condividono la
@@ -304,16 +312,20 @@ function shipFeature(mmsi, p) {
       rot: p.rot ?? undefined, navStat: p.navStat, timestampExternal: p.ts } };
 }
 
-// Navi nel bbox con una posizione ancora valida (isLive: la pulizia periodica può non averle ancora tolte).
-// Restituisce la FeatureCollection (fc) e expires: l'ora in cui la prima di queste navi scade, cioè fino a quando
-// la risposta resta uguale a dati fermi (la usa la cache, vedi sendLocations).
-function locations({ box, limit }, now = Date.now()) {
+// Navi nel bbox con una posizione ancora valida (isLive: la pulizia periodica può non averle ancora tolte) che
+// passano il filtro (punto 9, prima del campione: con types=tanker a zoom mondo ci sono tutte le petroliere).
+// Restituisce la FeatureCollection (fc; total = navi nel bbox che passano) e expires: l'ora in cui la prima di queste
+// navi scade o, con seen, smette di essere recente, cioè fino a quando la risposta resta uguale a dati fermi (la usa
+// la cache, vedi sendLocations). Gli altri criteri dipendono solo dai dati: cambiano con dataVersion.
+function locations({ box, limit, filter }, now = Date.now()) {
   const hits = [];
   let expires = Infinity;
+  const seenMs = filter?.seen != null ? filter.seen * 60000 : Infinity;
   for (const [mmsi, p] of positions) {
     if (!inBox(box, p)) continue;
-    const end = expiresAt(p);
+    const end = Math.min(expiresAt(p), p.ts + seenMs);
     if (now > end) continue;
+    if (filter && !passesFilter(p, vessels.get(mmsi), filter, now)) continue;
     hits.push([mmsi, p]);
     if (end < expires) expires = end;
   }

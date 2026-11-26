@@ -5,7 +5,10 @@
 // `node --cpu-prof` / `--heap-prof` (e flameox, che li usa) profilano proprio server.js.
 //
 //   node tools/carico.js [--navi 30000] [--richieste 100] [--json risultato.json] [--registra "etichetta"]
+//                        [--filtro "types=tanker"]
 //
+// --filtro aggiunge una terza misura: la vista mondo con quei parametri di filtro (punto 9), solo stampata e nel JSON
+// (la riga di --registra resta quella delle viste senza filtro).
 // --registra aggiunge una riga alla tabella di docs/prestazioni.md. Le navi sono generate con un seme
 // fisso: due misure con gli stessi parametri usano gli stessi dati. Procedura in docs/prestazioni.md.
 'use strict';
@@ -27,13 +30,14 @@ const WORLD_BBOX = '-180,-90,180,90';                  // vista mondo, come la p
 const TYPES = [70, 70, 70, 80, 80, 60, 30, 37, 52, 0];
 
 function args(argv) {
-  const o = { navi: 30000, richieste: 100, json: null, registra: null };
+  const o = { navi: 30000, richieste: 100, json: null, registra: null, filtro: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i].replace(/^--/, '');
     if (!(k in o)) throw new Error(`opzione sconosciuta: ${argv[i]}`);
     o[k] = ['navi', 'richieste'].includes(k) ? Number(argv[++i]) : argv[++i];
   }
   if (!(o.navi > 0) || !(o.richieste > 0)) throw new Error('--navi e --richieste devono essere numeri positivi');
+  if (o.filtro !== null && !o.filtro) throw new Error('--filtro vuole i parametri, es. --filtro "types=tanker"');
   return o;
 }
 
@@ -154,6 +158,7 @@ async function main(argv) {
     mondo: await view(port, WORLD_BBOX, o.richieste),
     porto: await view(port, PORT_BBOX, o.richieste),
   };
+  if (o.filtro) res.mondoFiltrata = { filtro: o.filtro, ...await view(port, `${WORLD_BBOX}&${o.filtro}`, o.richieste) };
   console.log = log;
   const w = res.mondo, p = res.porto;
   console.log([
@@ -162,6 +167,9 @@ async function main(argv) {
     `Vista mondo: ${w.navi} navi su ${w.totale}, ${w.kbGzip} KB gzip (${w.kb} KB), ${w.msMediana} ms mediana, ${w.msP95} ms p95`,
     `Vista porto: ${p.navi} navi su ${p.totale}, ${p.kbGzip} KB gzip (${p.kb} KB), ${p.msMediana} ms mediana, ${p.msP95} ms p95`,
   ].join('\n'));
+  const f = res.mondoFiltrata;
+  if (f) console.log(`Vista mondo filtrata (${f.filtro}): ${f.navi} navi su ${f.totale}, ${f.kbGzip} KB gzip (${f.kb} KB), ` +
+    `${f.msMediana} ms mediana, ${f.msP95} ms p95`);
   if (o.json) fs.writeFileSync(o.json, JSON.stringify(res, null, 1) + '\n');
   if (o.registra) { appendRow(o.registra, res); console.log('Riga aggiunta a docs/prestazioni.md'); }
   return res;

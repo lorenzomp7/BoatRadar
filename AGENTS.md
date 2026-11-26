@@ -15,7 +15,8 @@ Lavora su `main_claude` salvo indicazione diversa.
 - `server.js`: connessione aisstream.io (riconnessione, backoff che torna a 1 s solo con un vero
   messaggio AIS, 429), stato in
   memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione per importanza con `limit` (`sample.js`), in cache; con
-  `include=mmsi,…`, al massimo 50, solo quelle navi, fuori dalla cache),
+  `include=mmsi,…`, al massimo 50, solo quelle navi, fuori dalla cache; filtri del punto 9 `types`, `status`, `minSog`,
+  `maxSog`, `seen`, `moving` applicati prima del campione, con `parseFilter`/`passesFilter` di `public/ais-logic.js`),
   `/api/vessel`, `/api/search`, `/api/status`. Conservazione (punto 8): posizioni di navi in moto 30 min, ferme
   (`isStill`) 6 h (`STALE_MOVING_MS`, `STALE_STILL_MS`, `limits` effettivi in `/api/status`, usati anche dalla pagina
   per le navi del server); le risposte escludono le scadute
@@ -31,9 +32,10 @@ Lavora su `main_claude` salvo indicazione diversa.
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
-- `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale, età della posizione…), modulo UMD
-  (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js`. server.js lo
-  usa per i limiti di conservazione (`retentionMs`) e lo serve da un elenco fisso; va nella `COPY` del `Dockerfile` e in `pages.yml`, che nella pagina pubblicata
+- `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale, età della posizione, filtri…), modulo UMD
+  (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js` (filtri: `test/filtri-logica.test.js`).
+  server.js lo usa per i limiti di conservazione (`retentionMs`) e i filtri (`parseFilter`, `filterKey`, `passesFilter`)
+  e lo serve da un elenco fisso; va nella `COPY` del `Dockerfile` e in `pages.yml`, che nella pagina pubblicata
   aggiunge `?v=<commit>` allo script contro la cache (lo controlla un test).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili

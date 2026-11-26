@@ -18,6 +18,9 @@ test('le navi sintetiche sono sempre le stesse e hanno coordinate valide', () =>
 test('opzioni non valide vengono rifiutate', () => {
   assert.throws(() => args(['--navi', '0']), /positivi/);
   assert.throws(() => args(['--boh', '1']), /sconosciuta/);
+  assert.throws(() => args(['--filtro']), /--filtro/);
+  assert.equal(args(['--filtro', 'types=tanker']).filtro, 'types=tanker');
+  assert.equal(args([]).filtro, null);
 });
 
 // senza variabili di proxy: la misura non deve dipendere dalla macchina che esegue i test
@@ -35,4 +38,14 @@ test('una piccola misura reale termina e riporta memoria e viste', async () => {
   assert.match(out, /MB ogni 1000 navi/);
   assert.match(out, /Vista mondo: 300 navi su 300/);
   assert.match(out, /Vista porto: \d+ navi/);
+  assert.doesNotMatch(out, /filtrata/, 'senza --filtro nessuna vista filtrata');
+});
+
+test('con --filtro stampa anche la vista mondo filtrata (punto 9)', async () => {
+  const out = await new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--filtro', 'types=tanker'],
+    { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
+  assert.match(out, /Vista mondo: 300 navi su 300/);
+  // TYPES di carico.js: 2 petroliere (tipo 80) ogni 10 navi
+  assert.match(out, /Vista mondo filtrata \(types=tanker\): 60 navi su 60,/);
 });
