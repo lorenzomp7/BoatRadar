@@ -3,7 +3,8 @@
 # Avvia server.js con i messaggi di test (tools/smoke-server.js, senza chiave né rete), apre la pagina
 # a larghezza desktop (1280×800) e telefono (390×844) e controlla che:
 #   1. compaiano le navi;
-#   2. un clic del mouse su una nave apra la scheda con il suo MMSI;
+#   2. un clic del mouse su una nave apra la scheda con il suo MMSI, e un clic vero sulla × (almeno 44×44 px)
+#      o Esc la chiudano, lasciando il focus su un elemento visibile;
 #   3. la pagina non abbia errori JavaScript né messaggi console.error.
 # Esce con 0 se tutto va bene, con 1 al primo controllo fallito. Screenshot in diagnosi/smoke/.
 #
@@ -101,6 +102,44 @@ check() {
     || { "${AB[@]}" screenshot "$OUT/$name-errore.png" >/dev/null || true; fail "$name: il clic sulla nave $mmsi non apre la scheda (screenshot in $OUT/)"; }
   ok "$name: il clic sulla nave $mmsi apre la scheda ($(js "document.querySelector('#content h2')?.textContent || ''"))"
   "${AB[@]}" screenshot "$OUT/$name.png" >/dev/null
+
+  # × della scheda: almeno 44×44 px, raggiungibile con un clic vero anche con una riga di stato lunga
+  # (l'header non deve coprirla), e dopo la chiusura il focus resta su un elemento visibile
+  local size
+  size=$(js "(() => { const r = document.getElementById('close').getBoundingClientRect();
+    return Math.round(r.width) + 'x' + Math.round(r.height); })()" | tr -d '"')
+  [ "${size%x*}" -ge 44 ] && [ "${size#*x}" -ge 44 ] || fail "$name: la × è $size px, meno di 44×44"
+  local close
+  close=$(js "(() => { const r = document.getElementById('close').getBoundingClientRect();
+    return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')
+  local hit
+  hit=$(js "(() => { const [x, y] = '$close'.split(' ').map(Number), e = document.elementFromPoint(x, y);
+    return e ? (e.id || e.tagName) + (e.closest('header') ? ' (header)' : '') : 'niente'; })()" | tr -d '"')
+  [ "$hit" = close ] || { "${AB[@]}" screenshot "$OUT/$name-chiudi-errore.png" >/dev/null || true
+    fail "$name: sopra la × ($close) c'è $hit · stato: $(js "document.getElementById('status').textContent") (screenshot in $OUT/)"; }
+  "${AB[@]}" mouse move $close >/dev/null
+  "${AB[@]}" mouse down >/dev/null
+  "${AB[@]}" mouse up >/dev/null
+  # scheda chiusa dalla ×, non nascosta dal passaggio alla mappa VesselFinder (body.vf)
+  "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none' && !document.body.classList.contains('vf')" >/dev/null \
+    || { "${AB[@]}" screenshot "$OUT/$name-chiudi-errore.png" >/dev/null || true
+         fail "$name: il clic sulla × ($close) non chiude la scheda: sotto il puntatore c'è $hit · stato: $(js "document.getElementById('status').textContent") (screenshot in $OUT/)"; }
+  local focus
+  focus=$(js "(() => { const a = document.activeElement;
+    return a && a !== document.body && a.getClientRects().length > 0 ? (a.id || a.tagName) : ''; })()" | tr -d '"')
+  [ -n "$focus" ] || fail "$name: dopo la × il focus non è su un elemento visibile"
+  ok "$name: la × ($size px) si chiude con un clic vero, focus su #$focus · stato: $(js "document.getElementById('status').textContent.length") caratteri"
+
+  # Esc chiude la scheda
+  "${AB[@]}" mouse move $point >/dev/null
+  "${AB[@]}" mouse down >/dev/null
+  "${AB[@]}" mouse up >/dev/null
+  "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none'" >/dev/null \
+    || fail "$name: la scheda non si riapre con un secondo clic sulla nave"
+  "${AB[@]}" press Escape >/dev/null
+  "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none'" >/dev/null \
+    || fail "$name: Esc non chiude la scheda"
+  ok "$name: Esc chiude la scheda"
 
   # errori JavaScript e console.error (i warning, come Digitraffic non raggiungibile, non contano)
   local problems

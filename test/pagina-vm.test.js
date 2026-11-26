@@ -1,6 +1,7 @@
 // Comportamento della pagina (boatradar.html) senza browser: esegue lo script della pagina e public/ais-logic.js
 // in un contesto vm con Leaflet, DOM, fetch e orologio finti. Copre le richieste di posizioni (vista in cache,
-// include= della nave selezionata, la × che la toglie) e la prima richiesta al Baltico con l'orologio sbagliato.
+// include= della nave selezionata, la × e Esc che la tolgono, focus dopo la chiusura), la prima richiesta al
+// Baltico con l'orologio sbagliato, il bordo della nave selezionata, simboli e tooltip.
 // La verifica nel browser vero resta tools/smoke-browser.sh. Esegui con: npm test
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -28,10 +29,23 @@ const feature = (mmsi, lon, lat, ts) => ({ type: 'Feature', mmsi, geometry: { ty
 // Restituisce il contesto, il registro delle richieste ({ url, at, phoneAt }) e funzioni di comodo.
 function startPage({ skewMs = 0, routes }) {
   const elements = new Map();
+  const classes = new Set();
+  const keydown = [];
+  // elemento visibile = senza display:none (basta per la × e per il focus dopo la chiusura)
+  const document = { activeElement: null, getElementById: id => el(id),
+    body: { classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c),
+      toggle: (c, on = !classes.has(c)) => (on ? classes.add(c) : classes.delete(c), on) } },
+    addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); } };
+  document.activeElement = document.body;
   const el = id => {
     if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
-      addEventListener() {}, focus() {} });
+      isConnected: true, addEventListener() {}, focus() { document.activeElement = this; },
+      getClientRects() { return this.style.display === 'none' ? [] : [{}]; } });
     return elements.get(id);
+  };
+  const press = (key, target = document.activeElement) => {
+    const e = { key, target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    for (const fn of keydown) fn(e);
   };
   const requests = [];
   class PhoneDate extends Date {
@@ -61,7 +75,7 @@ function startPage({ skewMs = 0, routes }) {
   };
   const ctx = vm.createContext({
     console, URLSearchParams, Promise, Map, Set, Math, JSON, Number, String, Array, Object, Error,
-    Date: PhoneDate, fetch, L, document: { getElementById: el },
+    Date: PhoneDate, fetch, L, document,
     setTimeout: (fn, ms, ...a) => setTimeout(fn, (ms || 0) / TIME_SCALE, ...a), clearTimeout,
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
     ResizeObserver: class { observe() {} }, matchMedia: () => ({ matches: false }),
@@ -71,7 +85,7 @@ function startPage({ skewMs = 0, routes }) {
   vm.runInContext(logicScript, ctx);
   vm.runInContext(pageScript, ctx);
   const get = expr => vm.runInContext(expr, ctx);
-  return { ctx, el, requests, get, tick: () => ctx.tick(), markers: () => get('markers'),
+  return { ctx, el, document, press, bodyClasses: classes, requests, get, tick: () => ctx.tick(), markers: () => get('markers'),
     firstTickDone: () => until(() => el('status').textContent.includes('in mappa'), 'primo aggiornamento') };
 }
 
@@ -93,10 +107,39 @@ test('pagina: con l\'orologio del telefono avanti di 5 min la prima richiesta al
   assert.ok(Math.abs(err) < 1000, `from = ora vera − finestra (scarto ${err} ms; senza correzione sarebbe ${skewMs})`);
   const status = page.requests.find(r => r.url === '/api/status');
   assert.ok(status.at <= baltic.at - 15, 'il primo giro aspetta /api/status prima di chiedere il Baltico');
+  const view = page.requests.find(r => isView(r.url));
+  assert.ok(view.at - status.at < 10, `la vista parte subito, senza aspettare /api/status (scarto ${view.at - status.at} ms)`);
+  // ora di aggiornamento nella riga di stato: quella vera, non quella del telefono (5 minuti avanti)
+  const hhmm = t => new Date(t).toLocaleTimeString('it-IT').slice(0, 5);
+  const shown = page.el('status').textContent.match(/agg\. (\d\d:\d\d)/)[1];
+  assert.ok([hhmm(Date.now()), hhmm(Date.now() - 2000)].includes(shown), `ora mostrata ${shown}, vera ${hhmm(Date.now())}`);
+  assert.notEqual(shown, hhmm(Date.now() + skewMs), 'non l\'ora del telefono');
+});
+
+test('pagina: un tick() durante l\'attesa del primo /api/status non chiede il Baltico con l\'ora del telefono (punto 43)', async () => {
+  const skewMs = 5 * 60 * 1000;
+  const page = startPage({ skewMs, routes: url => {
+    if (url === '/api/status') return { delay: 150, body: () => ({ hasKey: true, connected: true, vessels: 0, serverTime: Date.now() }) };
+    if (url.endsWith('/vessels')) return { body: [] };
+    if (url.includes('/locations')) return { body: { type: 'FeatureCollection', features: [] } };
+  } });
+  await until(() => page.requests.some(r => isView(r.url)), 'primo giro avviato');
+  await sleep(30);
+  const second = page.tick();   // es. la mappa spostata subito dopo l'apertura
+  await until(() => page.requests.filter(r => isView(r.url)).length === 2, 'vista del secondo giro');
+  assert.equal(page.requests.some(r => r.url.includes('/locations?from=')), false, 'nessuna richiesta al Baltico prima dell\'ora vera');
+  await page.firstTickDone();
+  await second;
+  const baltic = page.requests.filter(r => r.url.includes('/locations?from='));
+  assert.equal(baltic.length, 2, 'una richiesta al Baltico per giro');
+  for (const b of baltic) {
+    const err = fromOf(b.url) - (b.at - WINDOW_MS);
+    assert.ok(Math.abs(err) < 1000, `from con l'ora vera (scarto ${err} ms; con l'ora del telefono ${skewMs})`);
+  }
 });
 
 test('pagina: se /api/status non risponde, il primo giro aspetta al massimo 3 s; poi le richieste partono insieme', async () => {
-  let statusDelay = 2000;   // più di CLOCK_WAIT_MS / TIME_SCALE = 300 ms
+  let statusDelay = 700;   // più di CLOCK_WAIT_MS / TIME_SCALE = 300 ms
   const page = startPage({ skewMs: 5 * 60 * 1000, routes: url => {
     if (url === '/api/status') return { delay: statusDelay, body: () => ({ hasKey: true, connected: true, vessels: 0, serverTime: Date.now() }) };
     if (url.endsWith('/vessels')) return { body: [] };
@@ -106,7 +149,8 @@ test('pagina: se /api/status non risponde, il primo giro aspetta al massimo 3 s;
   const status = page.requests.find(r => r.url === '/api/status');
   const baltic = page.requests.find(r => r.url.includes('/locations?from='));
   const waited = baltic.at - status.at;
-  assert.ok(waited >= 250 && waited < 1000, `attesa ${waited} ms: limitata a CLOCK_WAIT_MS (scalato a 300 ms)`);
+  assert.ok(waited >= 250 && waited < 600, `attesa ${waited} ms: limitata a CLOCK_WAIT_MS (scalato a 300 ms), non i 700 ms di /api/status`);
+  assert.ok(page.requests.find(r => isView(r.url)).at - status.at < 10, 'la vista non aspetta /api/status');
   await page.firstTickDone();
   // secondo giro: nessuna attesa, stato e posizioni partono insieme
   statusDelay = 200;
@@ -126,13 +170,13 @@ test('pagina: se /api/status non risponde, il primo giro aspetta al massimo 3 s;
 
 test('pagina: include= solo con una nave selezionata e la scheda aperta; la nave resta in mappa lontano dalla vista; la × la toglie', async () => {
   const A = 247600001, B = 247600002;   // A nella vista, B lontana
-  let viewFeatures = [feature(A, 11, 44, 1000)], incFeatures = [feature(B, -40, -30, 1000)];
+  let viewFeatures = [feature(A, 11, 44, 1000)], incFeatures = [feature(B, -40, -30, 1000)], incFails = false;
   const page = startPage({ routes: url => {
     if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 2, serverTime: Date.now() }) };
     if (url.endsWith('/vessels')) return { body: [] };
     if (url.startsWith('/api/vessel')) return { body: null };
     if (isView(url)) return { body: () => ({ type: 'FeatureCollection', total: 1234, features: viewFeatures }) };
-    if (isInclude(url)) return { body: () => ({ type: 'FeatureCollection', total: incFeatures.length, features: incFeatures }) };
+    if (isInclude(url)) return incFails ? undefined : { body: () => ({ type: 'FeatureCollection', total: incFeatures.length, features: incFeatures }) };
     if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
   } });
   await page.firstTickDone();
@@ -151,6 +195,9 @@ test('pagina: include= solo con una nave selezionata e la scheda aperta; la nave
   assert.deepEqual([...page.markers().keys()].sort(), [A, B], 'la nave selezionata è in mappa anche fuori dalla vista');
   assert.deepEqual([...page.markers().get(B).marker.latlng], [-30, -40]);
   assert.equal(page.get('worldTotal'), 1234, 'total di include non sostituisce quello della vista');
+  // marker creato mentre la nave è selezionata: nasce già con il bordo giallo (punto 1 delle correzioni)
+  assert.deepEqual([page.markers().get(B).marker.options.color, page.markers().get(B).marker.options.radius,
+    page.markers().get(B).marker.options.weight], ['#ffc83d', 8, 3], 'bordo giallo dalla creazione');
 
   // la stessa nave nella vista (dalla cache, più vecchia) e in include (più recente): vince la più recente
   viewFeatures = [feature(A, 11, 44, 1000), feature(B, -40, -30, 1000)];
@@ -162,15 +209,30 @@ test('pagina: include= solo con una nave selezionata e la scheda aperta; la nave
   assert.deepEqual([...page.markers().get(B).marker.latlng], [-32, -42], 'la vista vince se è lei la più recente');
   viewFeatures = [feature(A, 11, 44, 1000)];
   incFeatures = [feature(B, -42, -32, 3000)];
-
-  // bordo giallo sulla nave selezionata, poi la ×
-  page.ctx.select(B);
+  await page.tick();
+  // posizione più vecchia di quella in mappa: il marker resta dov'è
+  incFeatures = [feature(B, -50, -40, 2500)];
+  await page.tick();
+  assert.deepEqual([...page.markers().get(B).marker.latlng], [-32, -42], 'una posizione più vecchia non sposta il marker');
+  // solo la richiesta include fallisce: la nave selezionata resta in mappa, con il bordo giallo
+  incFails = true;
+  await page.tick();
+  assert.ok(page.markers().has(B), 'include fallito: la nave selezionata non sparisce');
+  assert.equal(page.markers().get(B).marker.removed, false);
   assert.equal(page.markers().get(B).marker.options.color, '#ffc83d');
+  incFails = false;
+  // riga «Prua» nella scheda, aggiornata a ogni giro
+  incFeatures = [{ ...feature(B, -42, -32, 4000), properties: { mmsi: B, sog: 5, cog: 90, heading: 45, timestampExternal: 4000 } }];
+  await page.tick();
+  assert.match(page.el('content').innerHTML + page.el('facts').innerHTML, /<td>Prua<\/td><td>45°<\/td>/);
+
+  // la ×: bordo tolto, scheda chiusa, focus sul campo di ricerca (la scheda era stata aperta da codice)
   page.el('close').onclick();
   assert.equal(page.get('selected'), null, 'la × azzera selected');
   assert.equal(page.el('panel').style.display, 'none');
   assert.deepEqual([page.markers().get(B).marker.options.color, page.markers().get(B).marker.options.radius], ['#0b1118', 4],
     'la × toglie il bordo giallo');
+  assert.equal(page.document.activeElement, page.el('q'), 'dopo la × il focus va sul campo di ricerca');
   n = page.requests.length;
   await page.tick();
   assert.equal(page.requests.slice(n).some(r => r.url.includes('include')), false, 'dopo la × niente include');
@@ -184,18 +246,69 @@ test('pagina: include= solo con una nave selezionata e la scheda aperta; la nave
   assert.equal(page.requests.slice(n).some(r => r.url.includes('include')), false, 'scheda chiusa: niente include');
 });
 
+test('pagina: Esc chiude la scheda (non dalla ricerca con i risultati aperti); focus dove si era aperta', async () => {
+  const A = 247600021;
+  const page = startPage({ routes: url => {
+    if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 1, serverTime: Date.now() }) };
+    if (url.endsWith('/vessels')) return { body: [] };
+    if (url.startsWith('/api/vessel')) return { body: null };
+    if (isView(url)) return { body: { type: 'FeatureCollection', total: 1, features: [feature(A, 11, 44, 1000)] } };
+    if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
+  } });
+  await page.firstTickDone();
+  const open = () => page.el('panel').style.display === 'block';
+
+  // scheda aperta dal pulsante «Registri»: Esc la chiude e il focus torna sul pulsante
+  page.el('registries').focus();
+  page.el('registries').onclick();
+  assert.ok(open());
+  assert.ok(page.bodyClasses.has('panel-open'), 'classe per tenere l\'header fuori dalla scheda');
+  page.press('Escape');
+  assert.equal(open(), false, 'Esc chiude la scheda');
+  assert.equal(page.bodyClasses.has('panel-open'), false);
+  assert.equal(page.document.activeElement, page.el('registries'), 'focus sul punto da cui si era aperta');
+
+  // Esc nel campo di ricerca con i risultati aperti: chiude i risultati, non la scheda
+  // nave scelta dalla ricerca: il focus è nel campo
+  page.el('q').focus();
+  page.ctx.select(A);
+  page.el('results').style.display = 'block';
+  page.press('Escape');
+  assert.equal(page.el('results').style.display, 'none', 'Esc chiude i risultati della ricerca');
+  assert.ok(open(), 'la scheda resta aperta');
+  assert.equal(page.get('selected'), A);
+  page.press('Escape');
+  assert.equal(open(), false, 'secondo Esc: chiude la scheda');
+  assert.equal(page.get('selected'), null);
+  assert.equal(page.document.activeElement, page.el('q'), 'focus di nuovo sul campo di ricerca');
+  // scheda chiusa: Esc non fa nulla; altri tasti ignorati
+  page.press('Escape');
+  page.ctx.select(A);
+  page.press('Enter');
+  assert.ok(open(), 'Invio non chiude la scheda');
+});
+
 test('pagina: tooltip con «ferma» per le navi ferme', async () => {
   const S = 247600010, M = 247600011;
+  let features = [
+    { ...feature(S, 11, 44, 1000), properties: { mmsi: S, name: 'FERMA', sog: 0, heading: 90, timestampExternal: 1000 } },
+    { ...feature(M, 11.5, 44, 1000), properties: { mmsi: M, name: 'IN MOTO', sog: 12, cog: 90, timestampExternal: 1000 } }];
   const page = startPage({ routes: url => {
     if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 2, serverTime: Date.now() }) };
     if (url.endsWith('/vessels')) return { body: [] };
-    if (isView(url)) return { body: { type: 'FeatureCollection', total: 2, features: [
-      { ...feature(S, 11, 44, 1000), properties: { mmsi: S, name: 'FERMA', sog: 0, heading: 90, timestampExternal: 1000 } },
-      { ...feature(M, 11.5, 44, 1000), properties: { mmsi: M, name: 'IN MOTO', sog: 12, cog: 90, timestampExternal: 1000 } }] } };
+    if (isView(url)) return { body: () => ({ type: 'FeatureCollection', total: 2, features }) };
     if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
   } });
   await page.firstTickDone();
   assert.equal(page.markers().get(S).marker.tooltip(), 'FERMA · ferma');
   assert.equal(page.markers().get(M).marker.tooltip(), 'IN MOTO');
   assert.equal(page.markers().get(S).marker.options.short, true, 'freccia corta');
+  assert.equal(page.markers().get(M).marker.options.heading, 90);
+  // giro dopo: la nave ferma riparte, quella in moto perde rotta e prua → setSymbol aggiorna il simbolo
+  features = [{ ...feature(S, 11, 44, 2000), properties: { mmsi: S, sog: 8, heading: 90, timestampExternal: 2000 } },
+    { ...feature(M, 11.5, 44, 2000), properties: { mmsi: M, sog: 0, timestampExternal: 2000 } }];
+  await page.tick();
+  assert.deepEqual([page.markers().get(S).marker.options.short, page.markers().get(S).marker.options.heading], [false, 90]);
+  assert.equal(page.markers().get(M).marker.options.heading, null, 'pallino');
+  assert.equal(page.markers().get(M).marker.tooltip(), 'IN MOTO · ferma');
 });

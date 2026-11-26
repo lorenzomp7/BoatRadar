@@ -244,11 +244,6 @@ test('isNewer: confronta gli orari come toMs (usato dalla pagina per non far tor
   assert.equal(AL.isNewer(undefined, undefined), false);
 });
 
-test('boatradar.html non sposta un marker su una posizione più vecchia di quella che mostra', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  assert.match(html, /isNewer\(m\.props\?\.timestampExternal, f\.properties\.timestampExternal\)/);
-});
-
 test('mergeFeatures: duplicati nello stesso gruppo, vince il più recente; a parità il primo', () => {
   const m = AL.mergeFeatures([{ source: 'aisstream', features: [feat(1, 1000, [10, 60]), feat(1, 3000, [11, 60]), feat(1, 2000, [12, 60])] }]);
   assert.deepEqual(m.get(1).geometry.coordinates, [11, 60]);
@@ -337,13 +332,10 @@ test('createClock.add ignora campioni con rtt negativo o non finito (punto 7)', 
   assert.equal(c.offset(), 150, 'rtt 0 è valido');
 });
 
-test('boatradar.html: età e finestre con clock.now(); Date.now() solo per misurare /api/status', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  const code = html.split('<script src="public/ais-logic.js"></script>')[1];
-  assert.match(code, /const clock = createClock\(\)/);
-  assert.match(code, /clock\.add\(clockSample\(/);
-  assert.match(code, /from=\$\{clock\.now\(\) - WINDOW_MS\}/, 'finestra del Baltico con l\'ora corretta');
-  assert.match(code, /new Date\(clock\.now\(\)\)\.toLocaleTimeString/, 'ora di aggiornamento con l\'ora corretta');
+// Il comportamento (from= del Baltico e ora nella riga di stato con l'ora vera) è in test/pagina-vm.test.js;
+// qui resta solo la regola sul sorgente, che vale anche per codice nuovo non ancora coperto da quel test
+test('boatradar.html: nessun new Date() senza argomenti; Date.now() solo per misurare /api/status', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8').split('<script src="public/ais-logic.js"></script>')[1];
   assert.doesNotMatch(code, /new Date\(\)/, 'nessun new Date() senza argomenti (ora del telefono)');
   const uses = [...code.matchAll(/Date\.now\(\)/g)].length;
   assert.equal(uses, 2, 'Date.now() solo per t0 e t1 della misura di /api/status');
@@ -374,13 +366,6 @@ test('symbol: freccia corta per le navi ferme con prua, normale in moto, pallino
   assert.deepEqual(AL.symbol({}), { heading: null, short: false });
 });
 
-test('boatradar.html: simbolo da symbol(), freccia corta e riga «Prua» nella scheda', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  assert.match(html, /symbol\(f\.properties\)/);
-  assert.match(html, /options\.short/);
-  assert.match(html, /row\('Prua'/);
-});
-
 // --- Punto 3: nave selezionata sempre in mappa ---------------------------------------------------------
 test('includeParam: MMSI interi > 0, senza doppioni, al massimo 50, nell\'ordine dato', () => {
   assert.equal(AL.includeParam([null]), '');
@@ -398,59 +383,21 @@ test('includeParam: ingresso non array → stringa vuota (punto 7)', () => {
     assert.equal(AL.includeParam(bad), '', String(bad));
 });
 
-// --- Correzioni 43/5/3: richieste della pagina ------------------------------------------------------------
-const pageCode = () => fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8').split('<script src="public/ais-logic.js"></script>')[1];
-
-test('boatradar.html: vista senza include (in cache) e include solo per la nave selezionata con la scheda aperta', () => {
-  const code = pageCode();
-  assert.match(code, /features\(`\$\{API\}\/locations\?bbox=\$\{viewBox\(\)\}`/, 'la richiesta della vista non ha include');
-  assert.match(code, /const ship = selected && \$\('panel'\)\.style\.display === 'block' \? includeParam\(\[selected\]\) : '';/,
-    'include solo con una nave selezionata e la scheda aperta');
-  assert.match(code, /ship \? features\(`\$\{API\}\/locations\?\$\{ship\}`\) : \[\]/, 'richiesta separata con solo include=, nello stesso allSettled');
-  assert.match(code, /mergeFeatures\(\[\{ source: 'digitraffic'[^\n]*\{ source: 'aisstream', features: med\.value \}, \{ source: 'aisstream', features: inc\.value \}\]\)/,
-    'la nave inclusa entra in mergeFeatures dopo la vista (vince se più recente)');
-});
-
-test('boatradar.html: la × azzera selected e il bordo giallo (punto 2)', () => {
-  const code = pageCode();
-  const close = code.match(/\$\('close'\)\.onclick = \(\) => \{([^\n]*)\};/);
-  assert.ok(close, 'gestore della ×');
-  assert.match(close[1], /deselect\(\)/);
-  const deselect = code.match(/function deselect\(\) \{([\s\S]*?)\n\}/);
-  assert.ok(deselect, 'function deselect');
-  assert.match(deselect[1], /setStyle\(\{ radius:4, color:'#0b1118', weight:1 \}\)/, 'toglie il bordo giallo');
-  assert.match(deselect[1], /selected = null/);
-  assert.match(fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8'), /<button id="close" aria-label="Chiudi la scheda"/,
-    'la × ha un nome per i lettori di schermo');
-});
-
-test('boatradar.html: setSymbol aggiorna il simbolo dei marker, niente Object.assign sulle options (punto 5)', () => {
-  const code = pageCode();
-  assert.match(code, /m\.marker\.setSymbol\(symbol\(f\.properties\)\)/);
-  assert.doesNotMatch(code, /Object\.assign\(m\.marker\.options/);
-});
-
-test('boatradar.html: legenda dei simboli raggiungibile anche su telefono e «ferma» nel tooltip (punto 6)', () => {
+// Marcatura della pagina (il comportamento è in test/pagina-vm.test.js)
+test('boatradar.html: legenda dei simboli (anche su telefono), separatore e nome della × (punto 6)', () => {
   const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  for (const t of ['freccia = in moto', 'freccia corta = ferma con prua nota', 'pallino = direzione non nota'])
+  for (const t of ['freccia = in moto', 'freccia corta = ferma o velocità non nota, prua nota', 'pallino = direzione non nota'])
     assert.ok(html.includes(t), t);
-  assert.match(html, /<details id="legend"[^>]*>\s*<summary>Legenda<\/summary>/, 'legenda apribile (anche da tastiera)');
+  assert.match(html, /<details id="legend"[^>]*>\s*<summary>Legenda<\/summary>\s*<div id="legend-types"><\/div>\s*(<!--[\s\S]*?-->\s*)?<div class="sym">/,
+    'legenda apribile (anche da tastiera), simboli subito dopo i tipi');
+  assert.match(html, /#legend-types \+ \.sym \{ border-top:/, 'separatore fra tipi e simboli');
   const mobile = html.slice(html.indexOf('@media (max-width: 640px)'));
   assert.doesNotMatch(mobile.slice(0, mobile.indexOf('</style>')), /#legend \{ display:none/, 'su telefono non è nascosta');
-  assert.match(pageCode(), /stopped\(/, 'tooltip con «ferma»');
+  assert.match(html, /<button id="close" aria-label="Chiudi la scheda"/, 'la × ha un nome per i lettori di schermo');
 });
 
 test('stopped: ferma solo con velocità nota fino a 0,5 kn', () => {
   for (const sog of [0, 0.3, 0.5]) assert.equal(AL.stopped({ sog }), true, String(sog));
   for (const sog of [0.6, 10, 102.3, 102.2, -1, null, undefined, NaN, '0']) assert.equal(AL.stopped({ sog }), false, String(sog));
   assert.equal(AL.stopped({}), false);
-});
-
-test('boatradar.html: primo giro aspetta /api/status (al massimo CLOCK_WAIT_MS) prima di calcolare from= (punto 43)', () => {
-  const code = pageCode();
-  assert.match(code, /const CLOCK_WAIT_MS = 3000;/);
-  const body = code.slice(code.indexOf('async function loadLocations()'));
-  const wait = body.indexOf('CLOCK_WAIT_MS'), from = body.indexOf('from=${clock.now()');
-  assert.ok(wait > 0 && from > wait, 'l\'attesa viene prima del calcolo di from=');
-  assert.match(body, /const status = loadStatus\(\);/, 'la richiesta di stato parte una volta sola per giro');
 });

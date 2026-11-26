@@ -40,8 +40,8 @@
   const moving = p => p.sog > 0.5 && p.sog < 102.3;
   // Direzione della freccia: la prua vera se c'è, altrimenti la rotta solo per navi in movimento (cog 360 = n.d.)
   const heading = p => validHeading(p.heading) ?? (moving(p) && p.cog != null && p.cog < 360 ? p.cog : null);
-  // Simbolo della nave: heading null = pallino; short = freccia corta, per una nave ferma con la prua nota
-  // (all'ancora o ormeggiata), così non sembra in moto
+  // Simbolo della nave: heading null = pallino; short = freccia corta, per una nave con la prua nota che non è in
+  // moto, cioè ferma (all'ancora, ormeggiata) o con la velocità non nota, così non sembra in moto (come la legenda)
   const symbol = p => ({ heading: heading(p), short: validHeading(p.heading) != null && !moving(p) });
   // Ferma (per il tooltip): velocità nota fino a 0,5 kn; velocità mancante o n.d. (102.3) = non si sa
   const stopped = p => typeof p.sog === 'number' && p.sog >= 0 && p.sog <= 0.5;

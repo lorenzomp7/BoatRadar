@@ -105,8 +105,9 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   (su Linux `--with-deps`). Se c'è già un Chrome, `AGENT_BROWSER_EXECUTABLE_PATH=/percorso/chrome`.
 - Verifica completa: `bash tools/smoke-browser.sh` (su Windows da Git Bash o WSL). Avvia
   `server.js` con la fixture di esempio (`tools/smoke-server.js`, senza chiave), apre la pagina
-  a 1280×800 e 390×844, controlla navi in mappa, apertura della scheda con un clic vero del mouse
-  e assenza di errori JavaScript. Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
+  a 1280×800 e 390×844, controlla navi in mappa, apertura della scheda con un clic vero del mouse,
+  chiusura con un clic vero sulla × (almeno 44×44 px, non coperta dall'header) e con Esc, e assenza di
+  errori JavaScript. Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
 - Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
 - Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
   registro npm. Senza tile la mappa resta scura: è normale.

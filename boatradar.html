@@ -22,7 +22,7 @@
   #results div:hover { background:#1f2c3b; }
   #panel { position:absolute; top:12px; right:12px; bottom:12px; width:340px; max-width:calc(100% - 24px); z-index:1000;
     background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; overflow:auto; display:none; }
-  #panel h2 { margin:0 0 2px; font-size:20px; }
+  #panel h2 { margin:0 0 2px; padding-right:32px; font-size:20px; }   /* spazio per la × */
   #panel .sub { color:var(--muted); font-size:13px; margin-bottom:12px; }
   #panel table { width:100%; border-collapse:collapse; font-size:13px; }
   #panel td { padding:5px 0; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -33,7 +33,10 @@
     color:var(--text); text-decoration:none; font-size:13px; }
   #panel .link:hover { border-color:var(--accent); }
   #panel .link small { display:block; color:var(--muted); }
-  #close { position:absolute; top:10px; right:12px; background:none; border:0; color:var(--muted); font-size:20px; cursor:pointer; }
+  /* × della scheda: bersaglio da 44×44 px (anche su telefono) */
+  #close { position:absolute; top:4px; right:4px; width:44px; height:44px; display:grid; place-items:center; padding:0;
+    background:none; border:0; border-radius:8px; color:var(--muted); font-size:24px; line-height:1; cursor:pointer; }
+  #close:hover, #close:focus-visible { color:var(--accent); }
   #legend { position:absolute; left:12px; bottom:24px; z-index:1000; background:var(--panel); border:1px solid var(--line);
     border-radius:10px; padding:8px 10px; font-size:12px; }
   #legend span { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
@@ -41,8 +44,14 @@
   #legend summary { cursor:pointer; color:var(--muted); padding:2px 0; }
   #legend summary:hover, #legend summary:focus-visible { color:var(--accent); }
   #legend .sym { display:flex; align-items:center; gap:6px; margin-top:4px; }
-  #legend .sym:first-of-type { border-top:1px solid var(--line); padding-top:6px; }
+  #legend-types + .sym { border-top:1px solid var(--line); padding-top:6px; }   /* separatore fra tipi e simboli */
   #legend svg { width:12px; height:16px; flex:none; fill:var(--text); stroke:#0b1118; stroke-width:1; }
+  /* scheda aperta (desktop): l'header (z-index 1100) non si allarga sopra la scheda (destra 12 px + 340 px) e va
+     a capo; prima con una riga di stato lunga copriva la × e il clic arrivava al pulsante VesselFinder */
+  @media (min-width: 641px) {
+    body.panel-open:not(.vf) header { max-width:calc(100% - 56px - 352px - 8px); flex-wrap:wrap; }
+    body.panel-open:not(.vf) #status { flex-basis:100%; order:5; }   /* riga di stato sotto, come su telefono */
+  }
   .hbtn { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; white-space:nowrap; }
   .hbtn:hover { border-color:var(--accent); }
   #vf { position:absolute; inset:0; width:100%; height:100%; border:0; z-index:900; display:none; background:#0b1118; }
@@ -102,7 +111,9 @@
   <summary>Legenda</summary>
   <div id="legend-types"></div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-8L4.4,6L0,3.6L-4.4,6Z"/></svg>freccia = in moto</div>
-  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-5.2L4.4,3.9L0,2.34L-4.4,3.9Z"/></svg>freccia corta = ferma con prua nota</div>
+  <!-- come symbol() di ais-logic.js: freccia corta quando la prua è nota e la nave non è in moto, cioè ferma
+       (fino a 0,5 kn) o con la velocità non nota; «ferma» nel tooltip invece solo con la velocità nota (stopped) -->
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-5.2L4.4,3.9L0,2.34L-4.4,3.9Z"/></svg>freccia corta = ferma o velocità non nota, prua nota</div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4"/></svg>pallino = direzione non nota</div>
 </details>
 <aside id="panel"><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
@@ -178,8 +189,8 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 const renderer = L.canvas({ padding: 0.5 });
 
-// Freccia orientata sulla prua (o sulla rotta, se la prua manca e la nave è in moto). Nave ferma con la prua
-// nota: freccia corta (options.short). Senza direzione: pallino. Simbolo scelto da symbol() di ais-logic.js.
+// Freccia orientata sulla prua (o sulla rotta, se la prua manca e la nave è in moto). Prua nota e nave non in moto
+// (ferma o velocità non nota): freccia corta (options.short). Senza direzione: pallino. Simbolo da symbol() di ais-logic.js.
 const ShipMarker = L.CircleMarker.extend({
   setSymbol({ heading, short }) { this.options.heading = heading; this.options.short = short; return this.redraw(); },
   _updatePath() {
@@ -204,6 +215,8 @@ const meta = new Map();     // mmsi -> dati statici (nome, IMO, tipo…)
 const markers = new Map();  // mmsi -> { marker, props }
 let selected = null;
 let worldTotal = 0;
+// Bordo dei marker: normale e nave selezionata (giallo, più grande)
+const STYLE = { normal: { radius:4, color:'#0b1118', weight:1 }, selected: { radius:8, color:'#ffc83d', weight:3 } };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -253,22 +266,21 @@ async function loadStatus() {
   return st;
 }
 
-let clockChecked = false;   // false fino al primo aggiornamento
+// Orologio pronto: si risolve al primo /api/status del primo giro, o dopo CLOCK_WAIT_MS se il server non risponde
+// (poi si va avanti con l'ora del telefono). Creata al primo giro, poi è già risolta.
+let clockReady = null;
 
 async function loadLocations() {
   const status = loadStatus();
-  // primo aggiornamento: from= del Baltico va calcolato con l'ora corretta, quindi aspetto /api/status (al massimo
-  // CLOCK_WAIT_MS, se il server non risponde si va avanti con l'ora del telefono); dopo tutto parte insieme
-  if (!clockChecked) {
-    clockChecked = true;
-    await Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
-  }
+  if (!clockReady) clockReady = Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
   // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a
-  // parte con include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista
+  // parte con include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista.
+  // Vista e include partono subito; solo il Baltico aspetta l'orologio, perché from= va calcolato con l'ora
+  // corretta (anche un tick() chiamato durante l'attesa del primo giro aspetta la stessa promessa)
   const ship = selected && $('panel').style.display === 'block' ? includeParam([selected]) : '';
   const [med, inc, baltic, statusResult] = await Promise.allSettled([
     features(`${API}/locations?bbox=${viewBox()}`, true), ship ? features(`${API}/locations?${ship}`) : [],
-    features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`), status]);
+    clockReady.then(() => features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`)), status]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
   // stessa nave in più fonti: tengo la posizione più recente (properties.source dice da dove viene); la nave
   // inclusa vince sulla vista (forse dalla cache) se è più recente
@@ -282,9 +294,12 @@ async function loadLocations() {
     // posizione più vecchia di quella già in mappa (es. l'altra fonte è in ritardo): il marker resta dov'è
     if (m && isNewer(m.props?.timestampExternal, f.properties.timestampExternal)) continue;
     if (!m) {
-      const marker = new ShipMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95,
-        ...symbol(f.properties) })
+      // la nave selezionata (es. scelta dalla ricerca, arrivata con include=) nasce già con il bordo giallo
+      const sel = mmsi === selected;
+      const marker = new ShipMarker([lat, lon], { renderer, ...(sel ? STYLE.selected : STYLE.normal), fillColor:color,
+        fillOpacity:.95, ...symbol(f.properties) })
         .on('click', () => select(mmsi)).addTo(map);
+      if (sel) marker.bringToFront();
       marker.bindTooltip(() => (meta.get(mmsi)?.name || String(mmsi)) + (stopped(markers.get(mmsi)?.props || {}) ? ' · ferma' : ''),
         { direction:'top' });
       m = { marker };
@@ -296,7 +311,9 @@ async function loadLocations() {
     }
     m.props = f.properties;
   }
-  for (const [mmsi, m] of markers) if (!merged.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
+  // se è fallita la richiesta include=, la nave selezionata non è sparita: manca solo la risposta, resta dov'è
+  const keep = inc.status === 'rejected' ? selected : null;
+  for (const [mmsi, m] of markers) if (!merged.has(mmsi) && mmsi !== keep) { m.marker.remove(); markers.delete(mmsi); }
   const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
   const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
@@ -313,17 +330,35 @@ async function loadLocations() {
 
 // Nessuna nave scelta: tolgo il bordo giallo; senza selected la pagina non chiede più la nave con include=
 function deselect() {
-  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle({ radius:4, color:'#0b1118', weight:1 });
+  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle(STYLE.normal);
   selected = null;
+}
+
+// Scheda aperta e chiusa. La classe panel-open tiene l'header fuori dalla scheda su desktop (CSS). Alla chiusura il
+// focus torna dove la scheda era stata aperta (pulsante, mappa) se è ancora visibile, altrimenti sul campo di ricerca:
+// senza, chi usa la tastiera lo perderebbe sulla × nascosta.
+let opener = null;
+function openPanel() {
+  if ($('panel').style.display !== 'block') opener = document.activeElement;
+  $('panel').style.display = 'block';
+  document.body.classList.add('panel-open');
+}
+function closePanel() {
+  deselect();
+  $('panel').style.display = 'none';
+  document.body.classList.remove('panel-open');
+  const back = opener && opener !== document.body && opener.isConnected && opener.getClientRects().length ? opener : $('q');
+  opener = null;
+  back.focus();
 }
 
 function select(mmsi) {
   deselect();
   selected = mmsi;
   const m = markers.get(mmsi);
-  if (m) { m.marker.setStyle({ radius:8, color:'#ffc83d', weight:3 }).bringToFront(); }
+  if (m) { m.marker.setStyle(STYLE.selected).bringToFront(); }
   render(mmsi);
-  $('panel').style.display = 'block';
+  openPanel();
   if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
 }
 
@@ -423,10 +458,16 @@ function showRegistries() {
   $('content').innerHTML = `<h2>Registri</h2>
     <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`
     + registryList();
-  $('panel').style.display = 'block';
+  openPanel();
 }
 
-$('close').onclick = () => { deselect(); $('panel').style.display = 'none'; };
+$('close').onclick = closePanel;
+// Esc chiude la scheda; nel campo di ricerca con i risultati aperti chiude prima i risultati
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return;
+  if (e.target === $('q') && $('results').style.display === 'block') { $('results').style.display = 'none'; return; }
+  if ($('panel').style.display === 'block' && !document.body.classList.contains('vf')) closePanel();
+});
 
 // Proprietario: i registri non accettano ricerche da link, quindi copio IMO/MMSI, apro il registro
 // e mostro cosa incollare. Equasis chiede l'accesso (gratuito) solo la prima volta.
