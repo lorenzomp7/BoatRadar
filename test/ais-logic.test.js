@@ -445,28 +445,48 @@ test('ageMs: età da timestamp e ora (mai negativa; orario mancante = infinita)'
   assert.equal(AL.ageMs(1000, NaN), Infinity);
 });
 
-test('fadeOpacity: piena fino a 2 min, poi lineare fino al 20 % a 30 min (come AIS-catcher) (punto 8)', () => {
+test('fadeOpacity: piena fino a 2 min, poi lineare fino al 35 % a 30 min (come AIS-catcher, minimo alzato dopo il QA) (punto 8)', () => {
   assert.equal(AL.fadeOpacity(0), 1);
   assert.equal(AL.fadeOpacity(2 * MIN), 1);
-  assert.ok(Math.abs(AL.fadeOpacity(16 * MIN) - 0.6) < 1e-9, String(AL.fadeOpacity(16 * MIN)));
-  assert.ok(Math.abs(AL.fadeOpacity(30 * MIN) - 0.2) < 1e-9);
-  assert.equal(AL.fadeOpacity(3 * H), 0.2);
-  assert.equal(AL.fadeOpacity(Infinity), 0.2);
-  assert.equal(AL.fadeOpacity(NaN), 0.2, 'età non valida: come la più vecchia');
+  assert.ok(AL.fadeOpacity(2 * MIN + 1) < 1, '2 min + 1 ms');
+  assert.ok(Math.abs(AL.fadeOpacity(16 * MIN) - 0.675) < 1e-9, String(AL.fadeOpacity(16 * MIN)));
+  assert.ok(Math.abs(AL.fadeOpacity(30 * MIN) - 0.35) < 1e-9);
+  assert.equal(AL.fadeOpacity(3 * H), 0.35);
+  assert.equal(AL.fadeOpacity(Infinity), 0.35);
+  assert.equal(AL.fadeOpacity(NaN), 0.35, 'età non valida: come la più vecchia');
   assert.equal(AL.fadeOpacity(-5), 1);
   assert.equal(AL.fadeOpacity(10, { fullMs: 0, endMs: 20, min: 0.5 }), 0.75, 'curva configurabile');
+});
+
+test('fadeOpacity: ingressi non numerici = la più vecchia (minimo), anche le stringhe numeriche', () => {
+  for (const a of [undefined, null, 'abc', '960000', '', true, {}]) assert.equal(AL.fadeOpacity(a), 0.35, JSON.stringify(a));
+  assert.equal(AL.fadeOpacity('abc', { min: 0.2 }), 0.2);
+});
+
+test('normLimits: limiti di /api/status se sono due numeri finiti > 0, altrimenti DEFAULT_LIMITS (punto 8)', () => {
+  assert.deepEqual(AL.normLimits({ movingMs: 60000, stillMs: 120000 }), { movingMs: 60000, stillMs: 120000 });
+  assert.deepEqual(AL.normLimits({ movingMs: 1.5, stillMs: 2, altro: 1 }), { movingMs: 1.5, stillMs: 2 }, 'solo i due campi');
+  for (const l of [undefined, null, 'x', 5, {}, { movingMs: 60000 }, { movingMs: 0, stillMs: 1 }, { movingMs: -1, stillMs: 1 },
+    { movingMs: '60000', stillMs: 120000 }, { movingMs: NaN, stillMs: 1 }, { movingMs: 1, stillMs: Infinity }, { movingMs: null, stillMs: 1 }])
+    assert.equal(AL.normLimits(l), AL.DEFAULT_LIMITS, JSON.stringify(l));
 });
 
 test('ageStyle: opacità, tratteggio oltre il limite delle navi in moto, gone oltre la conservazione (punto 8)', () => {
   const now = Date.parse('2026-11-26T12:00:00Z');
   const at = ms => now - ms;
   const moored3h = AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(3 * H) }, now);
-  assert.deepEqual(moored3h, { age: 3 * H, opacity: 0.2, dashed: true, gone: false }, 'ormeggiata di 3 h fa: tratteggiata, resta');
+  assert.deepEqual(moored3h, { age: 3 * H, opacity: 0.35, dashed: true, gone: false }, 'ormeggiata di 3 h fa: tratteggiata, resta');
   assert.equal(AL.ageStyle({ navStat: 0, sog: 12, timestampExternal: at(31 * MIN) }, now).gone, true, 'in moto di 31 min fa: sparisce');
   assert.equal(AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(7 * H) }, now).gone, true, 'ormeggiata di 7 h fa: sparisce');
   assert.deepEqual(AL.ageStyle({ sog: 12, timestampExternal: at(MIN) }, now), { age: MIN, opacity: 1, dashed: false, gone: false });
   const edge = AL.ageStyle({ sog: 12, timestampExternal: at(30 * MIN) }, now);
   assert.deepEqual([edge.dashed, edge.gone], [false, false], 'esattamente al limite: ancora normale');
+  assert.equal(AL.ageStyle({ sog: 12, timestampExternal: at(30 * MIN + 1) }, now).gone, true, 'in moto: 30 min + 1 ms, tolta');
+  const moored = ms => AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(ms) }, now);
+  assert.deepEqual([moored(30 * MIN).dashed, moored(30 * MIN + 1).dashed], [false, true], 'ferma: tratteggiata da 30 min + 1 ms');
+  assert.equal(moored(6 * H).gone, false, 'ferma: 6 h esatte, ancora presente');
+  assert.equal(moored(6 * H + 1).gone, true, 'ferma: 6 h + 1 ms, tolta');
+  assert.equal(AL.ageStyle({ sog: 0.1, timestampExternal: at(3 * H) }, now).gone, false, 'classe B a 0,1 kn senza stato: ferma');
   assert.equal(AL.ageStyle({ sog: 12 }, now).gone, true, 'senza orario: sparisce');
   assert.deepEqual(AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(1000) }, now, { movingMs: 300, stillMs: 1500 }),
     { age: 1000, opacity: 1, dashed: true, gone: false }, 'limiti dati');
@@ -483,6 +503,10 @@ test('formatAge: età in parole, per tooltip e scheda (punto 8)', () => {
   assert.equal(AL.formatAge(90 * MIN), '1 h 30 min fa');
   assert.equal(AL.formatAge(3 * H), '3 h fa');
   assert.equal(AL.formatAge(5 * H + 59 * MIN + 59 * 1000), '5 h 59 min fa');
+  assert.equal(AL.formatAge(59.9 * 1000), 'adesso', '59,9 s');
+  assert.equal(AL.formatAge(3599 * 1000), '59 min fa', '3599 s');
+  assert.equal(AL.formatAge(6 * H - 1), '5 h 59 min fa', '6 h − 1 ms');
+  assert.equal(AL.formatAge(6 * H), '6 h fa');
   for (const a of [Infinity, NaN, undefined, null]) assert.equal(AL.formatAge(a), null, String(a));
 });
 
@@ -493,7 +517,8 @@ test('ageClass: verde sotto 5 min, arancio sotto 15 min, poi rosso (punto 62)', 
   assert.equal(AL.ageClass(5 * MIN - 1), 'verde');
   assert.equal(AL.ageClass(5 * MIN), 'arancio');
   assert.equal(AL.ageClass(10 * MIN), 'arancio');
-  assert.equal(AL.ageClass(15 * MIN), 'rosso');
+  assert.equal(AL.ageClass(15 * MIN - 1), 'arancio');
+  assert.equal(AL.ageClass(15 * MIN), 'rosso', '15 min esatti');
   assert.equal(AL.ageClass(20 * MIN), 'rosso');
   assert.equal(AL.ageClass(3 * H), 'rosso');
   for (const a of [Infinity, NaN, undefined, null]) assert.equal(AL.ageClass(a), 'rosso', String(a));
@@ -503,4 +528,24 @@ test('boatradar.html: pallino dell\'età decorativo (aria-hidden) con i tre colo
   const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
   for (const c of ['verde', 'arancio', 'rosso']) assert.match(html, new RegExp(`\\.age-${c} \\{ background:#[0-9a-f]{6}`), c);
   assert.match(html, /<span class="age age-\$\{[^}]+\}" aria-hidden="true"><\/span>/, 'il pallino è nascosto ai lettori di schermo');
+});
+
+// Contrasto WCAG 2.1 (luminanza relativa sRGB)
+const lumOf = h => {
+  const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+const contrast = (a, b) => { const x = lumOf(a), y = lumOf(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+
+test('boatradar.html: i tre colori dell\'età hanno luminanza diversa e almeno 3:1 sul pannello (punto 62, dopo il QA)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  const color = c => html.match(new RegExp(`\\.age-${c} \\{ background:(#[0-9a-f]{6})`))[1];
+  const [g, o, r] = ['verde', 'arancio', 'rosso'].map(color);
+  for (const [name, c] of [['verde', g], ['arancio', o], ['rosso', r]]) {
+    assert.ok(contrast(c, '#17212d') >= 3, `${name} ${c} sul pannello: ${contrast(c, '#17212d').toFixed(2)}`);
+    assert.ok(contrast(c, '#1f2c3b') >= 3, `${name} ${c} sul risultato evidenziato: ${contrast(c, '#1f2c3b').toFixed(2)}`);
+  }
+  // distinguibili anche senza vedere la tinta: dal più chiaro (fresca) al più scuro (vecchia), almeno 1,3:1 fra vicini
+  assert.ok(lumOf(g) > lumOf(o) && lumOf(o) > lumOf(r), `luminanze ${[g, o, r].map(c => lumOf(c).toFixed(3))}`);
+  assert.ok(contrast(g, o) >= 1.3 && contrast(o, r) >= 1.3, `verde/arancio ${contrast(g, o).toFixed(2)}, arancio/rosso ${contrast(o, r).toFixed(2)}`);
 });

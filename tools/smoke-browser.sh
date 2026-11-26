@@ -5,7 +5,9 @@
 #   1. compaiano le navi;
 #   2. un clic del mouse su una nave apra la scheda con il suo MMSI, e un clic vero sulla × (almeno 44×44 px)
 #      o Esc la chiudano, lasciando il focus su un elemento visibile;
-#   3. la pagina non abbia errori JavaScript né messaggi console.error.
+#   3. la pagina non abbia errori JavaScript né messaggi console.error;
+#   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
+#      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda.
 # Esce con 0 se tutto va bene, con 1 al primo controllo fallito. Screenshot in diagnosi/smoke/.
 #
 #   bash tools/smoke-browser.sh                 # server locale con la fixture di esempio
@@ -17,7 +19,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-AB=(agent-browser --session "boatradar-smoke-$$")
+SESSION="boatradar-smoke-$$"
+AB=(agent-browser --session "$SESSION")
+INIT=()   # init script comuni (Leaflet locale) anche per il passaggio con l'orologio avanti
 PORT="${SMOKE_PORT:-8799}"
 OUT="diagnosi/smoke"
 mkdir -p "$OUT"
@@ -25,7 +29,8 @@ SERVER_PID=""
 TMP="$(mktemp -d)"
 
 cleanup() {
-  "${AB[@]}" close >/dev/null 2>&1 || true
+  agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
+  agent-browser --session "$SESSION-40min" close >/dev/null 2>&1 || true
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
@@ -65,7 +70,8 @@ if [ "${SMOKE_LEAFLET_LOCAL:-0}" = 1 ]; then
       "if(document.documentElement)run();else new MutationObserver(function(_,o){if(document.documentElement)" +
       "{o.disconnect();run();}}).observe(document,{childList:true});})();");
   ' "$TMP"
-  AB+=(--init-script "$TMP/leaflet-init.js")
+  INIT+=(--init-script "$TMP/leaflet-init.js")
+  AB+=("${INIT[@]}")
   ok "Leaflet caricato dal registro npm (SMOKE_LEAFLET_LOCAL=1)"
 fi
 
@@ -156,4 +162,75 @@ check() {
 
 check desktop 1280 800
 check telefono 390 844
+
+# --- orologio 40 min avanti (punto 8) --------------------------------------
+# Un init script sposta avanti di 40 min l'ora della pagina (Date) e serverTime di /api/status, come se le posizioni
+# ricevute fossero di 40 min fa: le navi in moto (limite 30 min) spariscono, quella ormeggiata della fixture
+# (NORDIC TRADER, 538001234, conservata 6 h) resta, tratteggiata, con il pallino rosso e l'età in scheda.
+# Solo con il server locale: sulla pagina pubblicata le navi e i loro stati non sono noti in anticipo.
+if [ -z "${SMOKE_URL:-}" ]; then
+  cat > "$TMP/orologio-40.js" <<'JS'
+(function () {
+  if (window.top !== window) return;
+  var OFF = 40 * 60 * 1000, RealDate = Date, realNow = RealDate.now.bind(RealDate);
+  function ShiftedDate() {
+    var a = Array.prototype.slice.call(arguments);
+    if (!(this instanceof ShiftedDate)) return new RealDate(realNow() + OFF).toString();
+    return a.length ? new (Function.prototype.bind.apply(RealDate, [null].concat(a)))() : new RealDate(realNow() + OFF);
+  }
+  ShiftedDate.prototype = RealDate.prototype;
+  ShiftedDate.now = function () { return realNow() + OFF; };
+  ShiftedDate.parse = RealDate.parse; ShiftedDate.UTC = RealDate.UTC;
+  window.Date = ShiftedDate;
+  var realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = String(input && input.url || input);
+    return realFetch(input, init).then(function (res) {
+      if (!/\/api\/status/.test(url)) return res;
+      return res.clone().json().then(function (j) {
+        if (typeof j.serverTime === 'number') j.serverTime += OFF;
+        return new Response(JSON.stringify(j), { status: res.status, headers: { 'Content-Type': 'application/json' } });
+      });
+    });
+  };
+})();
+JS
+  AB=(agent-browser --session "$SESSION-40min" "${INIT[@]}" --init-script "$TMP/orologio-40.js")
+  STILL=538001234 MOVING=247123450
+  "${AB[@]}" set viewport 1280 800 >/dev/null
+  "${AB[@]}" open "$URL" >/dev/null || fail "40 min: la pagina non si apre"
+  "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.has($STILL)" >/dev/null \
+    || fail "40 min: la nave ormeggiata $STILL non è in mappa · stato: $(js "document.getElementById('status')?.textContent")"
+  [ "$(js "markers.has($MOVING)")" = false ] || fail "40 min: la nave in moto $MOVING è ancora in mappa"
+  dash=$(js "markers.get($STILL).marker.options.dashArray" | tr -d '"')
+  [ "$dash" = "3 2" ] || fail "40 min: la nave ormeggiata non è tratteggiata (dashArray $dash)"
+  tip=$(js "tooltipText($STILL)" | tr -d '"')
+  case "$tip" in *"posizione di 40 min fa"*) ;; *) fail "40 min: tooltip «$tip»" ;; esac
+  ok "40 min: in moto tolta, ormeggiata tratteggiata (dashArray $dash) · tooltip «$tip»"
+  js "map.setView(markers.get($STILL).marker.getLatLng(), 12, { animate: false }), true" >/dev/null
+  "${AB[@]}" wait 300 >/dev/null
+  point=$(js "(() => { const r = document.getElementById('map').getBoundingClientRect();
+    const p = map.latLngToContainerPoint(markers.get($STILL).marker.getLatLng());
+    return Math.round(r.left + p.x) + ' ' + Math.round(r.top + p.y); })()" | tr -d '"')
+  "${AB[@]}" mouse move $point >/dev/null
+  "${AB[@]}" mouse down >/dev/null
+  "${AB[@]}" mouse up >/dev/null
+  "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none'
+    && document.getElementById('content').textContent.includes('$STILL')" >/dev/null \
+    || { "${AB[@]}" screenshot "$OUT/40min-errore.png" >/dev/null || true; fail "40 min: il clic sulla nave ormeggiata non apre la scheda"; }
+  row=$(js "(() => { const tr = [...document.querySelectorAll('#content tr')].find(t => t.cells[0]?.textContent === 'Ultimo segnale');
+    return tr ? (tr.querySelector('.age')?.className || 'senza pallino') + ' | ' + tr.cells[1].textContent : 'riga assente'; })()" | tr -d '"')
+  case "$row" in "age age-rosso | posizione di 40 min fa ("*) ;; *) "${AB[@]}" screenshot "$OUT/40min-errore.png" >/dev/null || true
+    fail "40 min: riga «Ultimo segnale»: $row" ;; esac
+  ok "40 min: scheda «$row»"
+  "${AB[@]}" screenshot "$OUT/40min.png" >/dev/null
+  problems=$( { "${AB[@]}" errors --json; echo; "${AB[@]}" console --json; } | node -e '
+    const lines = require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+    const out = [];
+    for (const e of lines[0].data.errors || []) out.push("errore JS: " + (e.text || e.message || JSON.stringify(e)).split("\n")[0]);
+    for (const m of lines[1].data.messages || []) if (m.type === "error") out.push("console.error: " + String(m.text).split("\n")[0]);
+    process.stdout.write(out.join("\n"));')
+  [ -z "$problems" ] || fail "40 min: $problems"
+  ok "40 min: nessun errore JavaScript"
+fi
 echo "Verifica nel browser riuscita · screenshot in $OUT/"

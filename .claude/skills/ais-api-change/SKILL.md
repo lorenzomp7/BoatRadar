@@ -33,7 +33,9 @@ Leggi `server.js` e `test/server.test.js` prima di cambiare qualcosa.
 - Posizioni oltre il loro limite (`isLive` in server.js: in moto `STALE_MOVING_MS`, ferme `STALE_STILL_MS`) non
   vanno in nessuna risposta (`/api/locations`, `include=`, `/api/search`), anche prima della pulizia periodica; una
   voce della cache vale a dati fermi solo fino a `expires` (prima scadenza delle sue navi). Test: `test/eta-posizione.test.js`.
-  Ogni nave di `/api/search` ha `timestampExternal` (ora della posizione) per il pallino dell'età (punto 62).
+  Ogni nave di `/api/search` ha `timestampExternal` (ora della posizione) per il pallino dell'età (punto 62) e
+  `sog`/`navStat`, con cui la pagina decide come per `/api/locations` se è ferma o scaduta. `limits` di `/api/status`
+  sono i limiti effettivi (`stillMs` ≥ `movingMs`) che la pagina usa per le navi del server (`normLimits`).
 - Nelle properties di `/api/locations` i campi facoltativi mancanti (`heading`, `rot`) si omettono
   (`undefined`), non si mandano come `null`: la pagina li legge con `== null`.
 - Le risposte JSON passano per la compressione gzip esistente.

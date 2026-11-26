@@ -51,13 +51,19 @@ negativo) vale come il default. Lo stato della cache è in `locationsCache` di `
 | Variabile | Default | Significato |
 |---|---|---|
 | `STALE_MOVING_MS` | `1800000` (30 min) | per quanto si tiene la posizione di una nave in moto (anche i candidati di `position-check.js`) |
-| `STALE_STILL_MS` | `21600000` (6 h) | per quanto si tiene la posizione di una nave ferma, all'ancora o ormeggiata (mai meno di `STALE_MOVING_MS`); i due limiti in uso sono `limits` di `/api/status`. `0` vale come il default |
+| `STALE_STILL_MS` | `21600000` (6 h) | per quanto si tiene la posizione di una nave ferma, all'ancora o ormeggiata (mai meno di `STALE_MOVING_MS`); i due limiti in uso (quelli effettivi, già con questo minimo) sono `limits` di `/api/status` e la pagina li usa per le navi del server. `0` vale come il default |
 | `POSITIONS_CLEANUP_MS` | `60000` | ogni quanti ms si tolgono dalla memoria le posizioni scadute (le risposte le escludono già prima) |
 | `LOCATIONS_CACHE_MS` | `3000` | ms per cui una risposta si riusa anche se nel frattempo i dati sono cambiati |
 | `LOCATIONS_CACHE_STABLE_MS` | `60000` | ms per cui una risposta si riusa se i dati non sono cambiati |
 | `LOCATIONS_CACHE_SIZE` | `50` | viste tenute al massimo; `0` = cache spenta |
 | `LOCATIONS_CACHE_BYTES` | `33554432` (32 MB) | byte al massimo (JSON più gzip); oltre esce la voce più vecchia |
 | `LOCATIONS_CACHE_CLEANUP_MS` | `60000` | ogni quanti ms si tolgono le voci che non si possono più riusare |
+
+`vessels` di `/api/status` conta le posizioni in memoria, non le navi in mappa: comprende anche le posizioni già
+scadute che la pulizia non ha ancora tolto (al massimo `POSITIONS_CLEANUP_MS`, 60 s) e, con il punto 8, le navi ferme
+fino a 6 h invece di 30 min. Dopo il deploy del punto 8 il numero cresce quindi anche senza navi nuove: annota
+`vessels` sulla VM prima del deploy e confrontalo dopo qualche ora (memoria della VM e peso della vista mondo,
+`docs/prestazioni.md`), per esempio con `curl -s https://<API_HOST>/api/status | jq '{vessels, limits}'`.
 
 ## Indirizzi
 

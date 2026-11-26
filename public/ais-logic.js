@@ -173,10 +173,16 @@
     const t = toMs(ts);
     return Number.isFinite(t) && Number.isFinite(now) ? Math.max(0, now - t) : Infinity;
   }
+  // Limiti di conservazione riportati dal server (limits di /api/status): validi se movingMs e stillMs sono numeri
+  // finiti > 0, altrimenti DEFAULT_LIMITS
+  const positive = x => typeof x === 'number' && Number.isFinite(x) && x > 0;
+  const normLimits = l => (l && positive(l.movingMs) && positive(l.stillMs) ? { movingMs: l.movingMs, stillMs: l.stillMs } : DEFAULT_LIMITS);
   // Opacità per età (come fadeCurve di AIS-catcher): 1 fino a fullMs, poi lineare fino a min a endMs, poi min.
-  // Età non valida (NaN) = la più vecchia.
-  function fadeOpacity(age, { fullMs = 2 * MIN_MS, endMs = 30 * MIN_MS, min = 0.2 } = {}) {
-    if (!(age > fullMs)) return Number.isNaN(age) ? min : 1;
+  // min 0,35 (era 0,2: dopo il QA, una nave in moto sbiadita restava quasi invisibile sulla mappa scura).
+  // Età non valida (non un numero, anche una stringa numerica, o NaN) = la più vecchia.
+  function fadeOpacity(age, { fullMs = 2 * MIN_MS, endMs = 30 * MIN_MS, min = 0.35 } = {}) {
+    if (typeof age !== 'number' || Number.isNaN(age)) return min;
+    if (!(age > fullMs)) return 1;
     if (age >= endMs) return min;
     return 1 - (1 - min) * (age - fullMs) / (endMs - fullMs);
   }
@@ -202,5 +208,5 @@
   const ageClass = age => typeof age !== 'number' || Number.isNaN(age) ? 'rosso' : age < 5 * MIN_MS ? 'verde' : age < 15 * MIN_MS ? 'arancio' : 'rosso';
 
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
-    clockSample, createClock, includeParam, DEFAULT_LIMITS, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass };
+    clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass };
 });

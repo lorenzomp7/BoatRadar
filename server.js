@@ -34,9 +34,11 @@ const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000
 // (30 min), ferme, all'ancora o ormeggiate STALE_STILL_MS (6 h); 0 o valori non validi = default. I candidati di
 // position-check.js restano movingMs, i dati statici 48 h. Ogni POSITIONS_CLEANUP_MS (60 s) la pulizia toglie dalla
 // memoria le posizioni scadute; fino ad allora le risposte le escludono già (isLive).
+// LIMITS sono i limiti effettivi, gli stessi riportati in /api/status e usati dalla pagina: una nave ferma si conserva
+// almeno quanto una in moto (stillMs = max(STALE_STILL_MS, STALE_MOVING_MS), come fa retentionMs).
 const envPositive = (name, def) => envNumber(name, def) || def;
-const LIMITS = Object.freeze({ movingMs: envPositive('STALE_MOVING_MS', DEFAULT_LIMITS.movingMs),
-  stillMs: envPositive('STALE_STILL_MS', DEFAULT_LIMITS.stillMs) });
+const MOVING_MS = envPositive('STALE_MOVING_MS', DEFAULT_LIMITS.movingMs);
+const LIMITS = Object.freeze({ movingMs: MOVING_MS, stillMs: Math.max(envPositive('STALE_STILL_MS', DEFAULT_LIMITS.stillMs), MOVING_MS) });
 const POSITIONS_CLEANUP_MS = envPositive('POSITIONS_CLEANUP_MS', 60000);
 // Ora in cui la posizione p smette di valere (scade quando now > expiresAt) e se vale ancora all'ora now
 const expiresAt = p => p.ts + retentionMs(p, LIMITS);
@@ -433,7 +435,9 @@ function search(q) {
   for (const v of vessels.values()) {
     const p = positions.get(v.mmsi);
     if (p && isLive(p, now) && ((v.name || '').toUpperCase().includes(q) || String(v.mmsi).startsWith(q) || String(v.imo || '').startsWith(q))) {
-      hits.push({ ...v, lat: p.lat, lon: p.lon, timestampExternal: p.ts });   // età nei risultati della pagina (punto 62)
+      // età nei risultati della pagina (punto 62); velocità e stato per decidere, come per /api/locations, se la nave è
+      // ferma (conservata più a lungo) o se la posizione è scaduta
+      hits.push({ ...v, lat: p.lat, lon: p.lon, sog: p.sog, navStat: p.navStat, timestampExternal: p.ts });
       if (hits.length >= 25) break;
     }
   }

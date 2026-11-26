@@ -18,7 +18,9 @@ function refScore(p, v) {
   if (length > 0) s += Math.min(5, Math.max(0, Math.log2(length / 10)));
   if (v && v.shipType >= 60 && v.shipType <= 89) s += 1;
   const age = Number.isFinite(p.ts) ? Math.max(0, NOW - p.ts) : Infinity;
-  return s - Math.min(3, Math.floor(age / AGE));
+  // -1 ogni 10 min fino a 30 min; oltre, -1 per ogni ora o frazione in più, fino a -8
+  const penalty = age <= 3 * AGE ? Math.floor(age / AGE) : Math.min(8, 3 + Math.ceil((age - 3 * AGE) / (6 * AGE)));
+  return s - penalty;
 }
 
 function refSample(hits, limit, box, vesselOf, grid) {
@@ -62,7 +64,8 @@ function genPos(box) {
   if (lon > 180) lon -= 360;
   const lat = rnd() < 0.2 ? pick([s, n]) : s + rnd() * (n - s);
   const r = rnd();
-  const ts = r < 0.05 ? undefined : r < 0.1 ? NOW + 60000 : NOW - ri(0, 50) * 60000;
+  // età: in gran parte entro 50 min, il resto fino a 7 h (penalità oltre i 30 min)
+  const ts = r < 0.05 ? undefined : r < 0.1 ? NOW + 60000 : NOW - ri(0, r < 0.6 ? 50 : 420) * 60000;
   return { lat: rnd() < 0.01 ? NaN : lat, lon, classA: rnd() < 0.5, sog: pick([0, 0.5, 0.51, 3, 12, 102.3, NaN, undefined]), ts };
 }
 function genVessel() {
