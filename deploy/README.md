@@ -46,7 +46,7 @@ Oltre a `AISSTREAM_KEY` e `CORS_ORIGIN` (già in `deploy/compose.yml`), `server.
 variabili per la conservazione delle posizioni e per la cache di `/api/locations`. I default vanno bene per la VM; per cambiarne una
 aggiungila sotto `environment:` in `deploy/compose.yml`. Un valore non valido (non numerico o
 negativo) vale come il default. Lo stato della cache è in `locationsCache` di `/api/status`
-(`hits`, `misses`, `compressions`, `size`, `bytes`).
+(`hits`, `misses`, `compressions`, `size`, `filtered` = voci con filtro del punto 9, `bytes`).
 
 | Variabile | Default | Significato |
 |---|---|---|
@@ -57,6 +57,7 @@ negativo) vale come il default. Lo stato della cache è in `locationsCache` di `
 | `LOCATIONS_CACHE_STABLE_MS` | `60000` | ms per cui una risposta si riusa se i dati non sono cambiati |
 | `LOCATIONS_CACHE_SIZE` | `50` | viste tenute al massimo; `0` = cache spenta |
 | `LOCATIONS_CACHE_BYTES` | `33554432` (32 MB) | byte al massimo (JSON più gzip); oltre esce la voce più vecchia |
+| `LOCATIONS_CACHE_FILTERED` | `20` | quante delle `LOCATIONS_CACHE_SIZE` voci possono avere un filtro (`types`, `status`, `minSog`, `maxSog`, `seen`, `moving`; mai più di `LOCATIONS_CACHE_SIZE`, decimali arrotondati per difetto); `0` = le richieste filtrate non entrano in cache. Una voce filtrata oltre questa quota, o oltre i tetti di voci e byte, espelle la filtrata più vecchia: il traffico filtrato non espelle mai le viste senza filtro. Una voce senza filtro oltre i tetti espelle invece la più vecchia in assoluto |
 | `LOCATIONS_CACHE_CLEANUP_MS` | `60000` | ogni quanti ms si tolgono le voci che non si possono più riusare |
 
 `vessels` di `/api/status` conta le posizioni in memoria, non le navi in mappa: comprende anche le posizioni già

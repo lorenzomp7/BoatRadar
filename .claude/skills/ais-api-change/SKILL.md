@@ -29,7 +29,22 @@ Leggi `server.js` e `test/server.test.js` prima di cambiare qualcosa.
   `features: []`. Non passa dalla cache e non crea voci (risposta con `json()`), così la nave selezionata è sempre
   aggiornata; la pagina la chiede a parte dalla vista e unisce le due con `mergeFeatures`.
 - Ogni parametro di `/api/locations` si legge solo in `locationsParams()`; nella chiave della cache entrano,
-  normalizzati, quelli della vista (`bbox` arrotondato e `limit`), non `include`.
+  normalizzati, quelli della vista (`bbox` arrotondato e `limit`) e, solo se un filtro è attivo, `&` + `filterKey(filter)`;
+  non `include`. Senza filtro la chiave resta `bbox=…&limit=…`.
+- Filtri (punto 9): `types` e `status` (chiavi di `TYPES` e `NAV_GROUPS` separate da virgola, anche ripetuti), `minSog`,
+  `maxSog` (nodi, 0-102,2), `seen` (minuti dall'ultima posizione, fino a 1440), `moving` (`1` = «non ferma», cioè
+  `!isStill`: comprende anche le navi con velocità non disponibile; `0` ferme = `isStill`), letti con `parseFilter` di
+  `public/ais-logic.js` (non validi, ripetuti se scalari, o tutti i tipi = nessun vincolo). I valori sono sensibili alle
+  maiuscole: `types=Tanker` non è una chiave nota e vale come nessun filtro (solo `types=tanker`); anche `minSog=5,5`
+  (virgola decimale) non è valido. `locations()` li applica con `passesFilter` nello stesso ciclo della conservazione,
+  PRIMA del campione; `total` = navi nel bbox che passano. Con `seen` `expires` include anche `ts + seen` (la nave smette
+  di passare senza messaggi nuovi); gli altri criteri dipendono solo dai dati. `include=` e `/api/search` ignorano i filtri.
+  La FeatureCollection riporta in `filter` il filtro effettivamente applicato, `filterKey(filter)` (`''` senza filtro),
+  così chi usa l'API vede se un parametro è stato scartato.
+  Cache: le voci con filtro hanno una quota loro, `LOCATIONS_CACHE_FILTERED` (default 20, al massimo
+  `LOCATIONS_CACHE_SIZE`; `0` = le filtrate non entrano in cache); una voce filtrata oltre la quota o i tetti totali
+  (voci, byte) espelle la filtrata più vecchia, mai una voce senza filtro. `filtered` in `locationsCache` di `/api/status`.
+  Test: `test/filtri-logica.test.js` (unitari), `test/filtri.test.js` (server, cache) e `test/cache-locations.test.js` (quota).
 - Posizioni oltre il loro limite (`isLive` in server.js: in moto `STALE_MOVING_MS`, ferme `STALE_STILL_MS`) non
   vanno in nessuna risposta (`/api/locations`, `include=`, `/api/search`), anche prima della pulizia periodica; una
   voce della cache vale a dati fermi solo fino a `expires` (prima scadenza delle sue navi). Test: `test/eta-posizione.test.js`.

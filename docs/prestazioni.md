@@ -18,7 +18,9 @@ node --expose-gc tools/carico.js --navi 30000 --richieste 50
 node --expose-gc tools/carico.js --navi 30000 --richieste 50 --registra "dopo punto 21"
 ```
 
-`--registra` aggiunge una riga alla tabella qui sotto; `--json file` salva tutto. Client e server
+`--registra` aggiunge una riga alla tabella qui sotto; `--json file` salva tutto. `--filtro "types=tanker"`
+(punto 9) misura e stampa anche la vista mondo con quei filtri (nel JSON `mondoFiltrata`, non nella riga
+della tabella, che resta sulle viste senza filtro). Client e server
 condividono lo stesso processo: i tempi servono per confrontare due versioni sulla stessa macchina,
 non come tempi assoluti visti dal browser.
 
@@ -122,6 +124,13 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
   correzioni (251436c, due coppie) circa +5 ms. La riga registrata qui sotto con la cache spenta (53,7 ms)
   va confrontata con queste coppie, non con la riga «prima punto 4» di un'altra sessione. Vista porto e
   caso con cache invariati.
+- Punto 9 (a), filtri in `/api/locations` (26/11/2026): senza filtro il ciclo di `locations()` fa solo un
+  `Math.min` e un controllo in più. Righe «prima/dopo punto 9a» qui sotto (caso con cache) nel rumore. A cache
+  spenta, vista mondo, mediana, quattro coppie alternate nella stessa sessione (prima = 7bf0eba): prima 47,3 /
+  48,2 / 52,5 / 56,2 ms (media 51,1), dopo 58,7 / 55,2 / 50,5 / 53,2 ms (media 54,4), differenze di segno
+  diverso: rumore. Vista mondo filtrata (`--filtro "types=tanker"`, 6000 petroliere su 30.000 navi, tutte
+  restituite perché il filtro viene prima del campione): 0,8 / 1,5 ms con la cache, 43,9-44,5 ms di mediana a
+  cache spenta, un po' meno della vista senza filtro (campione su 6000 navi invece che su 30.000).
 
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -148,4 +157,7 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | dopo punto 8 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.55 | 171.6 | 6000 | 254.5 (1550.5) | 49.1 / 63.6 | 1427 | 57.7 (366) | 10.3 / 12.8 | v22.23.5 |
 | 2026-11-26 | dopo correzioni punti 8 e 62 (penalità d'età fino a -8) | 30000 | 0.55 | 171.7 | 6000 | 254.3 (1550.5) | 1.3 / 2 | 1427 | 57.6 (366) | 0.8 / 0.9 | v22.23.5 |
 | 2026-11-26 | dopo correzioni punti 8 e 62 con LOCATIONS_CACHE_SIZE=0 (cache spenta) | 30000 | 0.54 | 169.4 | 6000 | 253.1 (1550.5) | 46.4 / 57 | 1427 | 57.3 (366) | 11.6 / 13.7 | v22.23.5 |
+| 2026-11-26 | prima punto 9a | 30000 | 0.54 | 171.1 | 6000 | 253.6 (1550.5) | 0.9 / 2.3 | 1427 | 57.5 (366) | 0.5 / 0.7 | v22.23.5 |
+| 2026-11-26 | dopo punto 9a | 30000 | 0.55 | 170.2 | 6000 | 254.3 (1550.5) | 1.1 / 5.1 | 1427 | 57.6 (366) | 0.8 / 1.2 | v22.23.5 |
+| 2026-11-26 | dopo quota filtrate in cache (punto 9a) | 30000 | 0.55 | 169.7 | 6000 | 254.6 (1550.5) | 0.9 / 1.7 | 1427 | 57.7 (366) | 0.7 / 1.1 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
