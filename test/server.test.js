@@ -198,6 +198,37 @@ test('una nave in moto che avanza di poco viene aggiornata', async () => {
   assert.deepEqual(await coords(255800030), [9, 44.0005]);
 });
 
+test('una posizione con Latitude e Longitude null viene scartata e la successiva accettata subito', async () => {
+  const start = await rejected();
+  await send(position(255900001, null, null));
+  assert.equal(await coords(255900001), undefined, 'assente da /api/locations');
+  assert.equal(await rejected(), start + 1);
+  await send(position(255900001, 44.4, 8.9));
+  assert.deepEqual(await coords(255900001), [8.9, 44.4], 'il null non è diventato la posizione precedente');
+  assert.equal(await rejected(), start + 1);
+});
+
+test('una StandardClassBPositionReport fuori scala (91, 181) viene scartata', async () => {
+  const start = await rejected();
+  await send({ MetaData: { MMSI: 255900002 },
+    Message: { StandardClassBPositionReport: { Latitude: 91, Longitude: 181, Sog: 5, Cog: 10 } } });
+  assert.equal(await coords(255900002), undefined);
+  assert.equal(await rejected(), start + 1);
+});
+
+test('una ExtendedClassBPositionReport in (0,0) viene scartata ma tipo e dimensioni restano', async () => {
+  const start = await rejected();
+  await send({ MetaData: { MMSI: 255900003 },
+    Message: { ExtendedClassBPositionReport: { Latitude: 0, Longitude: 0, Sog: 5, Cog: 10, Type: 37,
+      Dimension: { A: 8, B: 4, C: 2, D: 2 } } } });
+  assert.equal(await coords(255900003), undefined);
+  assert.equal(await rejected(), start + 1);
+  const v = await getJson('/api/vessel?mmsi=255900003');
+  assert.equal(v.shipType, 37);
+  assert.equal(v.length, 12);
+  assert.equal(v.width, 4);
+});
+
 test('un errore di aisstream viene mostrato in /api/status', async () => {
   aisSocket.send(JSON.stringify({ error: 'Api Key Is Not Valid' }));
   await waitFor(async () => (await getJson('/api/status')).error === 'Api Key Is Not Valid', 'errore in status');

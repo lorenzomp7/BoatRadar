@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const WebSocket = require('ws');
-const { isValidFix, step } = require('./position-check');
+const { isValidFix, step, pruneOlder } = require('./position-check');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -156,7 +156,7 @@ setInterval(() => {
 setInterval(() => {
   const limit = Date.now() - STALE_MS;
   for (const [mmsi, p] of positions) if (p.ts < limit) positions.delete(mmsi);
-  for (const [mmsi, c] of candidates) if (c.ts < limit) candidates.delete(mmsi);
+  pruneOlder(candidates, limit);
   // i dati statici arrivano solo ogni 6 minuti: li conservo 48 ore, così una nave che riappare li ha subito
   const staticLimit = Date.now() - 48 * 3600 * 1000;
   for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) vessels.delete(mmsi);

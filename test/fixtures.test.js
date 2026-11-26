@@ -1,12 +1,12 @@
 // Rimanda al vero server.js tutti i messaggi di test/fixtures/aisstream-*.json (registrati con Proxelar
 // o, per aisstream-esempio.json, scritti a mano) e controlla che il server li regga senza rete esterna.
-// I controlli valgono anche dopo il punto 1 del Piano (scarto delle posizioni non valide).
+// La posizione attesa di ogni nave si calcola con position-check.js, come fa il server (punto 1 del Piano).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { startServer, waitFor } = require('./helpers');
-const { isAnomalous } = require('../tools/estrai-fixture');
+const { isValidFix, step } = require('../position-check');
 
 const DIR = path.join(__dirname, 'fixtures');
 const files = fs.readdirSync(DIR).filter(f => /^aisstream-.+\.json$/.test(f)).sort();
@@ -27,22 +27,26 @@ for (const file of files) {
       const expected = fixture.messaggi.filter(m => !m.error).length;
       await waitFor(async () => (await s.getJson('/api/status')).messages >= before + expected, 'tutti i messaggi elaborati');
 
-      // ultima posizione valida di ogni nave nella fixture
-      const valid = new Map();
-      for (const msg of fixture.messaggi) {
+      // posizione accettata di ogni nave: stessi controlli del server, con i messaggi arrivati a raffica
+      const accepted = new Map(), candidates = new Map();
+      fixture.messaggi.forEach((msg, i) => {
         const pos = POSITION_TYPES.map(t => msg.Message?.[t]).find(Boolean);
-        if (!pos || !msg.MetaData?.MMSI) continue;
-        // dopo una posizione anomala lo stato di quella nave dipende dal punto 1: non la controllo
-        if (isAnomalous(msg)) valid.delete(msg.MetaData.MMSI); else valid.set(msg.MetaData.MMSI, pos);
-      }
+        const mmsi = msg.MetaData?.MMSI;
+        if (!pos || !mmsi || !isValidFix(pos)) return;
+        const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, ts: i };
+        const r = step(accepted.get(mmsi), candidates.get(mmsi), fix);
+        if (r.accept) accepted.set(mmsi, fix);
+        if (r.candidate) candidates.set(mmsi, r.candidate); else candidates.delete(mmsi);
+      });
       const res = await s.get('/api/locations');
       assert.equal(res.status, 200);
       const geo = JSON.parse(res.body.toString('utf8'));
       assert.equal(geo.type, 'FeatureCollection');
       const shown = new Map(geo.features.map(f => [f.mmsi, f.geometry.coordinates]));
-      for (const [mmsi, pos] of valid) {
-        assert.deepEqual(shown.get(mmsi), [pos.Longitude, pos.Latitude], `nave ${mmsi} in [lon, lat]`);
+      for (const [mmsi, fix] of accepted) {
+        assert.deepEqual(shown.get(mmsi), [fix.lon, fix.lat], `nave ${mmsi} in [lon, lat]`);
       }
+      for (const mmsi of shown.keys()) assert.ok(accepted.has(mmsi), `nave ${mmsi} senza posizione accettata`);
       for (const f of geo.features) assert.equal(f.geometry.coordinates.length, 2);
       // il server risponde ancora a tutte le API
       assert.equal((await s.get('/api/search?q=' + encodeURIComponent('LA'))).status, 200);
