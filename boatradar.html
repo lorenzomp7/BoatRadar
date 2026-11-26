@@ -137,8 +137,6 @@
 <script>
 // Dati AIS live di tutto il mondo, raccolti da server.js tramite aisstream.io (solo l'area visibile).
 // Dati AIS live del Baltico, aperti e senza chiave (Fintraffic / Digitraffic).
-// Su GitHub Pages config.js imposta l'indirizzo del server (window.BOATRADAR_API); da server.js è lo stesso host.
-const API = (window.BOATRADAR_API || '/api').replace(/\/$/, '');
 const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
 // Baltico: solo navi viste negli ultimi 30 minuti. Resta 30 min anche dopo il punto 8 (navi ferme fino a 6 h in
@@ -147,6 +145,12 @@ const REFRESH_MS = 15000;
 // di 30 min si vedono solo se arrivano anche da aisstream.
 const WINDOW_MS = 30 * 60 * 1000;
 const CLOCK_WAIT_MS = 3000;       // primo aggiornamento: attesa massima di /api/status prima di chiedere il Baltico
+const API_TIMEOUT_MS = 8000;      // richieste al server del giro (vista, include=, /status): oltre, annullate
+const BALTIC_TIMEOUT_MS = 15000;  // posizioni del Baltico (Digitraffic): oltre, annullate e il giro va avanti senza
+const WAKE_TIMEOUT_MS = 45000;    // vista a Render che si sveglia (waking): Render tiene la richiesta finché non è pronto
+const RETRY_SLACK_MS = 250;       // margine del tentativo dopo un errore, perché il timer non scatti prima dell'attesa
+const API_KEY = 'boatradar:api';  // sessionStorage: server attivo, ricordato per la sessione della scheda
+const PRIMARY_RECHECK_MS = 5 * 60 * 1000;   // su un server di riserva: ogni 5 min una prova leggera del primo
 
 // Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
 // Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
@@ -156,7 +160,32 @@ if (!window.AisLogic) {
   throw new Error(msg);
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
-  clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits } = AisLogic;
+  clockSample, createClock, includeParam, toMs, ageStyle, formatAge, ageClass, DEFAULT_LIMITS, normLimits,
+  apiList, createFailover, networkDown } = AisLogic;
+
+// Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
+// Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
+// richiesta della vista sbaglia (errore di rete, risposta non ok, nessuna risposta entro API_TIMEOUT_MS), sulla VM
+// due volte di fila, e mai quando manca la rete dell'utente (networkDown): un server che risponde non fa mai passare
+// all'altro. Su un server di riserva, ogni PRIMARY_RECHECK_MS (o più, se la VM oscilla), subito ricaricando la scheda e
+// quando la scheda torna visibile (se l'ultima prova è finita da almeno 60 s), la pagina prova il primo (recheckPrimary)
+// e, se risponde, ci torna; con la scheda nascosta su un server di riserva i giri fanno solo questa prova: Render ha 5 GB
+// al mese di traffico (deploy/README.md, «Passaggio automatico nella pagina»). Il server attivo resta per la sessione
+// della scheda (sessionStorage, che in alcuni browser lancia: allora vale solo fino alla chiusura della pagina).
+const API_LIST = apiList(window);
+const backends = createFailover(API_LIST, {
+  saved: (() => { try { return sessionStorage.getItem(API_KEY); } catch { return null; } })(),
+  onChange: b => { try { sessionStorage.setItem(API_KEY, b.url); } catch { /* resta solo in memoria */ } },
+  recheckMs: PRIMARY_RECHECK_MS,
+});
+const api = () => backends.current().url;
+// «server di riserva (Render)»: il server attivo quando non è il primo dell'elenco
+const backupName = (b = backends.current()) => 'server di riserva' + (b.name ? ` (${b.name})` : '');
+let retryTimer = null;   // l'unico tentativo programmato dopo un errore del server
+let balticOkAt = null;   // ultima risposta del Baltico (networkDown: il Baltico dice se la rete dell'utente c'è)
+let firstRound = true, visibleAgain = false;   // giri in cui la prova del primo si fa subito e si aspetta
+let wakeView = false;    // vista a Render in avvio in corso (fino a WAKE_TIMEOUT_MS): gli altri giri non ne aprono altre
+                         // (rimesso a false dal finally della sua richiesta, worldRequests)
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
@@ -302,7 +331,7 @@ $('legend-types').innerHTML = TYPES.map(t => `<div><span style="background:${t.c
 if (matchMedia('(max-width: 640px)').matches) $('legend').open = false;
 
 async function loadDetail(mmsi) {
-  const v = await fetch(`${API}/vessel?mmsi=${mmsi}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  const v = await fetch(`${api()}/vessel?mmsi=${mmsi}`).then(r => r.ok ? r.json() : null).catch(() => null);
   if (v) meta.set(mmsi, { ...meta.get(mmsi), ...v });
 }
 
@@ -323,20 +352,39 @@ async function loadBalticMeta() {
   }
 }
 
+// Richiesta al server dei dati mondiali: senza risposta entro API_TIMEOUT_MS la annullo, così un server che non
+// risponde conta come errore (punto 86) e il giro non resta appeso
+function fetchApi(url, timeoutMs = API_TIMEOUT_MS) {
+  // browser senza AbortController (Safari prima della 12.1): niente timeout, l'errore arriva quando arriva
+  if (typeof AbortController !== 'function') return fetch(url);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), timeoutMs);
+  return fetch(url, { signal: ctl.signal })
+    .catch(err => { throw ctl.signal.aborted ? new Error(`nessuna risposta in ${timeoutMs / 1000} s`) : err; })
+    .finally(() => clearTimeout(timer));
+}
+
 // Posizioni di una fonte. setTotal: total della risposta = navi nella vista (solo per la richiesta della vista;
-// quello di include= conta le navi incluse)
-async function features(url, setTotal = false) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('locations ' + res.status);
-  const fc = await res.json();
-  if (setTotal && fc.total != null) worldTotal = fc.total;
+// quello di include= conta le navi incluse). get: fetchApi per il server, fetch per il Baltico. Errore senza risposta
+// (rete, timeout): err.network = true (networkDown); con una risposta non ok: err.status.
+async function fetchFc(url, get = fetch) {
+  const res = await get(url).catch(err => { throw Object.assign(err instanceof Error ? err : new Error(String(err)), { network: true }); });
+  if (!res.ok) throw Object.assign(new Error('locations ' + res.status), { status: res.status });
+  return res.json();
+}
+// fc.total della vista = navi nella vista (worldTotal)
+function viewFeatures(fc) {
+  if (fc.total != null) worldTotal = fc.total;
   return fc.features;
+}
+async function features(url, setTotal = false, get = fetch) {
+  const fc = await fetchFc(url, get);
+  return setTotal ? viewFeatures(fc) : fc.features;
 }
 
 // Stato del server; misura anche lo scarto dell'orologio (inizio e fine della richiesta con l'ora del telefono)
-async function loadStatus() {
+async function loadStatus(server) {
   const t0 = Date.now();
-  const res = await fetch(`${API}/status`);
+  const res = await fetchApi(`${server}/status`);
   const t1 = Date.now();
   const st = await res.json();
   clock.add(clockSample(t0, t1, st?.serverTime));
@@ -347,17 +395,106 @@ async function loadStatus() {
 // (poi si va avanti con l'ora del telefono). Creata al primo giro, poi è già risolta.
 let clockReady = null;
 
-async function loadLocations() {
-  const status = loadStatus();
-  if (!clockReady) clockReady = Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
-  // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a
-  // parte con include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista.
-  // Vista e include partono subito; solo il Baltico aspetta l'orologio, perché from= va calcolato con l'ora
-  // corretta (anche un tick() chiamato durante l'attesa del primo giro aspetta la stessa promessa)
+// Ritorno al server principale (punto 86): su un server di riserva, ogni PRIMARY_RECHECK_MS (raddoppiato se la VM
+// oscilla, createFailover) una sola richiesta al primo della stessa vista del giro (/locations?bbox=…, uguale per tutti
+// e servita dalla cache della VM; timeout API_TIMEOUT_MS), anche con la scheda nascosta (una risposta ogni 5 min). Di
+// solito a parte dal giro: non tocca vista, orologio né riga di stato. Risposta ok con un elenco di navi → dal giro dopo
+// si torna al primo; un elenco vuoto vale solo se anche /status del primo dice chiave e connessione ad aisstream (una
+// VM appena ripartita, o senza chiave, risponde con zero navi): una richiesta in più solo in quel caso. Altrimenti si
+// resta e si riprova dopo un intervallo, senza contarlo come errore del server attivo.
+// urgent (primo giro dopo il caricamento, scheda tornata visibile): la prova parte subito e il giro la aspetta prima
+// della vista, così se la VM risponde la vista va già alla VM e usa la risposta della prova (niente doppio download).
+// Restituisce la prova in corso, che si risolve con { url, fc } se è andata bene, altrimenti con null.
+let probe = null, probeUrgent = false;
+function recheckPrimary(box, urgent) {
+  if (!probe && backends.shouldRecheck(clock.now(), urgent)) {
+    const url = API_LIST[0].url, viewUrl = `${url}/locations?bbox=${box}`;
+    probeUrgent = urgent;
+    probe = fetchFc(viewUrl, fetchApi)
+      .then(async fc => {
+        if (!Array.isArray(fc?.features)) return null;
+        if (fc.features.length) return fc;
+        const st = await fetchApi(`${url}/status`).then(res => (res.ok ? res.json() : null));
+        return st?.hasKey && st?.connected ? fc : null;
+      })
+      .catch(() => null)
+      .then(fc => {
+        if (fc) backends.recheckOk(url, clock.now()); else backends.recheckFailed(clock.now());
+        probe = null; probeUrgent = false;
+        return fc ? { url: viewUrl, fc } : null;
+      });
+  }
+  return probe || Promise.resolve(null);
+}
+
+// Scheda di nuovo visibile su un server di riserva: subito un giro con la prova del primo (il telefono può essere stato
+// in tasca per ore mentre la VM tornava)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || backends.current() === API_LIST[0]) return;
+  visibleAgain = true;
+  tick();
+});
+
+// Rete tornata (evento online): dopo errori della rete dell'utente, che non contano e aspettano sempre di più (fino a
+// 60 s), la pagina riprova subito invece di aspettare il tentativo programmato
+window.addEventListener('online', () => {
+  if (backends.networkBack(clock.now())) { clearTimeout(retryTimer); retryTimer = null; }
+  tick();
+});
+
+// Richieste al server attivo di un giro: vista, include= e /status, tutte a lui. Dopo un errore, fino al tentativo
+// programmato (retryTimer), i giri chiedono solo il Baltico; così anche mentre una vista a Render in avvio aspetta
+// (wakeView). probed: risposta della prova urgente appena riuscita, usata come vista se è la stessa richiesta. Le attese
+// si contano con clock.now() (la regola di test/ais-logic.test.js vuole l'ora del telefono solo per misurare /api/status).
+function worldRequests(probed) {
+  const server = api(), waking = backends.waking(), world = backends.canTry(clock.now()) && !(waking && wakeView);
+  const viewUrl = `${server}/locations?bbox=${viewBox()}`;
+  const skipped = () => { const p = Promise.reject(new Error('server non raggiungibile')); p.catch(() => {}); return p; };
+  // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a parte con
+  // include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista
   const ship = selected && $('panel').style.display === 'block' ? includeParam([selected]) : '';
-  const [med, inc, baltic, statusResult] = await Promise.allSettled([
-    features(`${API}/locations?bbox=${viewBox()}`, true), ship ? features(`${API}/locations?${ship}`) : [],
-    clockReady.then(() => features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`)), status]);
+  let view;
+  if (!world) view = skipped();
+  else if (probed?.url === viewUrl) view = Promise.resolve(probed.fc).then(viewFeatures);
+  else if (waking) {   // Render in avvio: la vista ha WAKE_TIMEOUT_MS (Render la tiene finché non è pronto), una alla volta
+    wakeView = true;
+    view = features(viewUrl, true, u => fetchApi(u, WAKE_TIMEOUT_MS)).finally(() => { wakeView = false; });
+  } else view = features(viewUrl, true, fetchApi);
+  return { server, world, view,
+    inc: !ship ? Promise.resolve([]) : world ? features(`${server}/locations?${ship}`, false, fetchApi) : skipped(),
+    status: world ? loadStatus(server) : Promise.resolve(null) };
+}
+
+async function loadLocations() {
+  const urgent = firstRound || visibleAgain;
+  firstRound = visibleAgain = false;
+  const probing = recheckPrimary(viewBox(), urgent);
+  // scheda nascosta su un server di riserva (quota di Render): nessuna richiesta del giro, solo la prova del primo;
+  // la mappa resta com'era e alla riapertura (visibilitychange) riparte subito un giro
+  if (document.hidden && api() !== API_LIST[0].url) return;
+  // la prova urgente si aspetta solo prima delle richieste al server (punto 86): Baltico e attesa dell'orologio partono
+  // subito. Il Baltico aspetta l'orologio (al massimo CLOCK_WAIT_MS dal primo giro), perché from= va calcolato con l'ora
+  // corretta (anche un tick() chiamato durante l'attesa del primo giro aspetta la stessa promessa)
+  const worldPart = (urgent || probeUrgent ? probing : Promise.resolve(null)).then(worldRequests);
+  const status = worldPart.then(w => w.status);
+  status.catch(() => {});      // l'esito lo legge allSettled qui sotto
+  if (!clockReady) clockReady = Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
+  const balticGet = u => fetchApi(u, BALTIC_TIMEOUT_MS);
+  const balticReq = clockReady.then(() => features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`, false, balticGet));
+  balticReq.catch(() => {});   // idem; e se worldPart lancia, l'errore del Baltico non resta senza gestione
+  const { server, world, view, inc: incReq } = await worldPart;
+  const [med, inc, baltic, statusResult] = await Promise.allSettled([view, incReq, balticReq, status]);
+  // solo la richiesta della vista decide il passaggio a un altro server; dopo un errore un solo tentativo programmato.
+  // Senza rete dalla parte dell'utente (offline, o anche il Baltico fallito con errore di rete) l'errore non conta.
+  if (world && med.status === 'fulfilled') backends.ok(server, clock.now());
+  else if (world) {
+    const down = networkDown({ onLine: navigator.onLine, viewNetwork: med.reason?.network === true,
+      balticNetwork: baltic.status === 'rejected' && baltic.reason?.network === true, balticOkAt, t: clock.now() });
+    backends.fail(server, clock.now(), { counts: !down });
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(tick, backends.retryIn(clock.now()) + RETRY_SLACK_MS);
+  }
+  if (baltic.status === 'fulfilled') balticOkAt = clock.now();
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
   const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
   if (st) serverLimits = normLimits(st.limits);
@@ -401,13 +538,22 @@ async function loadLocations() {
     if ((!merged.has(mmsi) && mmsi !== keep) || ageOf(m.props, now).gone) { m.marker.remove(); markers.delete(mmsi); }
     else m.marker.setStyle({ ...markerStyle(m.props, mmsi === selected, now), fillColor: typeOf(meta.get(mmsi)?.shipType).color });
   }
-  const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
-    : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
-    : st.error ? ' · Mondo: ' + st.error
-    : !st.connected ? ' · Mondo: connessione…'
-    : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '')
-      + (st.compression?.confirmed === false || (st.compression?.confirmed == null && st.compression?.negotiated === false)
-        ? ' · Mondo: connessione non compressa, alcuni messaggi possono essere scartati' : '');
+  // riga di stato (punto 86): vista non riuscita → server in avvio, prossimo server provato subito, o attesa prima di
+  // riprovare; vista riuscita → stato del server, e «server di riserva (Render)» se non è il primo dell'elenco
+  // fromBackup: i dati del giro vengono da un server di riserva (la prova del primo può essere finita nel frattempo)
+  const t = clock.now(), primary = backends.current() === API_LIST[0], fromBackup = server !== API_LIST[0].url;
+  const note = med.status === 'rejected'
+    ? (backends.waking() ? ` · Mondo: ${primary ? 'server' : 'server di riserva'} in avvio, circa un minuto…`
+      : backends.canTry(t) ? ` · Mondo: provo il ${primary ? 'server principale' : backupName()}…`
+      : ` · Mondo: server non raggiungibile, riprovo tra ${Math.ceil(backends.retryIn(t) / 1000)} s (ora solo Baltico)`)
+    : (!st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
+      : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
+      : st.error ? ' · Mondo: ' + st.error
+      : !st.connected ? ' · Mondo: connessione…'
+      : ` · ${st.vessels} nel mondo` + (worldTotal > markers.size ? ' (zoom per vederle tutte)' : '')
+        + (st.compression?.confirmed === false || (st.compression?.confirmed == null && st.compression?.negotiated === false)
+          ? ' · Mondo: connessione non compressa, alcuni messaggi possono essere scartati' : ''))
+      + (fromBackup ? ' · ' + backupName(API_LIST.find(b => b.url === server)) : '');
   $('status').textContent = `${markers.size} in mappa · agg. ${new Date(clock.now()).toLocaleTimeString('it-IT')}${note}`;
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
@@ -714,7 +860,7 @@ $('q').addEventListener('input', async e => {
   const q = e.target.value.trim().toUpperCase();
   const box = $('results');
   if (q.length < 2) { box.style.display = 'none'; return; }
-  const remote = await fetch(`${API}/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => []);
+  const remote = await fetch(`${api()}/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => []);
   if (q !== $('q').value.trim().toUpperCase()) return; // nel frattempo l'utente ha scritto altro
   found.clear();
   foundProps.clear();
