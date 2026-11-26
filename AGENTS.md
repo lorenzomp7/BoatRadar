@@ -3,7 +3,11 @@
 Mappa live delle imbarcazioni (AIS). Un server Node senza framework riceve i
 dati da aisstream.io via WebSocket, tiene in memoria l'ultima posizione di ogni
 nave e li serve alla pagina. La pagina è su GitHub Pages, il server su una VM Oracle
-Cloud Always Free con Docker e Caddy (`deploy/`, workflow in `.github/workflows/`).
+Cloud Always Free con Docker e Caddy (`deploy/`, workflow in `.github/workflows/`) e, di riserva,
+su Render Free (`render.yaml`, si addormenta dopo 15 minuti senza visite). Ruoli, costi e come
+cambiare backend: `deploy/README.md`, sezione «Due backend».
+Render include solo 5 GB al mese di traffico in uscita (circa 90 ore di una scheda sulla vista mondo):
+la VM resta il server principale, Render solo la riserva.
 Lavora su `main_claude` salvo indicazione diversa.
 
 ## Struttura
@@ -21,9 +25,15 @@ Lavora su `main_claude` salvo indicazione diversa.
   serve da un elenco fisso; va nella `COPY` del `Dockerfile` e in `pages.yml`, che nella pagina pubblicata
   aggiunge `?v=<commit>` allo script contro la cache (lo controlla un test).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
-- `config.js` (solo su Pages, generato dal workflow): indirizzo del server in
-  `window.BOATRADAR_API`; servito vuoto da `server.js` in locale.
+- `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
+  `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
+  (`{url, name, sleeps}`, prima la VM poi Render) e il primo in `window.BOATRADAR_API`, l'unico che la
+  pagina usa per ora. Servito vuoto da `server.js` in locale. Test in `test/backend.test.js`.
 - `Dockerfile`, `deploy/`: immagine e avvio sulla VM; `deploy/README.md` spiega la configurazione.
+- `render.yaml`: Blueprint del servizio Render (Docker, piano Free, `AISSTREAM_KEY` con `sync: false`,
+  da impostare solo su Render). Ogni file nelle `COPY` del `Dockerfile` va nei `paths` di
+  `deploy-backend.yml` e nel `buildFilter` di `render.yaml` (lo controlla un test). La VM e Render
+  usano due chiavi aisstream diverse.
 - `test/server.test.js`: avvia il vero `server.js` contro un finto aisstream
   locale (`AISSTREAM_URL`), senza rete esterna. `test/position-check.test.js`: test unitari.
 

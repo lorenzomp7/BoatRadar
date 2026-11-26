@@ -1,0 +1,23 @@
+# Secondo server di BoatRadar su Render (piano Free), di riserva rispetto alla VM Oracle.
+# Si crea una volta da Render: New → Blueprint → questa repo (vedi deploy/README.md, «Due backend»).
+# Campi: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: boatradar
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/status
+    autoDeployTrigger: commit
+    # nuovo deploy solo se cambia un file dell'immagine (le righe COPY del Dockerfile: lo controlla un test)
+    buildFilter:
+      paths: [server.js, position-check.js, boatradar.html, vesselfinder.html, public/**, package.json, package-lock.json, Dockerfile, render.yaml]
+    envVars:
+      # chiave aisstream diversa da quella della VM: con la stessa chiave le due connessioni si ostacolano.
+      # Render la chiede alla creazione del Blueprint; non va mai scritta qui.
+      - key: AISSTREAM_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://lorenzomp7.github.io

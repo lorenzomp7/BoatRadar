@@ -1,11 +1,12 @@
 # Pubblica la pagina su GitHub Pages: https://lorenzomp7.github.io/BoatRadar/
-# config.js punta la pagina al server sulla VM Oracle (variabili del repo VM_HOST o API_HOST).
+# config.js elenca i server della pagina: VM Oracle (variabili del repo VM_HOST o API_HOST) e Render
+# (RENDER_HOST), scritto da tools/config-pages.js.
 name: GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths: [boatradar.html, vesselfinder.html, public/**, .github/workflows/pages.yml]
+    paths: [boatradar.html, vesselfinder.html, public/**, tools/config-pages.js, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +28,7 @@ jobs:
         env:
           API_HOST: ${{ vars.API_HOST }}
           VM_HOST: ${{ vars.VM_HOST }}
+          RENDER_HOST: ${{ vars.RENDER_HOST }}
         run: |
           mkdir _site
           cp boatradar.html _site/index.html
@@ -35,12 +37,12 @@ jobs:
           grep -qF "src=\"public/ais-logic.js?v=${GITHUB_SHA}\"" _site/index.html || { echo "versione di ais-logic.js non applicata a index.html"; exit 1; }
           cp vesselfinder.html _site/
           mkdir -p _site/public && cp public/ais-logic.js _site/public/
-          if [ -z "$API_HOST" ] && [ -n "$VM_HOST" ]; then API_HOST="boatradar.${VM_HOST//./-}.sslip.io"; fi
-          if [ -n "$API_HOST" ]; then
-            printf 'window.BOATRADAR_API = "https://%s/api";\n' "$API_HOST" > _site/config.js
-          else
-            echo '// server non ancora configurato: solo dati del Baltico' > _site/config.js
-          fi
+          # elenco dei server (VM, poi Render); esce con errore se una variabile non è un nome di host
+          node tools/config-pages.js > _site/config.js
+          # versione di config.js legata all'esecuzione e al tentativo (anche «Re-run» cambia la versione):
+          # un server cambiato non resta nella cache del browser
+          sed -i "s|src=\"config.js\"|src=\"config.js?v=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"|" _site/index.html
+          grep -qF "src=\"config.js?v=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"" _site/index.html || { echo "versione di config.js non applicata a index.html"; exit 1; }
           cat _site/config.js
       - uses: actions/upload-pages-artifact@v3
         with:
