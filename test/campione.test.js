@@ -71,3 +71,20 @@ test('i dati statici arrivati dopo la posizione contano nel campione (parte stat
   await sendAll(pr(B, 110.5001));
   assert.deepEqual(ids(await srv.getJson(box)), [B], 'e resta prima anche con una posizione nuova');
 });
+
+test('dati statici prima della posizione; lunghezza che scende e tipo che cambia aggiornano il campione', async () => {
+  // A (MMSI più basso): 100 m, tipo 30 → parte statica log2(10) ≈ 3,32. B riceve i dati statici prima della posizione.
+  const A = 247563000, B = 247563001, box = '/api/locations?bbox=119,-41,121,-39&limit=1';
+  const pr = (mmsi, lon) => ({ MessageType: 'PositionReport', MetaData: { MMSI: mmsi },
+    Message: { PositionReport: { Latitude: -40, Longitude: lon, Sog: 8, Cog: 0, NavigationalStatus: 0 } } });
+  const st = (mmsi, length, type) => ({ MessageType: 'ShipStaticData', MetaData: { MMSI: mmsi },
+    Message: { ShipStaticData: { Name: 'N' + mmsi, Type: type, Dimension: { A: length - 10, B: 10, C: 10, D: 10 } } } });
+  await sendAll(st(B, 300, 70), st(A, 100, 30), pr(A, 120), pr(B, 120.5));
+  assert.deepEqual(ids(await srv.getJson(box)), [B], 'B: 300 m + tipo 70, dati statici arrivati prima della posizione');
+  await sendAll(st(B, 40, 70));
+  assert.deepEqual(ids(await srv.getJson(box)), [A], 'B scende a 40 m (2 + 1 < 3,32): vince A');
+  await sendAll(st(B, 100, 70));
+  assert.deepEqual(ids(await srv.getJson(box)), [B], 'B 100 m + tipo 70 batte A 100 m + tipo 30');
+  await sendAll(st(B, 100, 37));
+  assert.deepEqual(ids(await srv.getJson(box)), [A], 'B passa al tipo 37: pari con A, vince l\'MMSI più basso');
+});

@@ -129,7 +129,47 @@ test('staticOf: la parte statica già calcolata dà lo stesso campione di vessel
   assert.equal(boosted[0][0], 529);
 });
 
-test('MMSI fuori dai 30 bit: ordinamento di riserva con le stesse regole', () => {
+test('staticImportance arrotonda la lunghezza al metro: 100 e 100,05 m sono pari (vince l\'MMSI più basso), 101 m batte 100', () => {
+  assert.equal(staticImportance({ length: 100.05 }), staticImportance({ length: 100 }));
+  assert.equal(staticImportance({ length: 100.4 }), staticImportance({ length: 100 }));
+  assert.equal(staticImportance({ length: 100.6 }), staticImportance({ length: 101 }));
+  assert.equal(staticImportance({ length: 0.4 }), 0, 'sotto mezzo metro: nessuna lunghezza');
+  const p = { lat: 0, lon: 0, ts: NOW };
+  // la nave di 100,05 m ha l'MMSI più alto: senza arrotondamento vincerebbe lei
+  const tie = new Map([[1, { length: 100 }], [2, { length: 100.05 }]]);
+  assert.deepEqual(sampleByImportance([hit(2, p), hit(1, p)], 1, null, { vesselOf: vesselsOf(tie), now: NOW }).map(([m]) => m), [1]);
+  const longer = new Map([[1, { length: 100 }], [2, { length: 101 }]]);
+  assert.deepEqual(sampleByImportance([hit(1, p), hit(2, p)], 1, null, { vesselOf: vesselsOf(longer), now: NOW }).map(([m]) => m), [2]);
+});
+
+test('pari matematici con errori di arrotondamento float contano come pari: 172 m contro 86 m + tipo 89', () => {
+  const a = staticImportance({ length: 172 }), b = staticImportance({ length: 86, shipType: 89 });
+  assert.ok(Math.abs(a - b) < 1e-9, 'log2(17,2) = log2(8,6) + 1');
+  const p = { lat: 0, lon: 0, ts: NOW };
+  for (const [low, high] of [[{ length: 172 }, { length: 86, shipType: 89 }], [{ length: 86, shipType: 89 }, { length: 172 }]]) {
+    const vessels = new Map([[1, low], [2, high]]);
+    assert.deepEqual(sampleByImportance([hit(2, p), hit(1, p)], 1, null, { vesselOf: vesselsOf(vessels), now: NOW }).map(([m]) => m), [1]);
+  }
+  // tutte le coppie L m + tipo 80 contro 2L m senza tipo (stesso punteggio): vince sempre l'MMSI più basso
+  for (let L = 10; L <= 160; L++) {
+    for (const [v1, v2] of [[{ length: L, shipType: 80 }, { length: 2 * L }], [{ length: 2 * L }, { length: L, shipType: 80 }]]) {
+      const got = sampleByImportance([hit(2, p), hit(1, p)], 1, null, { vesselOf: vesselsOf(new Map([[1, v1], [2, v2]])), now: NOW });
+      assert.equal(got[0][0], 1, `L = ${L}`);
+    }
+  }
+});
+
+test('punteggi negativi: navi ferme di classe B senza dati statici, età 0, 15 e 35 min', () => {
+  // punteggi 0, -1 e -3; MMSI in ordine inverso rispetto all'importanza
+  const at = ago => ({ lat: 0, lon: 0, sog: 0, classA: false, ts: NOW - ago * MIN });
+  assert.deepEqual([0, 15, 35].map(a => importance(at(a), undefined, NOW)), [0, -1, -3]);
+  const hits = [hit(30, at(0)), hit(20, at(15)), hit(10, at(35))];
+  assert.deepEqual(sampleByImportance(hits, 2, null, { now: NOW, grid: 1 }).map(([m]) => m), [30, 20]);
+  // limit 1 fra 15 e 35 min, con l'MMSI più basso alla nave di 35 min: vince quella di 15
+  assert.deepEqual(sampleByImportance([hit(20, at(15)), hit(10, at(35))], 1, null, { now: NOW, grid: 1 }).map(([m]) => m), [20]);
+});
+
+test('MMSI grandi (oltre 30 bit) e piccoli: stesse regole, stesso ordine', () => {
   const mk = base => Array.from({ length: 12 }, (_, i) => hit(base + (11 - i), { lat: i, lon: i, sog: i % 2 ? 5 : 0, classA: i % 3 === 0, ts: NOW }));
   const small = sampleByImportance(mk(1000), 5, null, { now: NOW }).map(([m]) => m - 1000);
   const big = sampleByImportance(mk(2 ** 31), 5, null, { now: NOW }).map(([m]) => m - 2 ** 31);
@@ -147,4 +187,18 @@ test('sample.js è nell\'immagine Docker, nei paths dei workflow e controllato d
     for (const list of all) assert.ok(list.includes('sample.js'), `${f}: sample.js in paths`);
   }
   assert.match(read('.github/workflows/test.yml'), /node --check sample\.js/);
+});
+
+test('contratto dei pari: per lunghezze intere 10-320 m il confronto a 1e-9 coincide con quello esatto in interi', () => {
+  // punteggio = log2(L / 10) + k con k intero fra -3 e +5: uguale in matematica se e solo se L · 2^(k+3) è uguale.
+  // Stesso calcolo di sampleByImportance: parte dinamica intera + staticImportance, poi Math.round(· 1e9).
+  const byExact = new Map(), byRounded = new Map();
+  for (let L = 10; L <= 320; L++) for (const type of [undefined, 80]) for (let dyn = -3; dyn <= 4; dyn++) {
+    const k = dyn + (type ? 1 : 0), exact = L * 2 ** (k + 3);
+    const rounded = Math.round((dyn + staticImportance({ length: L, shipType: type })) * 1e9);
+    if (byExact.has(exact)) assert.equal(byExact.get(exact), rounded, `L ${L}, k ${k}: pari separati`);
+    else byExact.set(exact, rounded);
+    if (byRounded.has(rounded)) assert.equal(byRounded.get(rounded), exact, `L ${L}, k ${k}: diversi uniti`);
+    else byRounded.set(rounded, exact);
+  }
 });

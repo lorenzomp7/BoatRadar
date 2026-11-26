@@ -18,10 +18,13 @@ function importance(p, v, now) {
 
 // Parte che dipende solo dai dati statici (lunghezza e tipo): server.js la calcola alla ricezione dei messaggi
 // e la tiene nella posizione (staticScore), così una richiesta non rilegge i dati statici di ogni nave.
+// La lunghezza è arrotondata al metro: così il punteggio dipende solo da metri interi e i pari matematici
+// (es. 100 e 100,05 m, oppure 172 m e 86 m + tipo 89) restano pari nel confronto di sampleByImportance.
 function staticImportance(v) {
   if (!v) return 0;
   let s = 0;
-  if (v.length > 0) s += Math.min(5, Math.max(0, Math.log2(v.length / 10)));
+  const length = Math.round(v.length);
+  if (length > 0) s += Math.min(5, Math.max(0, Math.log2(length / 10)));
   if (v.shipType >= 60 && v.shipType <= 89) s += 1;
   return s;
 }
@@ -36,16 +39,14 @@ function dynamicImportance(p, now) {
   return s;
 }
 
-// Ordinamento veloce (vista mondo: decine di migliaia di navi a ogni miss della cache): il punteggio è
-// arrotondato a 1/1024 (SCORE_SCALE), che per lunghezze intere in metri lascia l'ordine identico (due lunghezze
-// vicine ≤ 320 m distano almeno 4,6/1024 su log2); poi un ordinamento numerico nativo per MMSI (chiave
-// mmsi · 2^22 + indice in un Float64Array, esatta sotto 2^53) e un counting sort stabile per punteggio decrescente.
-const SCORE_SCALE = 1024;
-const Q_MAX = 10 * SCORE_SCALE, Q_MIN = -AGE_MAX_PENALTY * SCORE_SCALE;   // punteggio fra -3 e 10
-const INDEX_BITS = 2 ** 22;      // fino a 4 milioni di navi per richiesta
-const MMSI_LIMIT = 2 ** 30;      // un MMSI AIS ha 30 bit
+// Pari quasi uguali: i punteggi si confrontano in unità di 1e-9 (Math.round(score · SCORE_UNITS), un intero
+// esatto in un Float64). Due punteggi uguali in matematica ma diversi nell'ultimo bit del float (log2(17,2) e
+// log2(8,6) + 1) diventano lo stesso intero. Con lunghezze intere fra 10 e 320 m e parte intera fra -3 e +5 due
+// punteggi diversi distano almeno 1,7e-5 e nessuno cade a meno di 8e-5 unità da un bordo di arrotondamento
+// (test in test/sample.test.js): l'arrotondamento non separa mai due pari né unisce due punteggi diversi.
+const SCORE_UNITS = 1e9;
 
-// hits = [[mmsi, p]] (le navi nel bbox), limit ≥ 1, box = [w, s, e, n] o null (mondo; w > e attraversa
+// hits = [[mmsi, p]] (le navi nel bbox, MMSI numerici), limit ≥ 1, box = [w, s, e, n] o null (mondo; w > e attraversa
 // l'antimeridiano). vesselOf(mmsi) → dati statici; staticOf(mmsi, p) → staticImportance già calcolata (di base
 // la calcola da vesselOf). Restituisce al massimo limit voci di hits in ordine di
 // punteggio (poi MMSI crescente); con hits.length <= limit restituisce hits stesso. Non modifica hits.
@@ -55,32 +56,20 @@ function sampleByImportance(hits, limit, box, { vesselOf = () => undefined, stat
   if (n <= limit) return hits;
   const [w, s, e, n0] = box || WORLD;
   const width = w <= e ? e - w : e - w + 360, height = n0 - s;
-  const q = new Int32Array(n), cell = new Uint32Array(n), keys = new Float64Array(n);
-  let packed = n < INDEX_BITS;
+  // array tipizzati: con decine di migliaia di navi (vista mondo a ogni miss della cache) niente oggetti per nave
+  const score = new Float64Array(n), mmsiOf = new Float64Array(n), cell = new Uint32Array(n), order = new Uint32Array(n);
   for (let i = 0; i < n; i++) {
     const mmsi = hits[i][0], p = hits[i][1];
-    const score = Math.round((dynamicImportance(p, now) + (staticOf(mmsi, p) || 0)) * SCORE_SCALE);
-    q[i] = score > Q_MAX ? Q_MAX : score < Q_MIN ? Q_MIN : score;
+    score[i] = Math.round((dynamicImportance(p, now) + (staticOf(mmsi, p) || 0)) * SCORE_UNITS);
+    mmsiOf[i] = mmsi;
     const dx = ((p.lon - w) % 360 + 360) % 360;
     const x = width > 0 ? Math.max(0, Math.min(grid - 1, Math.floor(dx / width * grid))) : 0;
     const y = height > 0 ? Math.max(0, Math.min(grid - 1, Math.floor((p.lat - s) / height * grid))) : 0;
     cell[i] = (y * grid + x) || 0;   // || 0: coordinate NaN in una cella qualsiasi, mai un indice non valido
-    if (Number.isInteger(mmsi) && mmsi >= 0 && mmsi < MMSI_LIMIT) keys[i] = mmsi * INDEX_BITS + i; else packed = false;
+    order[i] = i;
   }
-  // order = indici di hits per punteggio decrescente, poi MMSI crescente
-  let order;
-  if (packed) {
-    keys.sort();
-    const counts = new Uint32Array(Q_MAX - Q_MIN + 2);
-    for (let i = 0; i < n; i++) counts[Q_MAX - q[i] + 1]++;
-    for (let b = 1; b < counts.length; b++) counts[b] += counts[b - 1];
-    order = new Uint32Array(n);
-    for (let j = 0; j < n; j++) { const i = keys[j] % INDEX_BITS; order[counts[Q_MAX - q[i]]++] = i; }
-  } else {
-    // MMSI fuori dallo standard o troppe navi: confronto diretto, stesso ordine
-    order = Array.from({ length: n }, (_, i) => i)
-      .sort((a, b) => q[b] - q[a] || (hits[a][0] < hits[b][0] ? -1 : hits[a][0] > hits[b][0] ? 1 : a - b));
-  }
+  // order = indici di hits per punteggio decrescente, poi MMSI crescente (poi indice: ordine totale)
+  order.sort((a, b) => score[b] - score[a] || mmsiOf[a] - mmsiOf[b] || a - b);
 
   // primo passaggio: in ordine di punteggio, al massimo cap navi per cella; secondo: riempie fino a limit
   const cap = Math.max(1, Math.ceil(limit / (grid * grid)));

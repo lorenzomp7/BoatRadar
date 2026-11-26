@@ -108,7 +108,7 @@ function handle(msg) {
     // heading e rot fanno parte del fix: passano anche per candidato e conferma di position-check.js
     const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
       heading: hdg(pos.TrueHeading), rot: rotOf(pos.RateOfTurn), navStat: pos.NavigationalStatus, ts: Date.now(),
-      classA: !!m.PositionReport, staticScore: 0 };   // per il campione (sample.js), non vanno nella risposta
+      classA: !!m.PositionReport, staticScore: staticImportance(v) };   // per il campione (sample.js), non vanno nella risposta
     // scarto posizioni non valide e salti impossibili (un salto confermato due volte è accettato)
     if (!isValidFix(pos)) status.rejected++;
     else {
