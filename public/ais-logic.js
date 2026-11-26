@@ -207,6 +207,152 @@
   // poi 'rosso' (anche età non valida). Nella pagina il pallino colorato è sempre accompagnato dal testo dell'età.
   const ageClass = age => typeof age !== 'number' || Number.isNaN(age) ? 'rosso' : age < 5 * MIN_MS ? 'verde' : age < 15 * MIN_MS ? 'arancio' : 'rosso';
 
+  // Punti 13, 63, 42: posizione stimata, riproduzione in differita e animazione limitata (test in test/movimento.test.js).
+  // Un fix è { lat, lon, sog, cog, heading, navStat, ts } con ts in ms (toMs); una posizione mostrata è
+  // { lat, lon, cog, sog, heading, mode, aheadMs } con mode 'fix' (ultimo segnale), 'interp' (fra due segnali)
+  // o 'estimate' (proiettata da velocità e rotta, aheadMs ms oltre il fix).
+  const KN = 0.514444;               // 1 nodo in m/s
+  const R_EARTH = 6371008.8;         // raggio medio della Terra (m)
+  const ANIM_DELAY_MS = 15000;       // ritardo della riproduzione = intervallo di aggiornamento della pagina
+  const RAD = Math.PI / 180;
+  const finite = x => typeof x === 'number' && Number.isFinite(x);
+  // Longitudine in [-180, 180); i valori già nell'intervallo restano identici (niente errori di arrotondamento)
+  const normLon = x => x >= -180 && x < 180 ? x : ((x + 180) % 360 + 360) % 360 - 180;
+  // COG valida: numero in [0, 360) (360 = non disponibile)
+  const validCog = c => finite(c) && c >= 0 && c < 360;
+
+  // Per quanto si stima oltre il fix (ms), dai limiti di Boat Watch: niente stima fino a 0,5 kn (come isStill) o senza
+  // velocità nota; 242 s fino a 3 kn compresi; 122 s oltre. 0 = nessuna stima.
+  function estimateLimitMs(sog) {
+    if (!finite(sog) || sog < 0 || sog >= 102.3 || sog <= 0.5) return 0;
+    return sog <= 3 ? 242000 : 122000;
+  }
+  // Stimabile: velocità utile, COG valida (solo la rotta, mai la prua: la nave può derivare) e nave non ferma (punto 8)
+  const canEstimate = p => estimateLimitMs(p.sog) > 0 && validCog(p.cog) && !isStill(p);
+
+  // Punto d'arrivo lungo una lossodromia (rotta a direzione costante) di distM metri con rotta bearingDeg.
+  // Oltre un polo la latitudine si riflette; longitudine in [-180, 180).
+  function rhumbDestination(lat, lon, bearingDeg, distM) {
+    const d = distM / R_EARTH, th = bearingDeg * RAD, p1 = lat * RAD;
+    let p2 = p1 + d * Math.cos(th);
+    if (Math.abs(p2) > Math.PI / 2) p2 = p2 > 0 ? Math.PI - p2 : -Math.PI - p2;
+    const dPsi = Math.log(Math.tan(Math.PI / 4 + p2 / 2) / Math.tan(Math.PI / 4 + p1 / 2));
+    const q = Math.abs(dPsi) > 1e-12 ? (p2 - p1) / dPsi : Math.cos(p1);
+    const dLon = d * Math.sin(th) / q;
+    return { lat: p2 / RAD, lon: normLon(lon + dLon / RAD) };
+  }
+
+  // Posizione del fix p proiettata all'ora now (punto 13, come Lat_projected di OpenCPN), al massimo estimateLimitMs
+  function project(p, now) {
+    const out = { lat: p.lat, lon: p.lon, cog: p.cog, sog: p.sog, heading: p.heading, mode: 'fix', aheadMs: 0 };
+    if (!canEstimate(p) || !finite(p.ts)) return out;
+    const aheadMs = Math.min(Math.max(finite(now) ? now - p.ts : 0, 0), estimateLimitMs(p.sog));
+    const to = aheadMs > 0 ? rhumbDestination(p.lat, p.lon, p.cog, p.sog * KN * aheadMs / 1000) : p;
+    return { ...out, lat: to.lat, lon: to.lon, mode: 'estimate', aheadMs };
+  }
+
+  // Angolo fra a e b (gradi) alla frazione f, girando dal lato più corto; risultato in [0, 360)
+  const lerpAngle = (a, b, f) => (a + (((b - a) % 360 + 540) % 360 - 180) * f + 360) % 360;
+
+  // Posizione fra i fix a e b all'ora t (punto 42, come MyShipTracking): lat lineare, lon dal lato corto, rotta e prua
+  // dal lato corto se valide in entrambi (altrimenti quelle di b; la prua arrotondata al grado, come nei messaggi AIS),
+  // velocità lineare se nota in entrambi (altrimenti quella di b). Fuori da [a.ts, b.ts] resta all'estremo.
+  function interpolate(a, b, t) {
+    const span = b.ts - a.ts;
+    const f = span > 0 ? Math.min(1, Math.max(0, (t - a.ts) / span)) || 0 : 1;
+    const dLon = ((b.lon - a.lon + 540) % 360) - 180;
+    const ha = validHeading(a.heading), hb = validHeading(b.heading);
+    return {
+      // agli estremi le coordinate esatte del fix (niente errori di arrotondamento)
+      lat: f === 1 ? b.lat : a.lat + (b.lat - a.lat) * f,
+      lon: f === 1 ? b.lon : normLon(a.lon + dLon * f),
+      cog: validCog(a.cog) && validCog(b.cog) ? lerpAngle(a.cog, b.cog, f) : b.cog,
+      sog: validSog(a.sog) && validSog(b.sog) ? a.sog + (b.sog - a.sog) * f : b.sog,
+      heading: ha != null && hb != null ? Math.round(lerpAngle(ha, hb, f)) % 360 : b.heading,
+      mode: 'interp', aheadMs: 0,
+    };
+  }
+
+  // Traccia di una nave (ultimi max fix, dal più vecchio): array nuovo. Un fix non più recente dell'ultimo è ignorato;
+  // un fix senza ora valida, o una traccia il cui ultimo fix non ha ora valida, ricomincia da [fix].
+  function pushFix(track, fix, max = 3) {
+    const last = track?.length ? track[track.length - 1] : null;
+    if (!last || !finite(fix.ts) || !finite(last.ts)) return [fix];
+    if (!(fix.ts > last.ts)) return track.slice();
+    return [...track, fix].slice(-max);
+  }
+
+  // Posizione da mostrare all'ora t (di riproduzione): prima del primo fix il primo, fra due fix interpolate,
+  // oltre l'ultimo la stima del punto 13. Traccia vuota = null.
+  function positionAt(track, t) {
+    if (!track?.length) return null;
+    const first = track[0];
+    if (t <= first.ts) return { lat: first.lat, lon: first.lon, cog: first.cog, sog: first.sog, heading: first.heading, mode: 'fix', aheadMs: 0 };
+    for (let i = 1; i < track.length; i++) if (t <= track[i].ts) return interpolate(track[i - 1], track[i], t);
+    return project(track[track.length - 1], t);
+  }
+
+  // Ora di riproduzione: now − delayMs (now = clock.now() del punto 43), mai indietro rispetto a prev
+  const playbackTime = (now, delayMs = ANIM_DELAY_MS, prev = -Infinity) => Math.max(prev, now - delayMs);
+
+  // Metri per pixel di Web Mercator (tile di 256 px) alla latitudine lat e allo zoom zoom
+  const metersPerPixel = (lat, zoom) => 156543.03392 * Math.cos(lat * RAD) / 2 ** zoom;
+
+  // Spostamento equirettangolare in metri da a a b (x verso est, y verso nord), lon dal lato corto
+  function offsetM(a, b) {
+    const dLon = ((b.lon - a.lon + 540) % 360) - 180;
+    return { x: dLon * RAD * Math.cos((a.lat + b.lat) / 2 * RAD) * R_EARTH, y: (b.lat - a.lat) * RAD * R_EARTH, dLon };
+  }
+  // Posizione da disegnare a questo passo: dalla posizione mostrata shown verso target senza salti (punto 13: all'arrivo
+  // del fix vero). Senza shown o oltre snapM metri salta al target; se il target è dietro (componente lungo target.cog
+  // negativa) entro maxBackM la nave resta ferma invece di tornare indietro; altrimenti fa la frazione dtMs/blendMs
+  // della strada. I campi diversi da lat/lon sono sempre quelli del target.
+  function approach(shown, target, { dtMs, blendMs = 1000, maxBackM = 300, snapM = 5000 } = {}) {
+    if (!shown) return { ...target };
+    const o = offsetM(shown, target), dist = Math.hypot(o.x, o.y);
+    if (!(dist <= snapM)) return { ...target };
+    if (validCog(target.cog) && dist <= maxBackM && o.x * Math.sin(target.cog * RAD) + o.y * Math.cos(target.cog * RAD) < 0)
+      return { ...target, lat: shown.lat, lon: shown.lon };
+    const k = !(blendMs > 0) ? 1 : finite(dtMs) && dtMs > 0 ? Math.min(1, dtMs / blendMs) : 0;
+    return { ...target, lat: shown.lat + (target.lat - shown.lat) * k, lon: normLon(shown.lon + o.dLon * k) };
+  }
+
+  // Priorità di animazione (punto 63, allineato a sample.js senza classe e movimento: si animano solo navi in moto):
+  // selezionata +1000; tipo 60-89 +1; lunghezza log2(m / 10) da 0 a 5 (metri interi); -1 ogni 10 min di età, al massimo -3.
+  function animPriority(p, v, isSelected, now) {
+    let s = isSelected ? 1000 : 0;
+    if (v?.shipType >= 60 && v?.shipType <= 89) s += 1;
+    const len = Math.round(v?.length);
+    if (len > 0) s += Math.min(5, Math.max(0, Math.log2(len / 10)));
+    const age = finite(p.ts) && finite(now) ? Math.max(0, now - p.ts) : Infinity;
+    return s - Math.min(3, Math.floor(age / (10 * MIN_MS)));
+  }
+  // MMSI da animare: items = [{ mmsi, score }], per score decrescente poi MMSI crescente, i primi n
+  const pickAnimated = (items, n) => [...items].sort((a, b) => b.score - a.score || a.mmsi - b.mmsi).slice(0, Math.max(0, n)).map(x => x.mmsi);
+
+  // Ogni quanti ms fare un passo: almeno 4 volte il ridisegno misurato e il tempo per mezzo pixel della nave più veloce
+  // sullo schermo (maxPxPerS px/s; 0 = niente si muove), fra minMs e maxMs
+  function frameInterval({ redrawMs, maxPxPerS, minMs = 16, maxMs = 1000 }) {
+    const redraw = finite(redrawMs) ? redrawMs : 0;
+    const halfPx = maxPxPerS > 0 ? 500 / maxPxPerS : Infinity;
+    return Math.min(maxMs, Math.max(minMs, 4 * redraw, halfPx));
+  }
+
+  // Area della vista [w, s, e, n] (e < w = attraversa l'antimeridiano), come viewBox() della pagina ma senza margine:
+  // più di un giro = mondo intero, longitudini in [-180, 180), latitudini entro ±90
+  function boundsBox(w, s, e, n) {
+    if (e - w >= 360) return [-180, -90, 180, 90];
+    return [normLon(w), Math.max(s, -90), normLon(e), Math.min(n, 90)];
+  }
+  // Punto dentro l'area (bordi inclusi); box null = tutto. Nome diverso da inBox(box, p) di server.js.
+  function inViewBox(box, lat, lon) {
+    if (!box) return true;
+    const [w, s, e, n] = box;
+    if (lat < s || lat > n) return false;
+    return w <= e ? lon >= w && lon <= e : lon >= w || lon <= e;
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
-    clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass };
+    clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
+    KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox };
 });
