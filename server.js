@@ -158,7 +158,9 @@ function connect() {
         console.log(`aisstream.io: sottoscrizione confermata (compressione: ${on ? 'sì' : 'no'})`);
         if (!on) console.warn('aisstream.io: connessione non compressa, aisstream può scartare messaggi per limitare la banda');
       } else if (!received) { received = true; console.log('aisstream.io: arrivano i dati'); }
-      retry = 1000;
+      // l'attesa torna a 1 s solo con un vero messaggio AIS: dopo un {error} (es. chiave scaduta) o la sola
+      // conferma seguiti dalla chiusura il backoff deve continuare a crescere, non riconnettersi ogni secondo
+      if (!msg.error && msg.MetaData?.MMSI) retry = 1000;
     } catch (err) { console.error('messaggio non valido:', err.message); }
   });
   ws.on('error', err => {
