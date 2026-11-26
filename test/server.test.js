@@ -50,8 +50,11 @@ async function send(msg) {
 
 const position = (mmsi, lat, lon, extra = {}) => ({
   MetaData: { MMSI: mmsi, ShipName: extra.name || '' },
-  Message: { PositionReport: { Latitude: lat, Longitude: lon, Sog: 12.5, Cog: 90, NavigationalStatus: 0 } },
+  Message: { PositionReport: { Latitude: lat, Longitude: lon, Sog: 12.5, Cog: 90, NavigationalStatus: 0, ...extra.report } },
 });
+
+const rejected = async () => (await getJson('/api/status')).rejected;
+const coords = async mmsi => (await getJson('/api/locations')).features.find(f => f.mmsi === mmsi)?.geometry.coordinates;
 
 before(async () => {
   fakeAis = new WebSocketServer({ port: 0 });
@@ -155,6 +158,44 @@ test('risponde compresso in gzip quando il browser lo accetta', async () => {
   const res = await get('/api/locations', { 'Accept-Encoding': 'gzip' });
   assert.equal(res.headers['content-encoding'], 'gzip');
   assert.equal(JSON.parse(zlib.gunzipSync(res.body)).type, 'FeatureCollection');
+});
+
+test('le posizioni non valide non compaiono e vengono contate in /api/status', async () => {
+  const start = await rejected();
+  assert.equal(typeof start, 'number', 'rejected esposto in /api/status');
+  await send(position(255800001, 91, 181));
+  await send(position(255800002, 0, 0));
+  await send(position(255800003, 45, 12, { report: { Valid: false } }));
+  await send(position(255800004, -89.9, -180)); // al confine: valida
+  const ids = (await getJson('/api/locations')).features.map(f => f.mmsi);
+  for (const mmsi of [255800001, 255800002, 255800003]) assert.ok(!ids.includes(mmsi), `${mmsi} scartata`);
+  assert.deepEqual(await coords(255800004), [-180, -89.9]);
+  assert.equal(await rejected(), start + 3);
+});
+
+test('un salto impossibile viene scartato finché una seconda posizione non lo conferma', async () => {
+  await send(position(255800010, 43, 10));
+  const start = await rejected();
+  await send(position(255800010, 43 + 500 / 60, 10)); // 500 NM in un istante
+  assert.deepEqual(await coords(255800010), [10, 43], 'resta l\'ultima posizione buona');
+  assert.equal(await rejected(), start + 1);
+  await send(position(255800010, 43 + 500 / 60, 10)); // stessa posizione di nuovo: confermata
+  assert.deepEqual(await coords(255800010), [10, 43 + 500 / 60]);
+});
+
+test('una nave ferma che si sposta di 300 m all\'improvviso viene scartata', async () => {
+  const still = { report: { Sog: 0, NavigationalStatus: 5 } };
+  await send(position(255800020, 45, 12, still));
+  const start = await rejected();
+  await send(position(255800020, 45.0027, 12, still));
+  assert.deepEqual(await coords(255800020), [12, 45]);
+  assert.equal(await rejected(), start + 1);
+});
+
+test('una nave in moto che avanza di poco viene aggiornata', async () => {
+  await send(position(255800030, 44, 9));
+  await send(position(255800030, 44.0005, 9));
+  assert.deepEqual(await coords(255800030), [9, 44.0005]);
 });
 
 test('un errore di aisstream viene mostrato in /api/status', async () => {

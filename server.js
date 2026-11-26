@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const WebSocket = require('ws');
+const { isValidFix, step } = require('./position-check');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -16,8 +17,9 @@ const STALE_MS = 30 * 60 * 1000;
 const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, navStat, ts }
+const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
 const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
-const status = { hasKey: false, connected: false, error: null, messages: 0 };
+const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
 
 function readKey() {
   if (process.env.AISSTREAM_KEY) return process.env.AISSTREAM_KEY.trim();
@@ -59,9 +61,16 @@ function handle(msg) {
   const m = msg.Message || {};
   const pos = m.PositionReport || m.StandardClassBPositionReport || m.ExtendedClassBPositionReport;
   if (pos) {
-    positions.set(mmsi, { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
-      navStat: pos.NavigationalStatus, ts: Date.now() });
     if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; setDimensions(v, pos.Dimension); }
+    const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
+      navStat: pos.NavigationalStatus, ts: Date.now() };
+    // scarto posizioni non valide e salti impossibili (un salto confermato due volte è accettato)
+    if (!isValidFix(pos)) status.rejected++;
+    else {
+      const r = step(positions.get(mmsi), candidates.get(mmsi), fix);
+      if (r.accept) positions.set(mmsi, fix); else status.rejected++;
+      if (r.candidate) candidates.set(mmsi, r.candidate); else candidates.delete(mmsi);
+    }
   }
   const st = m.ShipStaticData;
   if (st) {
@@ -147,6 +156,7 @@ setInterval(() => {
 setInterval(() => {
   const limit = Date.now() - STALE_MS;
   for (const [mmsi, p] of positions) if (p.ts < limit) positions.delete(mmsi);
+  for (const [mmsi, c] of candidates) if (c.ts < limit) candidates.delete(mmsi);
   // i dati statici arrivano solo ogni 6 minuti: li conservo 48 ore, così una nave che riappare li ha subito
   const staticLimit = Date.now() - 48 * 3600 * 1000;
   for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) vessels.delete(mmsi);
