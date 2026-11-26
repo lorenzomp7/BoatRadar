@@ -10,7 +10,7 @@ const zlib = require('zlib');
 const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
 const { sampleByImportance, staticImportance } = require('./sample');
-const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter, norm, searchScore, compareSearch } = require('./public/ais-logic');
+const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter, norm, normQuery, scoreFields, insertTop } = require('./public/ais-logic');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -61,7 +61,9 @@ function readKey() {
   try { return fs.readFileSync(KEY_FILE, 'utf8').trim(); } catch { return ''; }
 }
 
-const clean = s => (s || '').replace(/@/g, '').trim();
+// Testo AIS: senza il riempimento (@) e i caratteri di controllo, spazi (anche interni) compattati e tolti ai lati. I nomi
+// AIS sono già maiuscoli: così di solito coincidono con norm() della ricerca (punto 12) e non serve altro
+const clean = s => typeof s === 'string' ? s.replace(/@/g, '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
 
 // Dimensioni AIS: distanze dell'antenna da prua (A), poppa (B), sinistra (C) e dritta (D)
 function setDimensions(v, d) {
@@ -94,6 +96,15 @@ const hdg = h => Number.isInteger(h) && h >= 0 && h <= 359 ? h : null;
 // Velocità di accostata AIS (RateOfTurn, da -127 a 127): -128 = non disponibile. La classe B non la trasmette.
 const rotOf = r => Number.isInteger(r) && r >= -127 && r <= 127 ? r : null;
 
+// Ricerca (punto 12): nome e nominativo normalizzati (norm) solo delle navi per cui sono diversi da quelli salvati (accenti,
+// minuscole, - . /), così search() non li normalizza a ogni richiesta; fuori da vessels, quindi mai nelle risposte
+const searchNames = new Map();   // mmsi -> { name, call }
+function indexNames(mmsi, v) {
+  const name = norm(v.name), call = norm(v.callSign);
+  if (name !== (v.name || '') || call !== (v.callSign || '')) searchNames.set(mmsi, { name, call });
+  else searchNames.delete(mmsi);
+}
+
 function vessel(mmsi) {
   let v = vessels.get(mmsi);
   if (!v) { v = { mmsi }; vessels.set(mmsi, v); }
@@ -111,10 +122,11 @@ function handle(msg) {
   status.messages++;
   status.error = null;
   const md = msg.MetaData || {};
+  // MMSI: intero da 1 a 9 cifre; altrimenti (stringa, 0, negativo, decimale, mancante) il messaggio non è di una nave
   const mmsi = md.MMSI;
-  if (!mmsi) return;
+  if (!Number.isInteger(mmsi) || mmsi <= 0 || mmsi > 999999999) return;
   dataVersion++;
-  const v = vessel(mmsi);
+  const v = vessel(mmsi), oldName = v.name, oldCall = v.callSign;
   if (clean(md.ShipName)) v.name = clean(md.ShipName);
 
   const m = msg.Message || {};
@@ -153,6 +165,7 @@ function handle(msg) {
     setDimensions(v, sd.ReportB?.Dimension);
     v.staticTs = Date.now();
   }
+  if (v.name !== oldName || v.callSign !== oldCall) indexNames(mmsi, v);
   // parte statica del punteggio del campione (sample.js), ricalcolata qui perché i dati statici cambiano solo qui
   const cur = positions.get(mmsi);
   if (cur) cur.staticScore = staticImportance(v);
@@ -233,7 +246,7 @@ setInterval(() => {
   pruneOlder(candidates, now - LIMITS.movingMs);
   // i dati statici arrivano solo ogni 6 minuti: li conservo 48 ore, così una nave che riappare li ha subito
   const staticLimit = Date.now() - 48 * 3600 * 1000;
-  for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) vessels.delete(mmsi);
+  for (const [mmsi, v] of vessels) if (!positions.has(mmsi) && !(v.staticTs > staticLimit)) { vessels.delete(mmsi); searchNames.delete(mmsi); }
 }, POSITIONS_CLEANUP_MS);
 
 // La pagina può stare su un altro dominio (GitHub Pages): le API sono pubbliche e in sola lettura,
@@ -452,23 +465,27 @@ function sendLocations(req, res, query) {
   });
 }
 
-// Ricerca (punto 12): tutte le navi con una posizione ancora valida (isLive, punto 8) con searchScore > 0 (nome,
-// MMSI, IMO, nominativo), ordinate con compareSearch (punteggio, posizione più recente, MMSI), le prime SEARCH_MAX.
-// q < 2 caratteri (dopo norm) = nessun risultato.
+// Ricerca (punto 12): tutte le navi con una posizione ancora valida (isLive, punto 8) con punteggio > 0 (nome, MMSI, IMO,
+// nominativo: scoreFields), le prime SEARCH_MAX nell'ordine di compareSearch (punteggio, posizione più recente, MMSI),
+// tenute con insertTop senza ordinare tutte le corrispondenze. Gira sul ciclo degli eventi: per non rallentare le altre
+// richieste il lavoro per nave è minimo (nomi già normalizzati in vessels o searchNames, MMSI e IMO in stringa solo per
+// q di cifre). q < 2 caratteri (dopo normQuery: anche senza «IMO ») = nessun risultato.
 const SEARCH_MAX = 25;
-function search(q) {
-  q = norm(q);
+function search(text) {
+  const q = normQuery(text);
   if (q.length < 2) return [];
-  const now = Date.now(), hits = [];
+  const now = Date.now(), digits = /^\d+$/.test(q), top = [];
   for (const [mmsi, p] of positions) {
     if (!isLive(p, now)) continue;
-    const v = vessels.get(mmsi), score = searchScore(v, mmsi, q);
-    if (score > 0) hits.push({ score, ts: p.ts, mmsi, v, p });
+    const v = vessels.get(mmsi) || {}, alt = searchNames.get(mmsi);
+    const score = scoreFields(alt ? alt.name : v.name || '', alt ? alt.call : v.callSign || '', digits ? String(mmsi) : '',
+      digits && v.imo ? String(v.imo) : '', q);
+    if (!score || (top.length === SEARCH_MAX && score < top[SEARCH_MAX - 1].score)) continue;
+    insertTop(top, { score, ts: p.ts, mmsi, v, p }, SEARCH_MAX);
   }
   // età nei risultati della pagina (punto 62); velocità e stato per decidere, come per /api/locations, se la nave è
   // ferma (conservata più a lungo) o se la posizione è scaduta
-  return hits.sort(compareSearch).slice(0, SEARCH_MAX).map(({ mmsi, v, p }) =>
-    ({ mmsi, ...v, lat: p.lat, lon: p.lon, sog: p.sog, navStat: p.navStat, timestampExternal: p.ts }));
+  return top.map(({ mmsi, v, p }) => ({ mmsi, ...v, lat: p.lat, lon: p.lon, sog: p.sog, navStat: p.navStat, timestampExternal: p.ts }));
 }
 
 // File statico della repo: le intestazioni partono solo quando il file è aperto. Se non si può

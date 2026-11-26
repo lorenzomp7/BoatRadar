@@ -76,3 +76,95 @@ test('/api/search: al massimo 25, scelte fra tutte le corrispondenze e ordinate'
   assert.deepEqual(await search('c'), [], 'meno di 2 caratteri');
   assert.deepEqual(await search('   '), []);
 });
+
+// --- Correzioni da revisione del punto 12 -------------------------------------------------------------------------------
+
+const staticFull = (mmsi, name, callSign, imo) => JSON.stringify({ MessageType: 'ShipStaticData', MetaData: { MMSI: mmsi, ShipName: name },
+  Message: { ShipStaticData: { Name: name, CallSign: callSign, Type: 70, ImoNumber: imo } } });
+
+test('MetaData.MMSI non intero positivo (stringa, 0, negativo, decimale, oltre 9 cifre, mancante): messaggio scartato', async () => {
+  const before = (await s.getJson('/api/status')).vessels;
+  await send(report('247140001', 'MMSISTRINGA'), report('ABC"<x>', 'MMSISTRINGA'), report(0, 'MMSIZERO'), report(-247140002, 'MMSINEG'),
+    report(247140003.5, 'MMSIDEC'), report(1e10, 'MMSIGRANDE'), report(null, 'MMSINULL'), report(true, 'MMSIBOOL'));
+  assert.equal((await s.getJson('/api/status')).vessels, before, 'nessuna nave nuova');
+  for (const q of ['MMSISTRINGA', 'MMSIZERO', 'MMSINEG', 'MMSIDEC', 'MMSIGRANDE', 'MMSINULL', 'MMSIBOOL']) assert.deepEqual(await search(q), [], q);
+  const fc = await s.getJson('/api/locations');
+  assert.ok(fc.features.every(f => Number.isInteger(f.mmsi) && f.mmsi > 0), 'in /api/locations solo MMSI interi positivi');
+  await send(report(999999999, 'MMSIMASSIMO'));
+  assert.deepEqual(ids(await search('mmsimassimo')), [999999999], '9 cifre: valido');
+});
+
+test('nomi ripuliti all\'ingresso (riempimento @ e spazi interni); accenti, trattini e «IMO » nella ricerca', async () => {
+  const CAPO = 247150001, ANNA = 247150002, CITTA = 247150003, IMO = 247150004;
+  await send(report(CAPO, '  CAPO   NORD@@@@'), report(ANNA, 'MSC ANNA-MARIA@@'), report(CITTA, 'CITTA DI GENOVA'),
+    report(IMO, 'NAVE IMO'), staticFull(IMO, 'NAVE IMO', 'IA@@B', 9074729));
+  const capo = await s.getJson('/api/vessel?mmsi=' + CAPO);
+  assert.equal(capo.name, 'CAPO NORD', 'senza @ e con un solo spazio fra le parole');
+  assert.equal((await s.getJson('/api/vessel?mmsi=' + IMO)).callSign, 'IAB');
+  assert.deepEqual(ids(await search('capo nord')), [CAPO]);
+  assert.deepEqual(ids(await search('anna maria')), [ANNA], '«anna maria» trova MSC ANNA-MARIA');
+  assert.deepEqual(ids(await search('anna-maria')), [ANNA]);
+  assert.equal((await search('anna maria'))[0].name, 'MSC ANNA-MARIA', 'il nome mostrato resta quello AIS');
+  assert.deepEqual(ids(await search('città di')), [CITTA], '«città di» trova CITTA DI GENOVA');
+  assert.deepEqual(ids(await search('IMO 9074729')), [IMO], 'prefisso «IMO » tolto');
+  assert.deepEqual(ids(await search('imo 9074')), [IMO]);
+  assert.deepEqual(ids(await search('nave imo')), [IMO], 'senza cifre dopo «IMO» resta testo');
+  const keys = Object.keys((await search('anna maria'))[0]);
+  assert.ok(keys.every(k => !/norm|N$/.test(k)), `nessun campo interno nella risposta (${keys})`);
+});
+
+// Implementazione del commit 2b2f80a: punteggio a tutte le navi, ordinamento completo e prime 25 (norm come parametro)
+function reference(items, q, norm) {
+  const startsWord = (name, t) => {
+    for (let i = name.indexOf(t, 1); i > 0; i = name.indexOf(t, i + 1)) if (' -./'.includes(name[i - 1])) return true;
+    return false;
+  };
+  const score = it => {
+    const id = String(it.mmsi), imo = it.imo ? String(it.imo) : '', name = norm(it.name), call = norm(it.callSign);
+    if (id === q || imo === q) return 100;
+    if (name === q) return 90;
+    if (call === q) return 80;
+    if (name.startsWith(q)) return 70;
+    if (id.startsWith(q) || (imo && imo.startsWith(q))) return 60;
+    if (startsWord(name, q)) return 50;
+    if (call && call.startsWith(q)) return 40;
+    if (name.includes(q)) return 30;
+    return 0;
+  };
+  return items.map(it => ({ score: score(it), ts: it.ts, mmsi: it.mmsi })).filter(h => h.score > 0)
+    .sort((a, b) => b.score - a.score || b.ts - a.ts || a.mmsi - b.mmsi).slice(0, 25).map(h => h.mmsi);
+}
+
+test('/api/search su navi casuali: stessi risultati e stesso ordine dell\'implementazione precedente', async () => {
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const syl = ['RA', 'NO', 'MAR', 'IA', 'SE', 'A', '1', '20', 'É'];
+  const word = () => Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => pick(syl)).join('');
+  const sent = new Map(), msgs = [];
+  for (let i = 0; i < 300; i++) {
+    const mmsi = 248000000 + Math.floor(rnd() * 999999);
+    if (sent.has(mmsi)) continue;
+    const name = Array.from({ length: 1 + Math.floor(rnd() * 3) }, word).join(pick([' ', ' ', ' ', '-', '.', '/'])), callSign = word() + word();
+    const imo = rnd() < 0.5 ? null : [9074729, 9176187, 9321483, 9444728][Math.floor(rnd() * 4)];
+    sent.set(mmsi, { mmsi, name, callSign, imo });
+    msgs.push(report(mmsi, name), staticFull(mmsi, name, callSign, imo ?? 0));
+  }
+  for (let i = 0; i < msgs.length; i += 50) await send(...msgs.slice(i, i + 50));
+  const { norm, normQuery } = require('../public/ais-logic');
+  // tutte le navi vive con l'orario della posizione, anche quelle dei test precedenti (limit mai chiesto prima: voce
+  // nuova della cache, non quella di un test precedente)
+  const fc = await s.getJson('/api/locations?limit=4321');
+  assert.equal(fc.features.length, fc.total);
+  const items = await Promise.all(fc.features.map(async f => {
+    const v = sent.get(f.mmsi) || await s.getJson('/api/vessel?mmsi=' + f.mmsi);
+    return { mmsi: f.mmsi, name: v.name, callSign: v.callSign, imo: v.imo, ts: f.properties.timestampExternal };
+  }));
+  const queries = ['RA', 'MAR', 'MARIA', 'RA NO', 'RA-NO', 'IA', 'É', 'e', '20', '248', '2480', '9074729', '907', 'IMO 9176187', 'ZZ'];
+  for (const v of [...sent.values()].slice(0, 15)) queries.push(v.name, v.callSign, String(v.mmsi).slice(0, 5));
+  for (const q of queries) {
+    const nq = normQuery(q);
+    if (nq.length < 2) continue;
+    assert.deepEqual(ids(await search(q)), reference(items, nq, norm), `q «${q}»`);
+  }
+});

@@ -100,14 +100,14 @@ test('pagina: risultati del server e navi in mappa uniti e ordinati; omonimi ric
   const row = mmsi => res.match(new RegExp(`<div role="option" id="res-${mmsi}"[^]*?</div>`))[0];
   assert.match(row(247555001), /data-mmsi="247555001"/);
   assert.match(row(247555001), /aria-selected="false"/);
-  assert.match(row(247555001), /<b>GEMELLA<\/b>/);
+  assert.match(row(247555001), /<b id="res-247555001-n">GEMELLA<\/b>/);
   assert.match(row(247555001), /247555001/, 'MMSI accanto al nome');
   assert.match(row(247555001), /Nave cargo · Italia · 80 m · 1 min fa · → GENOVA/);
   assert.match(row(247555001), /class="age age-verde"/, 'pallino dell\'età (punto 62)');
   assert.match(row(247555002), /Nave cargo · Italia · 3 min fa/, 'nave in mappa: età dal marker, parti mancanti omesse');
   for (const m of [247555001, 247555002]) assert.match(row(m), /2 navi con questo nome/, `omonima ${m}`);
   for (const m of [247555009, 636000001]) assert.doesNotMatch(row(m), /navi con questo nome/);
-  assert.match(row(636000001), /<small>Liberia · 2 min fa<\/small>/, 'senza tipo, lunghezza e destinazione: bandiera ed età');
+  assert.match(row(636000001), /<small id="res-636000001-d">Liberia · 2 min fa<\/small>/, 'senza tipo, lunghezza e destinazione: bandiera ed età');
   assert.equal(page.el('q').getAttribute('aria-expanded'), 'true');
   assert.equal(page.get('meta').get(247555001).sog, undefined, 'velocità e stato non finiscono nei dati statici');
 });
@@ -179,4 +179,122 @@ test('pagina: «Nessun risultato» non selezionabile; con il server che non risp
   type(page, 'laguna');
   await until(() => rows(page).length === 1, 'nave in mappa senza il server');
   assert.deepEqual(rows(page), [247123450]);
+});
+
+// --- Correzioni da revisione del punto 12 -------------------------------------------------------------------------------
+
+const liveText = page => page.el('search-live').textContent;
+
+test('pagina: mentre la ricerca nuova è in corso i risultati vecchi non si scelgono (Invio, frecce, clic)', async () => {
+  const page = await ready({ search: (url, now) => (url.endsWith('=XGEM') ? { hang: true } : { body: () => remote(now) }) });
+  type(page, 'gemella');
+  await until(() => shown(page) && rows(page).length === 4, 'risultati di «gemella»');
+  type(page, 'xgem');
+  assert.deepEqual(rows(page), [], 'subito al tasto: niente righe vecchie');
+  assert.match(page.el('results').innerHTML, /aria-disabled="true"[^>]*>In aggiornamento…</);
+  await until(() => searches(page).length === 2, 'richiesta di «xgem» partita (e appesa)');
+  assert.equal(key(page, 'ArrowDown').defaultPrevented, false, 'le frecce non scelgono righe vecchie');
+  assert.equal(page.el('q').getAttribute('aria-activedescendant'), null);
+  await key(page, 'Enter').results[0];
+  const click = page.el('results').listeners.find(l => l.type === 'click').fn;
+  await click({ target: { closest: () => ({ dataset: { mmsi: '247555001' } }) } });
+  assert.equal(page.get('selected'), null, 'nessuna scheda aperta da una ricerca superata');
+  assert.equal(page.el('panel').style.display === 'block', false);
+});
+
+test('pagina: Invio durante l\'attesa apre il primo risultato della ricerca nuova quando arriva', async () => {
+  const page = await ready({ search: (url, now) => (url.endsWith('=XGEM') ? { delay: 150, body: () => remote(now).slice(1) } : { body: () => remote(now) }) });
+  type(page, 'gemella');
+  await until(() => shown(page) && rows(page).length === 4, 'risultati di «gemella»');
+  type(page, 'xgem');
+  const enter = key(page, 'Enter');
+  assert.equal(enter.defaultPrevented, true, 'Invio non invia nulla mentre si aspetta');
+  await enter.results[0];
+  assert.equal(page.get('selected'), null, 'non subito: la ricerca nuova non è ancora arrivata');
+  await until(() => page.get('selected') === 636000001, 'scheda del primo risultato di «xgem»');
+  assert.equal(shown(page), false);
+  // un tasto dopo Invio annulla l'apertura
+  type(page, 'gemella');
+  key(page, 'Enter');
+  type(page, 'gemell');
+  await until(() => shown(page) && rows(page).length === 4, 'risultati di «gemell»');
+  assert.equal(page.get('selected'), 636000001, 'il testo è cambiato dopo Invio: nessuna apertura');
+});
+
+test('pagina: solo risultati del server con MMSI intero positivo; testi e attributi sempre escapati', async () => {
+  const page = await ready({ search: (url, now) => ({ body: () => [
+    { mmsi: 247000777, name: '<img src=x onerror=alert(1)>', destination: '"><script>alert(2)</script>', lat: 1, lon: 1, timestampExternal: now() - MIN },
+    { mmsi: '1" onmouseover="alert(3)', name: 'IMGX', lat: 1, lon: 1, timestampExternal: now() - MIN },
+    { mmsi: '247000778', name: 'IMGSTRINGA', lat: 1, lon: 1, timestampExternal: now() - MIN },
+    { mmsi: 0, name: 'IMGZERO', lat: 1, lon: 1 }, { mmsi: 2.5, name: 'IMGDEC', lat: 1, lon: 1 }, { mmsi: -3, name: 'IMGNEG', lat: 1, lon: 1 },
+    null, 'IMG',
+  ] }) });
+  type(page, 'img');
+  await until(() => shown(page), 'risultati');
+  const h = page.el('results').innerHTML;
+  assert.deepEqual(rows(page), [247000777]);
+  assert.doesNotMatch(h, /<img|<script|onmouseover/);
+  assert.match(h, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(h, /→ &quot;&gt;&lt;script&gt;/);
+  assert.equal(page.get('meta').has('1" onmouseover="alert(3)'), false, 'nessun dato salvato per MMSI non validi');
+});
+
+test('pagina: accenti e trattini nella ricerca fra le navi in mappa («città di» → CITTA DI GENOVA)', async () => {
+  const page = startPage({ routes: (url, now) => {
+    if (url.startsWith('/api/locations?')) return { body: () => ({ type: 'FeatureCollection', total: 2, features: [
+      ship(247123460, { name: 'CITTA DI GENOVA', shipType: 60, sog: 11, timestampExternal: now() - MIN }),
+      ship(247123461, { name: 'MSC ANNA-MARIA', shipType: 70, sog: 11, timestampExternal: now() - MIN })] }) };
+    if (url.startsWith('/api/search')) return { body: [] };
+    return routes()(url, now);
+  } });
+  await until(() => page.markers().size === 2, 'navi in mappa');
+  type(page, 'città di');
+  await until(() => shown(page) && rows(page).length, 'risultati');
+  assert.deepEqual(rows(page), [247123460]);
+  assert.equal(searches(page).at(-1).url, '/api/search?q=CITTA%20DI', 'al server la query normalizzata');
+  type(page, 'anna maria');
+  await until(() => rows(page)[0] === 247123461, 'MSC ANNA-MARIA');
+  assert.match(page.el('results').innerHTML, /<b id="res-247123461-n">MSC ANNA-MARIA<\/b>/, 'il nome mostrato resta quello AIS');
+  type(page, 'IMO 1234');
+  await until(() => searches(page).at(-1).url === '/api/search?q=1234', 'prefisso «IMO » tolto');
+});
+
+test('pagina: «almeno N navi con questo nome» quando i risultati possono essere incompleti', async () => {
+  const many = now => Array.from({ length: 25 }, (_, i) => ({ mmsi: 247700001 + i, name: 'GEMELLA', lat: 44, lon: 9, timestampExternal: now() - MIN }));
+  const page = await ready({ search: (url, now) => ({ body: url.endsWith('=GEMELLA') ? many(now) : url.endsWith('=2475550') ? remote(now).slice(0, 1) : remote(now) }) });
+  type(page, 'gemella');
+  await until(() => shown(page), 'risultati');
+  assert.equal(rows(page).length, 25, 'tetto di 25');
+  assert.match(page.el('results').innerHTML, /almeno 25 navi con questo nome/, 'il server ne ha tenute 25: forse altre');
+  // per MMSI: le omonime con un altro MMSI non corrispondono, quindi il conteggio può essere incompleto
+  type(page, '2475550');
+  await until(() => shown(page) && rows(page).length === 3, 'risultati per MMSI');
+  assert.match(page.el('results').innerHTML, /almeno 2 navi con questo nome/);
+  // per nome, sotto il tetto: tutte le omonime corrispondono, conteggio esatto
+  type(page, 'gemell');
+  await until(() => shown(page) && rows(page).length === 4, 'risultati per nome');
+  assert.match(page.el('results').innerHTML, />2 navi con questo nome</);
+  assert.doesNotMatch(page.el('results').innerHTML, /almeno/);
+});
+
+test('pagina: regione aria-live annuncia il numero di risultati; MMSI fuori dal nome accessibile', async () => {
+  assert.match(html, /<div id="search-live" class="sr-only" aria-live="polite"[^>]*><\/div>/);
+  assert.match(html, /\.sr-only\s*\{[^}]*clip/);
+  const page = await ready({ search: (url, now) => ({ body: url.endsWith('=ZZZ') ? [] : url.endsWith('=XGEMELLA') ? remote(now).slice(1) : remote(now) }) });
+  type(page, 'gemella');
+  await until(() => shown(page), 'risultati');
+  assert.equal(liveText(page), '4 risultati');
+  const row = page.el('results').innerHTML.match(/<div role="option" id="res-247555001"[^>]*>/)[0];
+  assert.match(row, /aria-labelledby="res-247555001-n"/, 'nome accessibile = solo il nome');
+  assert.match(row, /aria-describedby="res-247555001-d res-247555001-t res-247555001-m"/);
+  const bis = page.el('results').innerHTML.match(/<div role="option" id="res-247555009"[^>]*>/)[0];
+  assert.match(bis, /aria-describedby="res-247555009-d res-247555009-m"/, 'solo le parti che ci sono (niente omonimi)');
+  assert.match(page.el('results').innerHTML, /<span class="mmsi" id="res-247555001-m"><span class="sr-only">MMSI <\/span>247555001<\/span>/);
+  type(page, 'xgemella');
+  await until(() => shown(page) && rows(page).length === 1, 'un risultato');
+  assert.equal(liveText(page), '1 risultato');
+  type(page, 'zzz');
+  await until(() => liveText(page) === 'Nessun risultato', 'nessun risultato annunciato');
+  type(page, 'z');
+  assert.equal(liveText(page), '', 'elenco chiuso: niente da annunciare');
 });

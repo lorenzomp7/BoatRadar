@@ -12,7 +12,8 @@
 #      scheda (o il fondo della mappa), ogni riga raggiungibile scorrendo, × «Chiudi elenco», zoom «Ingrandisci»/«Riduci»,
 #      e un clic vero su «e altre 15» che chiude il popup e ingrandisce di 2;
 #   3a. (solo con il server locale, punto 12) la ricerca «GEMELLA» scritta con tasti veri dia 2 righe con «2 navi con
-#      questo nome» (almeno 44 px su telefono), freccia giù + Invio apra la scheda della prima e Esc la chiuda;
+#      questo nome» (almeno 44 px su telefono, nome accessibile = solo il nome), «2 risultati» nella regione aria-live
+#      nascosta, freccia giù + Invio apra la scheda della prima e Esc la chiuda;
 #   3b. la pagina non abbia errori JavaScript né messaggi console.error;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
@@ -311,7 +312,12 @@ check() {
     local found
     found=$(js "(() => { const rows = [...document.querySelectorAll('#results [role=option][data-mmsi]')], out = [];
       if (document.getElementById('q').getAttribute('aria-expanded') !== 'true') out.push('aria-expanded non true');
+      const live = document.getElementById('search-live');
+      if (live.textContent !== '2 risultati') out.push('aria-live «' + live.textContent + '»');
+      if (live.getBoundingClientRect().width > 1) out.push('regione aria-live visibile');
       for (const r of rows) {
+        const label = document.getElementById(r.getAttribute('aria-labelledby'));
+        if (label?.textContent !== 'GEMELLA') out.push(r.dataset.mmsi + ' nome accessibile «' + label?.textContent + '»');
         if (!r.textContent.includes('2 navi con questo nome')) out.push(r.dataset.mmsi + ' senza «2 navi con questo nome»');
         if (matchMedia('(max-width: 640px)').matches && r.getBoundingClientRect().height < 44) out.push(r.dataset.mmsi + ' alta ' + Math.round(r.getBoundingClientRect().height) + ' px');
       }

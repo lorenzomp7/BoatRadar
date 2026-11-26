@@ -20,11 +20,15 @@ Lavora su `main_claude` salvo indicazione diversa.
   `moving=1` vuol dire «non ferma» (`!isStill`, comprese le navi con velocità non disponibile), `moving=0` ferme;
   il filtro applicato torna in `filter` della risposta; le voci filtrate hanno in cache una quota loro,
   `LOCATIONS_CACHE_FILTERED`, e non espellono mai quelle senza filtro),
-  `/api/vessel`, `/api/search` (punto 12: tutte le navi con posizione valida, ordinate con `searchScore`/`compareSearch`
-  di `public/ais-logic.js` — MMSI o IMO esatto, nome esatto, nominativo esatto, inizio del nome, … — poi posizione più
-  recente e MMSI, le prime 25; la pagina aspetta 250 ms fra i tasti, annulla la richiesta precedente, unisce le navi in
-  mappa e mostra righe `role="option"` con «N navi con questo nome»; test in `test/ricerca*.test.js` e
-  `test/pagina-ricerca.test.js`), `/api/status`. Conservazione (punto 8): posizioni di navi in moto 30 min, ferme
+  `/api/vessel`, `/api/search` (punto 12: tutte le navi con posizione valida, punteggio con `scoreFields` e ordine di
+  `compareSearch` di `public/ais-logic.js` — MMSI o IMO esatto, nome esatto, nominativo esatto, inizio del nome, … — poi
+  posizione più recente e MMSI, le prime 25 tenute con `insertTop`; testo confrontato con `norm`/`normQuery`: senza
+  accenti, `- . /` come spazio, senza il prefisso «IMO »; nomi e nominativi normalizzati una volta all'arrivo, in
+  `searchNames` solo se diversi da quelli salvati; la pagina aspetta 250 ms fra i tasti, annulla la richiesta precedente e
+  fino ai risultati nuovi mostra «In aggiornamento…» senza righe sceglibili, unisce le navi in mappa e mostra righe
+  `role="option"` con «(almeno) N navi con questo nome» e una regione `aria-live` con il numero di risultati; test in
+  `test/ricerca*.test.js` e `test/pagina-ricerca.test.js`), `/api/status`. I messaggi con `MetaData.MMSI` non intero da 1 a
+  9 cifre si scartano. Conservazione (punto 8): posizioni di navi in moto 30 min, ferme
   (`isStill`) 6 h (`STALE_MOVING_MS`, `STALE_STILL_MS`, `limits` effettivi in `/api/status`, usati anche dalla pagina
   per le navi del server); le risposte escludono le scadute
   anche prima della pulizia e una voce della cache «a dati fermi» vale solo fino alla prima scadenza delle sue navi.

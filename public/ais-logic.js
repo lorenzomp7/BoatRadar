@@ -641,34 +641,37 @@
 
   // Punto 12: ricerca ordinata e riconoscibile (test in test/ricerca-logica.test.js). La usano server.js (/api/search) e la
   // pagina (unione con le navi in mappa), così l'ordine è lo stesso.
-  // Testo confrontabile: maiuscolo, spazi (anche a capo, tab) compattati e tolti ai lati; mancante = ''
+  // Testo confrontabile: senza accenti (NFD e segni combinanti tolti), maiuscolo, trattino, punto, barra e spazi (anche a
+  // capo, tab) come un solo spazio, tolti ai lati; mancante = ''. «Città di» = «CITTA DI», «ANNA-MARIA» = «ANNA MARIA».
   function norm(s) {
-    return String(s ?? '').toUpperCase().replace(/\s+/g, ' ').trim();
+    return String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[\s\-./]+/g, ' ').trim();
   }
-  // Inizio di una parola del nome: dopo spazio, trattino, punto o barra
-  const WORD_SEP = ' -./';
-  function startsWord(name, q) {
-    for (let i = name.indexOf(q, 1); i > 0; i = name.indexOf(q, i + 1)) if (WORD_SEP.includes(name[i - 1])) return true;
-    return false;
+  // Testo della ricerca: norm e senza il prefisso «IMO » davanti alle cifre («IMO 9074729» = «9074729»)
+  function normQuery(s) {
+    return norm(s).replace(/^(IMO )+(?=\d)/, '');
   }
-  // Punteggio di una nave per q (normalizzata con norm): il criterio migliore fra MMSI o IMO esatto 100, nome esatto 90,
-  // nominativo esatto 80, inizio del nome 70, inizio di MMSI o IMO 60, inizio di una parola del nome 50, inizio del
-  // nominativo 40, nome che contiene q 30; nessuno = 0. v = dati statici (name, imo, callSign), anche mancanti.
+  // Punteggio con i campi già normalizzati (name e call con norm, q con normQuery e non vuota; id e imo stringhe, '' se
+  // mancano: chi chiama può passare '' anche quando q non è fatta di cifre, perché allora non possono corrispondere).
+  // Il criterio migliore fra MMSI o IMO esatto 100, nome esatto 90, nominativo esatto 80, inizio del nome 70, inizio di
+  // MMSI o IMO 60, inizio di una parola del nome 50 (dopo uno spazio: norm ha già trasformato - . / in spazi), inizio del
+  // nominativo 40, nome che contiene q 30; nessuno = 0. Un solo indexOf sul nome per i casi senza corrispondenza.
+  function scoreFields(name, call, id, imo, q) {
+    if (id === q || (imo && imo === q)) return 100;
+    const i = name.indexOf(q);
+    if (i === 0 && name.length === q.length) return 90;
+    if (call === q) return 80;
+    if (i === 0) return 70;
+    if ((id && id.startsWith(q)) || (imo && imo.startsWith(q))) return 60;
+    if (i > 0) for (let j = i; j > 0; j = name.indexOf(q, j + 1)) if (name.charCodeAt(j - 1) === 32) return 50;
+    if (call && call.startsWith(q)) return 40;
+    return i > 0 ? 30 : 0;
+  }
+  // Punteggio di una nave per q (normalizzata con normQuery). v = dati statici (name, imo, callSign), anche mancanti.
   function searchScore(v, mmsi, q) {
-    q = norm(q);
+    q = normQuery(q);
     if (!q) return 0;
     v = v || {};
-    const id = String(mmsi ?? ''), imo = v.imo ? String(v.imo) : '';
-    if (id === q || imo === q) return 100;
-    const name = norm(v.name), call = norm(v.callSign);
-    if (name === q) return 90;
-    if (call === q) return 80;
-    if (name.startsWith(q)) return 70;
-    if (id.startsWith(q) || (imo && imo.startsWith(q))) return 60;
-    if (startsWord(name, q)) return 50;
-    if (call && call.startsWith(q)) return 40;
-    if (name.includes(q)) return 30;
-    return 0;
+    return scoreFields(norm(v.name), norm(v.callSign), String(mmsi ?? ''), v.imo ? String(v.imo) : '', q);
   }
   // Ordine dei risultati { score, ts, mmsi }: punteggio decrescente, poi posizione più recente (toMs: orario mancante o
   // illeggibile = il più vecchio; confronto senza sottrazioni, quindi mai NaN), poi MMSI crescente: ordine stabile
@@ -677,6 +680,22 @@
     const ta = toMs(a.ts), tb = toMs(b.ts);
     if (ta !== tb) return ta > tb ? -1 : 1;
     return a.mmsi < b.mmsi ? -1 : a.mmsi > b.mmsi ? 1 : 0;
+  }
+  // Inserisce hit in top (al massimo max, nell'ordine di compareSearch) senza ordinare tutte le corrispondenze: con top
+  // pieno basta un confronto con l'ultima per scartare. Stesso risultato di sort(compareSearch).slice(0, max).
+  function insertTop(top, hit, max) {
+    let k = top.length;
+    if (k >= max) {
+      if (compareSearch(hit, top[max - 1]) >= 0) return;
+      k = max - 1;
+    }
+    while (k > 0 && compareSearch(hit, top[k - 1]) < 0) { top[k] = top[k - 1]; k--; }
+    top[k] = hit;
+  }
+  // Testo degli omonimi fra i risultati: '' sotto 2; «almeno N» se il conteggio può essere incompleto (tetto dei
+  // risultati raggiunto, o nave trovata per MMSI, IMO o nominativo: le omonime possono non corrispondere)
+  function twinsText(n, complete) {
+    return n > 1 ? `${complete ? '' : 'almeno '}${n} navi con questo nome` : '';
   }
   // Quante navi per nome (norm) fra items = [{ name }]; nomi vuoti esclusi
   function homonymCounts(items) {
@@ -701,5 +720,5 @@
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
-    norm, searchScore, compareSearch, homonymCounts, resultLine };
+    norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine };
 });

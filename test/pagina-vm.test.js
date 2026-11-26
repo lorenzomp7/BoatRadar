@@ -436,10 +436,12 @@ test('pagina: pallino verde/arancio/rosso con il testo dell\'età, in scheda e n
   page.el('q').value = 'eta';
   await page.ctx.runSearch('eta');
   const res = page.el('results').innerHTML;
-  assert.ok(res.includes(`${dot('arancio')}<b>ETA LONTANA</b>`), 'risultato del server: pallino');
-  assert.match(res, /<b>ETA LONTANA<\/b><span class="mmsi">247620004<\/span><small>[^<]*7 min fa<\/small>/, 'e il testo dell\'età');
-  assert.ok(res.includes(`${dot('verde')}<b>ETA VERDE</b>`) && res.includes('2 min fa'), 'nave in mappa');
-  assert.ok(res.includes(`${dot('rosso')}<b>ETA ROSSO</b>`));
+  // nome con il suo id (nome accessibile, punto 12), MMSI con l'etichetta «MMSI » solo per i lettori di schermo
+  const named = (c, name) => new RegExp(`${dot(c).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<b id="res-\\d+-n">${name}</b>`);
+  assert.match(res, named('arancio', 'ETA LONTANA'), 'risultato del server: pallino');
+  assert.match(res, /<b id="res-247620004-n">ETA LONTANA<\/b><span class="mmsi" id="res-247620004-m"><span class="sr-only">MMSI <\/span>247620004<\/span><small id="res-247620004-d">[^<]*7 min fa<\/small>/, 'e il testo dell\'età');
+  assert.ok(named('verde', 'ETA VERDE').test(res) && res.includes('2 min fa'), 'nave in mappa');
+  assert.match(res, named('rosso', 'ETA ROSSO'));
 });
 
 // --- Correzioni dopo revisione e QA (punti 8 e 62) ---------------------------------------------------------------
@@ -540,7 +542,8 @@ test('pagina: ricerca: risultati del server scaduti segnati «posizione scaduta�
   page.el('q').value = 'cerca';
   await page.ctx.runSearch('cerca');
   const res = page.el('results').innerHTML;
-  const row = (c, name, mmsi, age) => new RegExp(`${dotOf(c)}<b>${name}</b><span class="mmsi">${mmsi}</span><small>[^<]*${age}</small>`);
+  const row = (c, name, mmsi, age) => new RegExp(`${dotOf(c)}<b id="res-${mmsi}-n">${name}</b><span class="mmsi" id="res-${mmsi}-m">`
+    + `<span class="sr-only">MMSI </span>${mmsi}</span><small id="res-${mmsi}-d">[^<]*${age}</small>`);
   assert.match(res, row('rosso', 'CERCA SCADUTA', EXP, 'posizione scaduta'), res);
   assert.match(res, row('rosso', 'CERCA ORMEGGIATA', OLDM, 'posizione di 40 min fa'), 'come tooltip e scheda');
   assert.match(res, row('verde', 'CERCA FRESCA', FRESHR, '2 min fa'));
