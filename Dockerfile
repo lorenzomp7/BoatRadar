@@ -5,6 +5,7 @@ ENV NODE_ENV=production PORT=8765
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY server.js position-check.js boatradar.html vesselfinder.html ./
+COPY public/ais-logic.js ./public/
 USER node
 EXPOSE 8765
 CMD ["node", "server.js"]

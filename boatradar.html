@@ -96,6 +96,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
+<script src="public/ais-logic.js"></script>
 <script>
 // Dati AIS live di tutto il mondo, raccolti da server.js tramite aisstream.io (solo l'area visibile).
 // Dati AIS live del Baltico, aperti e senza chiave (Fintraffic / Digitraffic).
@@ -105,30 +106,14 @@ const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
 const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
 
-const TYPES = [
-  { key:'cargo',     label:'Cargo',            color:'#5ad17c', test:t => t >= 70 && t <= 79 },
-  { key:'tanker',    label:'Petroliera',       color:'#ff6b5e', test:t => t >= 80 && t <= 89 },
-  { key:'passenger', label:'Passeggeri',       color:'#4da3ff', test:t => t >= 60 && t <= 69 },
-  { key:'fishing',   label:'Pesca',            color:'#ff9f43', test:t => t === 30 },
-  { key:'pleasure',  label:'Diporto / vela',   color:'#d77bff', test:t => t === 36 || t === 37 },
-  { key:'service',   label:'Servizio / rimorchio', color:'#ffc83d', test:t => (t >= 31 && t <= 35) || (t >= 50 && t <= 59) },
-  { key:'other',     label:'Altro / sconosciuto',  color:'#9aa7b6', test:() => true },
-];
-const typeOf = t => TYPES.find(x => x.test(t ?? -1));
-
-// Nome preciso del tipo di nave (codici AIS)
-function typeName(t) {
-  const exact = { 30:'Peschereccio', 31:'Rimorchiatore', 32:'Rimorchiatore', 33:'Draga', 34:'Operazioni subacquee', 35:'Nave militare',
-    36:'Barca a vela', 37:'Imbarcazione da diporto', 50:'Pilotina', 51:'Ricerca e soccorso', 52:'Rimorchiatore', 53:'Servizio portuale',
-    54:'Antinquinamento', 55:'Forze dell\'ordine', 58:'Trasporto sanitario', 59:'Nave speciale' };
-  if (exact[t]) return exact[t];
-  if (t >= 20 && t <= 29) return 'Aliscafo / WIG';
-  if (t >= 40 && t <= 49) return 'Unità veloce';
-  if (t >= 60 && t <= 69) return 'Nave passeggeri';
-  if (t >= 70 && t <= 79) return 'Nave cargo';
-  if (t >= 80 && t <= 89) return 'Petroliera / cisterna';
-  return null;
+// Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
+// Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
+if (!window.AisLogic) {
+  const msg = 'Errore: public/ais-logic.js non è stato caricato. Ricarica la pagina (Ctrl+F5 o trascina giù sul telefono).';
+  document.getElementById('status').textContent = msg;
+  throw new Error(msg);
 }
+const { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures } = AisLogic;
 
 const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
   'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
@@ -191,7 +176,6 @@ const ShipMarker = L.CircleMarker.extend({
     r._fillStroke(ctx, this);
   },
 });
-const heading = p => p.sog > 0.5 && p.sog < 102.3 && p.cog != null && p.cog < 360 ? p.cog : null;
 new ResizeObserver(() => map.invalidateSize()).observe($('map'));
 
 const meta = new Map();     // mmsi -> dati statici (nome, IMO, tipo…)
@@ -220,10 +204,8 @@ async function loadBalticMeta() {
   if (!res.ok) throw new Error('vessels ' + res.status);
   for (const v of await res.json()) {
     const length = (v.referencePointA || 0) + (v.referencePointB || 0), width = (v.referencePointC || 0) + (v.referencePointD || 0);
-    const e = v.eta, month = (e >> 16) & 15, day = (e >> 11) & 31, hour = (e >> 6) & 31, minute = e & 63;
     meta.set(v.mmsi, { ...v, draught: v.draught / 10, length: length || null, width: width || null,
-      eta: month >= 1 && month <= 12 && day ? { month, day, hour: hour < 24 ? hour : null, minute: minute < 60 ? minute : null } : null,
-      staticTs: v.timestamp });
+      eta: decodeEta(v.eta), staticTs: v.timestamp });
   }
 }
 
@@ -239,15 +221,16 @@ async function loadLocations() {
   const [med, baltic] = await Promise.allSettled([
     features(`${API}/locations?bbox=${viewBox()}`), features(`${BALTIC}/locations?from=${Date.now() - WINDOW_MS}`)]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
-  const seen = new Set();
-  for (const f of [...(baltic.value || []), ...(med.value || [])]) {
-    const mmsi = f.mmsi ?? f.properties.mmsi;
+  // stessa nave in entrambe le fonti: tengo la posizione più recente (properties.source dice da dove viene)
+  const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }]);
+  for (const [mmsi, f] of merged) {
     const [lon, lat] = f.geometry.coordinates;
-    seen.add(mmsi);
     const { name, shipType } = f.properties;
     if (name || shipType != null) meta.set(mmsi, { ...meta.get(mmsi), ...(name && { name }), ...(shipType != null && { shipType }) });
     const color = typeOf(meta.get(mmsi)?.shipType).color;
     let m = markers.get(mmsi);
+    // posizione più vecchia di quella già in mappa (es. l'altra fonte è in ritardo): il marker resta dov'è
+    if (m && isNewer(m.props?.timestampExternal, f.properties.timestampExternal)) continue;
     if (!m) {
       const marker = new ShipMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95,
         heading: heading(f.properties) })
@@ -262,7 +245,7 @@ async function loadLocations() {
     }
     m.props = f.properties;
   }
-  for (const [mmsi, m] of markers) if (!seen.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
+  for (const [mmsi, m] of markers) if (!merged.has(mmsi)) { m.marker.remove(); markers.delete(mmsi); }
   const st = await fetch(`${API}/status`).then(r => r.json()).catch(() => null);
   const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
@@ -316,7 +299,8 @@ function facts(mmsi) {
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
-      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}`;
+      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}
+      ${row('Fonte', SOURCE_LABEL[p.source])}`;
 }
 
 function render(mmsi) {
@@ -551,7 +535,7 @@ $('q').addEventListener('input', async e => {
     if (hits.length >= 25) break;
     const v = meta.get(mmsi) || {};
     if (found.has(mmsi)) continue;
-    if ((v.name || '').toUpperCase().includes(q) || String(mmsi).startsWith(q) || String(v.imo || '').startsWith(q)) {
+    if (matchesQuery(v, mmsi, q)) {
       found.set(mmsi, m.marker.getLatLng());
       hits.push({ mmsi, v });
     }

@@ -15,6 +15,10 @@ Lavora su `main_claude` salvo indicazione diversa.
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
+- `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale…), modulo UMD
+  (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js`. server.js lo
+  serve da un elenco fisso; va nella `COPY` del `Dockerfile` e in `pages.yml`, che nella pagina pubblicata
+  aggiunge `?v=<commit>` allo script contro la cache (lo controlla un test).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, generato dal workflow): indirizzo del server in
   `window.BOATRADAR_API`; servito vuoto da `server.js` in locale.
