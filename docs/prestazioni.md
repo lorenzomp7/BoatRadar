@@ -132,6 +132,17 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
   restituite perché il filtro viene prima del campione): 0,8 / 1,5 ms con la cache, 43,9-44,5 ms di mediana a
   cache spenta, un po' meno della vista senza filtro (campione su 6000 navi invece che su 30.000).
 
+- Punto 12, ricerca ordinata (26/11/2026): `/api/search` ora dà un punteggio a TUTTE le navi con posizione
+  (`searchScore`: nome, MMSI, IMO, nominativo) e ordina le corrispondenze (`compareSearch`) prima di tenerne 25; prima si
+  fermava alle prime 25 trovate. Misura con `tools/carico.js --navi 30000 --richieste 50 --cerca "<testo>"` (nomi
+  sintetici «NAVE n»), mediana / p95, prima (1bb8261) e dopo nella stessa sessione:
+  «NAVE» (30.000 corrispondenze) 0,9 / 1,1 → 30,6 / 49,4 ms; «NAVE 1» (11.111) 0,8 / 1,1 → 25,5 / 31,7 ms;
+  «NAVE 29999» (1) 6,7 / 11,1 → 22,7 / 41,1 ms; «XYZ» (nessuna) 6,9 / 10,9 → 14,9 / 29,8 ms. In Node puro, senza
+  HTTP: punteggio delle 30.000 navi 11-16 ms (circa 5 ms per `norm` di nome e nominativo), ordinamento di 30.000
+  corrispondenze 2-5 ms. Il costo è uno per ricerca, non per tasto (la pagina aspetta 250 ms dopo l'ultimo tasto e
+  annulla la richiesta precedente), quindi accettabile; se servisse, la leva è tenere in memoria nome e nominativo già
+  normalizzati in `vessels`.
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |

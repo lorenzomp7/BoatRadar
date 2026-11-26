@@ -10,7 +10,7 @@ const zlib = require('zlib');
 const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
 const { sampleByImportance, staticImportance } = require('./sample');
-const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter } = require('./public/ais-logic');
+const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter, norm, searchScore, compareSearch } = require('./public/ais-logic');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -452,21 +452,23 @@ function sendLocations(req, res, query) {
   });
 }
 
+// Ricerca (punto 12): tutte le navi con una posizione ancora valida (isLive, punto 8) con searchScore > 0 (nome,
+// MMSI, IMO, nominativo), ordinate con compareSearch (punteggio, posizione più recente, MMSI), le prime SEARCH_MAX.
+// q < 2 caratteri (dopo norm) = nessun risultato.
+const SEARCH_MAX = 25;
 function search(q) {
-  q = q.trim().toUpperCase();
-  const hits = [];
-  if (q.length < 2) return hits;
-  const now = Date.now();
-  for (const v of vessels.values()) {
-    const p = positions.get(v.mmsi);
-    if (p && isLive(p, now) && ((v.name || '').toUpperCase().includes(q) || String(v.mmsi).startsWith(q) || String(v.imo || '').startsWith(q))) {
-      // età nei risultati della pagina (punto 62); velocità e stato per decidere, come per /api/locations, se la nave è
-      // ferma (conservata più a lungo) o se la posizione è scaduta
-      hits.push({ ...v, lat: p.lat, lon: p.lon, sog: p.sog, navStat: p.navStat, timestampExternal: p.ts });
-      if (hits.length >= 25) break;
-    }
+  q = norm(q);
+  if (q.length < 2) return [];
+  const now = Date.now(), hits = [];
+  for (const [mmsi, p] of positions) {
+    if (!isLive(p, now)) continue;
+    const v = vessels.get(mmsi), score = searchScore(v, mmsi, q);
+    if (score > 0) hits.push({ score, ts: p.ts, mmsi, v, p });
   }
-  return hits;
+  // età nei risultati della pagina (punto 62); velocità e stato per decidere, come per /api/locations, se la nave è
+  // ferma (conservata più a lungo) o se la posizione è scaduta
+  return hits.sort(compareSearch).slice(0, SEARCH_MAX).map(({ mmsi, v, p }) =>
+    ({ mmsi, ...v, lat: p.lat, lon: p.lon, sog: p.sog, navStat: p.navStat, timestampExternal: p.ts }));
 }
 
 // File statico della repo: le intestazioni partono solo quando il file è aperto. Se non si può

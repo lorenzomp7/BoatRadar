@@ -46,8 +46,12 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
       docListeners.push({ type, fn, capture: opts === true || !!opts?.capture });
     } };
   const el = id => {
-    if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
-      isConnected: true, addEventListener() {}, focus() { document.activeElement = this; }, getClientRects: () => [{}],
+    // listeners: gestori registrati con addEventListener (dispatch li chiama); attributes: setAttribute/getAttribute
+    if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true, value: '',
+      isConnected: true, listeners: [], addEventListener(type, fn) { this.listeners.push({ type, fn }); },
+      attributes: {}, setAttribute(k, v) { this.attributes[k] = String(v); }, getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; },
+      removeAttribute(k) { delete this.attributes[k]; }, scrollIntoView() {},
+      focus() { document.activeElement = this; }, getClientRects: () => [{}],
       contains(x) { return x === this; },
       getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }) });
     return elements.get(id);
@@ -179,7 +183,14 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
   const setHidden = hidden => { document.hidden = hidden; for (const fn of listeners.get('visibilitychange') || []) fn({ type: 'visibilitychange' }); };
   // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
   const fire = type => { for (const fn of winListeners.get(type) || []) fn({ type }); };
-  return { ctx, el, get, requests, stop, storage, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
+  // evento su un elemento (es. 'input' o 'keydown' sul campo di ricerca): chiama i gestori registrati, restituisce
+  // l'evento (defaultPrevented) e i valori restituiti dai gestori (results, per aspettare quelli asincroni)
+  const dispatch = (id, type, extra = {}) => {
+    const e = { type, target: el(id), defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra };
+    e.results = el(id).listeners.filter(l => l.type === type).map(l => l.fn(e));
+    return e;
+  };
+  return { ctx, el, get, requests, dispatch, stop, storage, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }

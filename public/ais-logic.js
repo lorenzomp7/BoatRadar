@@ -54,10 +54,9 @@
     return { month, day, hour: hour < 24 ? hour : null, minute: minute < 60 ? minute : null };
   }
 
-  // Ricerca locale: q (già in maiuscolo) contenuto nel nome, oppure inizio di MMSI o IMO
+  // Ricerca locale: la nave corrisponde a q se searchScore (punto 12, in fondo) è maggiore di 0
   function matchesQuery(v, mmsi, q) {
-    v = v || {};
-    return (v.name || '').toUpperCase().includes(q) || String(mmsi).startsWith(q) || String(v.imo || '').startsWith(q);
+    return searchScore(v, mmsi, q) > 0;
   }
 
   // Fonti dei dati di posizione e testo mostrato nella scheda (riga «Fonte»)
@@ -640,10 +639,67 @@
     return Number.isFinite(h) ? Math.max(min, h) : min;
   }
 
+  // Punto 12: ricerca ordinata e riconoscibile (test in test/ricerca-logica.test.js). La usano server.js (/api/search) e la
+  // pagina (unione con le navi in mappa), così l'ordine è lo stesso.
+  // Testo confrontabile: maiuscolo, spazi (anche a capo, tab) compattati e tolti ai lati; mancante = ''
+  function norm(s) {
+    return String(s ?? '').toUpperCase().replace(/\s+/g, ' ').trim();
+  }
+  // Inizio di una parola del nome: dopo spazio, trattino, punto o barra
+  const WORD_SEP = ' -./';
+  function startsWord(name, q) {
+    for (let i = name.indexOf(q, 1); i > 0; i = name.indexOf(q, i + 1)) if (WORD_SEP.includes(name[i - 1])) return true;
+    return false;
+  }
+  // Punteggio di una nave per q (normalizzata con norm): il criterio migliore fra MMSI o IMO esatto 100, nome esatto 90,
+  // nominativo esatto 80, inizio del nome 70, inizio di MMSI o IMO 60, inizio di una parola del nome 50, inizio del
+  // nominativo 40, nome che contiene q 30; nessuno = 0. v = dati statici (name, imo, callSign), anche mancanti.
+  function searchScore(v, mmsi, q) {
+    q = norm(q);
+    if (!q) return 0;
+    v = v || {};
+    const id = String(mmsi ?? ''), imo = v.imo ? String(v.imo) : '';
+    if (id === q || imo === q) return 100;
+    const name = norm(v.name), call = norm(v.callSign);
+    if (name === q) return 90;
+    if (call === q) return 80;
+    if (name.startsWith(q)) return 70;
+    if (id.startsWith(q) || (imo && imo.startsWith(q))) return 60;
+    if (startsWord(name, q)) return 50;
+    if (call && call.startsWith(q)) return 40;
+    if (name.includes(q)) return 30;
+    return 0;
+  }
+  // Ordine dei risultati { score, ts, mmsi }: punteggio decrescente, poi posizione più recente (toMs: orario mancante o
+  // illeggibile = il più vecchio; confronto senza sottrazioni, quindi mai NaN), poi MMSI crescente: ordine stabile
+  function compareSearch(a, b) {
+    if (a.score !== b.score) return b.score - a.score;
+    const ta = toMs(a.ts), tb = toMs(b.ts);
+    if (ta !== tb) return ta > tb ? -1 : 1;
+    return a.mmsi < b.mmsi ? -1 : a.mmsi > b.mmsi ? 1 : 0;
+  }
+  // Quante navi per nome (norm) fra items = [{ name }]; nomi vuoti esclusi
+  function homonymCounts(items) {
+    const out = new Map();
+    for (const it of items || []) {
+      const n = norm(it?.name);
+      if (n) out.set(n, (out.get(n) || 0) + 1);
+    }
+    return out;
+  }
+  // Seconda riga di un risultato: «tipo · bandiera · 180 m · 5 min fa · → DESTINAZIONE», senza le parti mancanti
+  function resultLine({ typeName: type, flag, length, age, destination } = {}) {
+    const text = x => (typeof x === 'string' && x.trim() ? x.trim() : null);
+    const dest = text(destination);
+    return [text(type), text(flag), finite(length) && length > 0 ? `${Math.round(length)} m` : null, text(age), dest && '→ ' + dest]
+      .filter(Boolean).join(' · ');
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
     apiList, createRecheck, createFailover, networkDown,
-    pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight };
+    pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
+    norm, searchScore, compareSearch, homonymCounts, resultLine };
 });
