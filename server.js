@@ -213,6 +213,23 @@ function search(q) {
   return hits;
 }
 
+// File statico della repo: le intestazioni partono solo quando il file è aperto. Se non si può
+// leggere (mancante, permessi) risponde 500 e scrive il motivo nel log, senza far cadere il processo.
+function sendFile(res, file, type) {
+  const stream = fs.createReadStream(path.join(__dirname, file));
+  stream.on('open', () => {
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+    stream.pipe(res);
+  });
+  stream.on('error', err => {
+    console.error(`file statico ${file}: ${err.code || err.message}`);
+    if (res.headersSent) return res.destroy();
+    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Errore del server');
+  });
+  res.on('close', () => stream.destroy());
+}
+
 http.createServer((req, res) => {
   const { pathname: url, searchParams: query } = new URL(req.url, 'http://localhost');
   if (url === '/api/locations') return json(req, res, locations(query));
@@ -226,15 +243,9 @@ http.createServer((req, res) => {
   }
   // script della pagina: elenco fisso, nessun altro file di public/ è servito
   const asset = { '/public/ais-logic.js': 'public/ais-logic.js' }[url];
-  if (asset) {
-    res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
-    return fs.createReadStream(path.join(__dirname, asset)).pipe(res);
-  }
+  if (asset) return sendFile(res, asset, 'text/javascript; charset=utf-8');
   const page = { '/': 'boatradar.html', '/boatradar.html': 'boatradar.html', '/vesselfinder.html': 'vesselfinder.html' }[url];
-  if (page) {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    return fs.createReadStream(path.join(__dirname, page)).pipe(res);
-  }
+  if (page) return sendFile(res, page, 'text/html; charset=utf-8');
   res.writeHead(404); res.end('Not found');
 }).listen(PORT, () => {
   console.log(`BoatRadar in ascolto sulla porta ${PORT}`);

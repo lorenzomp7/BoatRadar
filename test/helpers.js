@@ -27,7 +27,8 @@ async function waitFor(fn, what, ms = 5000) {
 // Avvia server.js contro un finto aisstream. env si aggiunge a quello del processo; le variabili
 // di proxy dell'ambiente vengono tolte, così i test non dipendono dalla macchina che li esegue.
 // aisOptions va al finto aisstream (es. { perMessageDeflate: true } per accettare la compressione).
-async function startServer(env = {}, aisOptions = {}) {
+// cwd: cartella con il server.js da avviare (predefinita la repo; serve per provare file mancanti).
+async function startServer(env = {}, aisOptions = {}, { cwd = ROOT } = {}) {
   const fakeAis = new WebSocketServer({ port: 0, ...aisOptions });
   const connected = new Promise(resolve => fakeAis.on('connection', ws => {
     ws.once('message', data => resolve({ socket: ws, subscription: JSON.parse(data.toString()) }));
@@ -36,7 +37,7 @@ async function startServer(env = {}, aisOptions = {}) {
   const base = { ...process.env };
   for (const k of Object.keys(base)) if (/^(https?|no|all)_proxy$|^NODE_USE_ENV_PROXY$/i.test(k)) delete base[k];
   const child = spawn(process.execPath, ['server.js'], {
-    cwd: ROOT,
+    cwd,
     env: { ...base, PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
       AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}`, RENDER_EXTERNAL_URL: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],

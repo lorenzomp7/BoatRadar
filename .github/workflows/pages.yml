@@ -30,6 +30,9 @@ jobs:
         run: |
           mkdir _site
           cp boatradar.html _site/index.html
+          # versione del modulo legata al commit: pagina e public/ais-logic.js non restano disallineati nella cache
+          sed -i "s|src=\"public/ais-logic.js\"|src=\"public/ais-logic.js?v=${GITHUB_SHA}\"|" _site/index.html
+          grep -qF "src=\"public/ais-logic.js?v=${GITHUB_SHA}\"" _site/index.html || { echo "versione di ais-logic.js non applicata a index.html"; exit 1; }
           cp vesselfinder.html _site/
           mkdir -p _site/public && cp public/ais-logic.js _site/public/
           if [ -z "$API_HOST" ] && [ -n "$VM_HOST" ]; then API_HOST="boatradar.${VM_HOST//./-}.sslip.io"; fi

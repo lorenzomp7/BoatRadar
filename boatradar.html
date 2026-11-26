@@ -106,8 +106,14 @@ const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
 const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
 
-// Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js
-const { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, mergeFeatures } = AisLogic;
+// Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
+// Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
+if (!window.AisLogic) {
+  const msg = 'Errore: public/ais-logic.js non è stato caricato. Ricarica la pagina (Ctrl+F5 o trascina giù sul telefono).';
+  document.getElementById('status').textContent = msg;
+  throw new Error(msg);
+}
+const { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures } = AisLogic;
 
 const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
   'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
@@ -223,6 +229,8 @@ async function loadLocations() {
     if (name || shipType != null) meta.set(mmsi, { ...meta.get(mmsi), ...(name && { name }), ...(shipType != null && { shipType }) });
     const color = typeOf(meta.get(mmsi)?.shipType).color;
     let m = markers.get(mmsi);
+    // posizione più vecchia di quella già in mappa (es. l'altra fonte è in ritardo): il marker resta dov'è
+    if (m && isNewer(m.props?.timestampExternal, f.properties.timestampExternal)) continue;
     if (!m) {
       const marker = new ShipMarker([lat, lon], { renderer, radius:4, weight:1, color:'#0b1118', fillColor:color, fillOpacity:.95,
         heading: heading(f.properties) })

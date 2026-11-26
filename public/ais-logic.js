@@ -53,24 +53,56 @@
   // Fonti dei dati di posizione e testo mostrato nella scheda (riga «Fonte»)
   const SOURCE_LABEL = { digitraffic: 'Digitraffic (Fintraffic, Baltico)', aisstream: 'aisstream.io' };
 
+  // Orario in millisecondi: numero finito così com'è, stringa numerica → numero, stringa ISO →
+  // Date.parse; tutto il resto (mancante, illeggibile) = -Infinity, cioè il più vecchio possibile.
+  function toMs(t) {
+    if (typeof t === 'number') return Number.isFinite(t) ? t : -Infinity;
+    if (typeof t !== 'string' || !t.trim()) return -Infinity;
+    const n = Number(t);
+    if (Number.isFinite(n)) return n;
+    const d = Date.parse(t);
+    return Number.isFinite(d) ? d : -Infinity;
+  }
+
+  // true se l'orario a è più recente di b (confronto con toMs; a parità false)
+  const isNewer = (a, b) => toMs(a) > toMs(b);
+
+  // Dati statici che la pagina prende dalle posizioni e mette in meta: se la posizione vincente
+  // non li ha (null, undefined o testo vuoto), restano quelli della perdente.
+  const STATIC_FIELDS = ['name', 'shipType'];
+  const missing = v => v == null || v === '';
+
+  // MMSI come intero positivo, altrimenti null
+  function mmsiOf(f) {
+    const n = Number(f.mmsi ?? f.properties?.mmsi);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+
   // Unisce le posizioni di più fonti: groups = [{ source, features }] (features può mancare).
-  // Restituisce Map<mmsi, feature>: per ogni MMSI vince properties.timestampExternal più alto
-  // (mancante = la più vecchia); a parità resta la prima nell'ordine dei gruppi. Ogni feature è una
-  // copia con properties.source; gli originali non vengono toccati. Senza MMSI la feature è scartata.
+  // Restituisce Map<mmsi numerico, feature>: per ogni MMSI vince properties.timestampExternal più alto
+  // (toMs; mancante o illeggibile = la più vecchia); a parità resta la prima nell'ordine dei gruppi
+  // (e, nello stesso gruppo, nell'ordine dell'array). Ogni feature è una copia con properties.source
+  // e i STATIC_FIELDS mancanti presi dalla perdente; gli originali non vengono toccati.
+  // Feature null o con MMSI non intero o ≤ 0 sono scartate.
   function mergeFeatures(groups) {
     const out = new Map(), time = new Map();
     for (const { source, features } of groups) {
       for (const f of features || []) {
-        const mmsi = f.mmsi ?? f.properties?.mmsi;
+        if (!f) continue;
+        const mmsi = mmsiOf(f);
         if (mmsi == null) continue;
-        const t = Number.isFinite(f.properties?.timestampExternal) ? f.properties.timestampExternal : -Infinity;
-        if (out.has(mmsi) && !(t > time.get(mmsi))) continue;
-        out.set(mmsi, { ...f, properties: { ...f.properties, source } });
-        time.set(mmsi, t);
+        const t = toMs(f.properties?.timestampExternal);
+        const prev = out.get(mmsi);
+        const win = !prev || t > time.get(mmsi);
+        const winner = win ? { ...f, properties: { ...f.properties, source } } : prev;
+        const loser = win ? prev?.properties : f.properties;
+        for (const k of STATIC_FIELDS)
+          if (missing(winner.properties[k]) && loser && !missing(loser[k])) winner.properties[k] = loser[k];
+        if (win) { out.set(mmsi, winner); time.set(mmsi, t); }
       }
     }
     return out;
   }
 
-  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, mergeFeatures };
+  return { TYPES, typeOf, typeName, heading, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures };
 });

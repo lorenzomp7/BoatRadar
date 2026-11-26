@@ -69,20 +69,50 @@ test('il modulo non crea variabili globali oltre AisLogic', () => {
   assert.equal(typeof ctx.AisLogic.typeOf, 'function');
 });
 
+// pages.yml con le virgolette del comando shell (\") lette come virgolette semplici
+const readPagesYml = () => fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pages.yml'), 'utf8').replace(/\\"/g, '"');
+
 test('ogni script locale della pagina è pubblicato su Pages e copiato nell\'immagine Docker', () => {
   const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  const local = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(m => m[1])
+  // la querystring (?v=…, aggiunta da pages.yml) non fa parte del percorso del file
+  const local = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(m => m[1].split('?')[0])
     .filter(src => !/^https?:/.test(src) && src !== 'config.js');
   assert.ok(local.includes('public/ais-logic.js'), 'la pagina carica public/ais-logic.js');
   const copied = fs.readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8').split('\n')
     .filter(l => /^\s*COPY\s/i.test(l)).flatMap(l => l.trim().split(/\s+/).slice(1, -1));
-  const pages = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pages.yml'), 'utf8');
+  const pages = readPagesYml();
+  const re = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const src of local) {
     assert.ok(copied.includes(src), `${src} manca in una riga COPY del Dockerfile`);
-    assert.ok(new RegExp(`cp ${src.replace(/[.]/g, '\\.')} _site/`).test(pages), `${src} non è copiato in _site da pages.yml`);
+    // cartella di arrivo: _site/ + la cartella del file (public/ais-logic.js → _site/public/)
+    const dir = path.posix.dirname(src) === '.' ? '_site/' : `_site/${path.posix.dirname(src)}/`;
+    assert.match(pages, new RegExp(`cp ${re(src)} ${re(dir)}(${re(path.posix.basename(src))})?(\\s|$)`, 'm'),
+      `${src} non è copiato in ${dir} da pages.yml`);
+    // versione nello script di index.html, così pagina e modulo non restano disallineati nella cache
+    assert.ok(pages.includes(`src="${src}?v=\${GITHUB_SHA}"`), `${src} senza ?v=\${GITHUB_SHA} in pages.yml`);
   }
   // la pagina lo carica prima del proprio script, che usa AisLogic subito
-  assert.ok(html.indexOf('src="public/ais-logic.js"') < html.indexOf('= AisLogic'), 'ais-logic.js caricato prima dell\'uso');
+  const at = html.search(/src="public\/ais-logic\.js(\?[^"]*)?"/);
+  assert.ok(at >= 0 && at < html.indexOf('= AisLogic'), 'ais-logic.js caricato prima dell\'uso');
+});
+
+test('pages.yml aggiunge ?v=${GITHUB_SHA} allo script copiato e si ferma se non lo trova', () => {
+  const pages = readPagesYml();
+  assert.match(pages, /sed -i [^\n]*src="public\/ais-logic\.js"[^\n]*src="public\/ais-logic\.js\?v=\$\{GITHUB_SHA\}"[^\n]*_site\/index\.html/);
+  assert.match(pages, /grep -q[^\n]*ais-logic\.js\?v=\$\{GITHUB_SHA\}[^\n]*_site\/index\.html/, 'controllo che la sostituzione sia avvenuta');
+});
+
+test('boatradar.html: senza AisLogic la riga di stato spiega il problema invece di un ReferenceError', () => {
+  const vm = require('node:vm');
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  const code = html.split('<script src="public/ais-logic.js"></script>')[1].match(/<script>([\s\S]*?)<\/script>/)[1];
+  const status = { textContent: 'Caricamento…' };
+  const document = { getElementById: id => (id === 'status' ? status : null) };
+  const ctx = vm.createContext({ document, console: { warn() {}, error() {} } });
+  ctx.window = ctx;
+  assert.throws(() => vm.runInContext(code, ctx), err => err.name === 'Error' && /ais-logic\.js/.test(err.message));
+  assert.match(status.textContent, /ais-logic\.js/);
+  assert.match(status.textContent, /ricarica/i);
 });
 
 // --- Punto 6: unione Baltico (Digitraffic) e mondo (aisstream) -------------------------------------
@@ -139,4 +169,107 @@ test('mergeFeatures: non modifica gli originali e accetta gruppi vuoti', () => {
 test('SOURCE_LABEL: testo della riga «Fonte» per ogni fonte', () => {
   assert.equal(AL.SOURCE_LABEL.digitraffic, 'Digitraffic (Fintraffic, Baltico)');
   assert.equal(AL.SOURCE_LABEL.aisstream, 'aisstream.io');
+});
+
+test('mergeFeatures: MMSI normalizzato a numero, scartati non interi e ≤ 0, feature null ignorate', () => {
+  const g = features => AL.mergeFeatures([{ source: 'aisstream', features }]);
+  const m = g([null, { ...feat(247000001, 1000, [10, 60]), mmsi: '247000001' }, undefined]);
+  assert.deepEqual([...m.keys()], [247000001], 'stringa numerica → numero');
+  for (const bad of ['', 'abc', NaN, 0, -1, 1.5, '0', Infinity, null, undefined])
+    assert.equal(g([{ type: 'Feature', mmsi: bad, geometry: { type: 'Point', coordinates: [10, 60] }, properties: { mmsi: bad } }]).size, 0,
+      `MMSI ${String(bad)} scartato`);
+  // stessa nave con MMSI numero in una fonte e stringa nell'altra: una sola voce
+  const both = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(5, 1000, [10, 60])] },
+    { source: 'aisstream', features: [{ ...feat(5, 2000, [11, 60]), mmsi: '5' }] }]);
+  assert.equal(both.size, 1);
+  assert.equal(both.get(5).properties.source, 'aisstream');
+});
+
+test('toMs: numeri, stringhe numeriche, ISO; il resto è -Infinity', () => {
+  assert.equal(AL.toMs(1000), 1000);
+  assert.equal(AL.toMs(0), 0);
+  assert.equal(AL.toMs('1000'), 1000);
+  assert.equal(AL.toMs(' 1500 '), 1500);
+  assert.equal(AL.toMs('2026-11-26T08:00:00Z'), Date.parse('2026-11-26T08:00:00Z'));
+  for (const bad of [undefined, null, '', '  ', 'ieri', NaN, Infinity, -Infinity, {}, [], true])
+    assert.equal(AL.toMs(bad), -Infinity, `toMs(${String(bad)})`);
+});
+
+test('mergeFeatures: orari come stringa numerica o ISO confrontati come millisecondi', () => {
+  const iso = '2026-11-26T08:00:00Z', ms = Date.parse(iso);
+  const m = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(1, ms + 1, [10, 60])] },
+    { source: 'aisstream', features: [feat(1, iso, [11, 60])] }]);
+  assert.equal(m.get(1).properties.source, 'digitraffic', 'numero più recente della stringa ISO');
+  const n = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(2, '1000', [10, 60])] },
+    { source: 'aisstream', features: [feat(2, 999, [11, 60])] }]);
+  assert.equal(n.get(2).properties.source, 'digitraffic', '"1000" > 999');
+  const bad = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(3, 'ieri', [10, 60])] },
+    { source: 'aisstream', features: [feat(3, 1, [11, 60])] }]);
+  assert.equal(bad.get(3).properties.source, 'aisstream', 'orario illeggibile = il più vecchio');
+});
+
+test('mergeFeatures: nome e tipo della perdente restano se la vincente non li ha', () => {
+  assert.deepEqual(AL.STATIC_FIELDS, ['name', 'shipType']);
+  const d = feat(1, 3000, [10, 60]);                                       // Digitraffic: senza nome né tipo
+  const a = feat(1, 2000, [11, 60], { name: 'LAGUNA', shipType: 70 });      // aisstream: più vecchia
+  for (const groups of [
+    [{ source: 'digitraffic', features: [d] }, { source: 'aisstream', features: [a] }],
+    [{ source: 'aisstream', features: [a] }, { source: 'digitraffic', features: [d] }],
+  ]) {
+    const p = AL.mergeFeatures(groups).get(1).properties;
+    assert.equal(p.source, 'digitraffic');
+    assert.deepEqual([p.name, p.shipType, p.timestampExternal], ['LAGUNA', 70, 3000]);
+  }
+  assert.equal('name' in d.properties, false, 'originale intatto');
+  // i campi della vincente non vengono sovrascritti; nome vuoto o tipo null = mancanti
+  const own = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(2, 3000, [10, 60], { name: 'NUOVO', shipType: null })] },
+    { source: 'aisstream', features: [feat(2, 2000, [11, 60], { name: 'VECCHIO', shipType: 80 })] }]).get(2).properties;
+  assert.deepEqual([own.name, own.shipType], ['NUOVO', 80]);
+  const empty = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(3, 3000, [10, 60], { name: '' })] },
+    { source: 'aisstream', features: [feat(3, 2000, [11, 60], { name: 'LAGUNA' })] }]).get(3).properties;
+  assert.equal(empty.name, 'LAGUNA');
+  // tipo 0 è un valore AIS («non disponibile») trasmesso dalla nave: resta quello della vincente
+  const zero = AL.mergeFeatures([{ source: 'digitraffic', features: [feat(4, 3000, [10, 60], { shipType: 0 })] },
+    { source: 'aisstream', features: [feat(4, 2000, [11, 60], { shipType: 70 })] }]).get(4).properties;
+  assert.equal(zero.shipType, 0);
+});
+
+test('isNewer: confronta gli orari come toMs (usato dalla pagina per non far tornare indietro i marker)', () => {
+  assert.equal(AL.isNewer(2000, 1000), true);
+  assert.equal(AL.isNewer(1000, 2000), false);
+  assert.equal(AL.isNewer(1000, 1000), false, 'a parità non è più recente');
+  assert.equal(AL.isNewer('2026-11-26T08:00:01Z', Date.parse('2026-11-26T08:00:00Z')), true);
+  assert.equal(AL.isNewer(1, undefined), true, 'qualsiasi orario è più recente di nessuno');
+  assert.equal(AL.isNewer(undefined, 1), false);
+  assert.equal(AL.isNewer(undefined, undefined), false);
+});
+
+test('boatradar.html non sposta un marker su una posizione più vecchia di quella che mostra', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  assert.match(html, /isNewer\(m\.props\?\.timestampExternal, f\.properties\.timestampExternal\)/);
+});
+
+test('mergeFeatures: duplicati nello stesso gruppo, vince il più recente; a parità il primo', () => {
+  const m = AL.mergeFeatures([{ source: 'aisstream', features: [feat(1, 1000, [10, 60]), feat(1, 3000, [11, 60]), feat(1, 2000, [12, 60])] }]);
+  assert.deepEqual(m.get(1).geometry.coordinates, [11, 60]);
+  const tie = AL.mergeFeatures([{ source: 'aisstream', features: [feat(1, 1000, [10, 60]), feat(1, 1000, [11, 60])] }]);
+  assert.deepEqual(tie.get(1).geometry.coordinates, [10, 60]);
+});
+
+test('mergeFeatures: properties null o assenti ma MMSI in cima → tenuta con properties.source', () => {
+  for (const f of [{ type: 'Feature', mmsi: 7, geometry: { type: 'Point', coordinates: [10, 60] }, properties: null },
+    { type: 'Feature', mmsi: 7, geometry: { type: 'Point', coordinates: [10, 60] } }]) {
+    const got = AL.mergeFeatures([{ source: 'digitraffic', features: [f] }]).get(7);
+    assert.deepEqual(got.properties, { source: 'digitraffic' });
+    assert.deepEqual(got.geometry.coordinates, [10, 60]);
+  }
+});
+
+test('typeOf e typeName per 0-99 come in test/fixtures/tipi-nave.json', () => {
+  const { tipi } = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'tipi-nave.json'), 'utf8'));
+  assert.deepEqual(tipi.map(r => r.code), Array.from({ length: 100 }, (_, i) => i));
+  for (const { code, typeOf, typeName } of tipi) {
+    assert.equal(AL.typeOf(code).key, typeOf, `typeOf(${code})`);
+    assert.equal(AL.typeName(code), typeName, `typeName(${code})`);
+  }
 });
