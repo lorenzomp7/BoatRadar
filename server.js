@@ -37,9 +37,18 @@ function setDimensions(v, d) {
 }
 
 // ETA AIS: mese, giorno, ora e minuto in UTC, senza anno (0 / 24 / 60 = non disponibile)
-function setEta(v, e) {
-  if (!e || !(e.Month >= 1 && e.Month <= 12) || !(e.Day >= 1 && e.Day <= 31)) return;
-  v.eta = { month: e.Month, day: e.Day, hour: e.Hour < 24 ? e.Hour : null, minute: e.Minute < 60 ? e.Minute : null };
+function etaOf(e) {
+  if (!e || !(e.Month >= 1 && e.Month <= 12) || !(e.Day >= 1 && e.Day <= 31)) return null;
+  return { month: e.Month, day: e.Day, hour: e.Hour < 24 ? e.Hour : null, minute: e.Minute < 60 ? e.Minute : null };
+}
+
+// IMO: 7 cifre, l'ultima è la cifra di controllo (somma delle prime sei per 7, 6, 5, 4, 3, 2, modulo 10)
+function isIMO(n) {
+  if (!Number.isInteger(n) || n < 1000000 || n > 9999999) return false;
+  const d = String(n).split('').map(Number);
+  let sum = 0;
+  for (let i = 0; i < 6; i++) sum += d[i] * (7 - i);
+  return sum % 10 === d[6];
 }
 
 function vessel(mmsi) {
@@ -75,13 +84,13 @@ function handle(msg) {
   const st = m.ShipStaticData;
   if (st) {
     if (clean(st.Name)) v.name = clean(st.Name);
-    v.imo = st.ImoNumber || null;
+    v.imo = isIMO(st.ImoNumber) ? st.ImoNumber : null;
     v.callSign = clean(st.CallSign);
     v.shipType = st.Type;
     v.destination = clean(st.Destination);
     v.draught = st.MaximumStaticDraught || null;
     setDimensions(v, st.Dimension);
-    setEta(v, st.Eta);
+    v.eta = etaOf(st.Eta);
     v.staticTs = Date.now();
   }
   const sd = m.StaticDataReport;
