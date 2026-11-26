@@ -141,6 +141,13 @@
     };
   }
 
+  // Punto 3: parametro include= di /api/locations per le navi da avere sempre in mappa (la selezionata,
+  // più avanti le preferite). Solo interi > 0, senza doppioni, al massimo 50 nell'ordine dato; '' se nessuno.
+  function includeParam(list) {
+    const ids = [...new Set((list || []).filter(n => Number.isInteger(n) && n > 0))].slice(0, 50);
+    return ids.length ? '&include=' + ids.join(',') : '';
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
-    clockSample, createClock };
+    clockSample, createClock, includeParam };
 });

@@ -10,7 +10,8 @@ Lavora su `main_claude` salvo indicazione diversa.
 
 - `server.js`: connessione aisstream.io (riconnessione, backoff che torna a 1 s solo con un vero
   messaggio AIS, 429), stato in
-  memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione con `limit`),
+  memoria, API `/api/locations` (GeoJSON, filtro `bbox`, campione con `limit`, navi sempre presenti con
+  `include=mmsi,…`, al massimo 50),
   `/api/vessel`, `/api/search`, `/api/status`.
 - `position-check.js`: funzioni pure usate da `server.js` per scartare posizioni non valide e
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti

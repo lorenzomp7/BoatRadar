@@ -13,6 +13,7 @@ const { isValidFix, step, pruneOlder } = require('./position-check');
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
 const MAX_FEATURES = 6000; // oltre questo numero la pagina riceve un campione delle navi visibili
+const MAX_INCLUDE = 50;    // navi chieste con include= (selezionata, preferite) aggiunte sempre alla risposta
 const STALE_MS = 30 * 60 * 1000;
 const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
 // Cache di /api/locations (punto 84): una risposta si riusa per LOCATIONS_CACHE_MS, oppure finché i dati
@@ -251,7 +252,11 @@ function locationsParams(query) {
   // limit valido: intero da 1 a MAX_FEATURES; negativo, zero o non intero vale come il massimo
   const asked = Number(query.get('limit'));
   const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_FEATURES) : MAX_FEATURES;
-  return { box, limit, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
+  // include=mmsi1,mmsi2 (anche ripetuto): i primi MAX_INCLUDE MMSI validi (1-9 cifre, > 0) nell'ordine dato,
+  // senza doppioni; ordinati nella chiave, così ordine e doppioni non creano voci nuove. Il resto è ignorato.
+  const include = [...new Set(query.getAll('include').join(',').split(',')
+    .filter(x => /^\d{1,9}$/.test(x)).map(Number).filter(n => n > 0))].slice(0, MAX_INCLUDE).sort((a, b) => a - b);
+  return { box, limit, include, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}&include=${include.join(',')}` };
 }
 
 // bbox arrotondato verso l'esterno, così viste quasi uguali (piccoli spostamenti della mappa) condividono la
@@ -271,12 +276,18 @@ function roundBox(box) {
   return [w, s, e, n];
 }
 
-function locations({ box, limit }) {
+function locations({ box, limit, include = [] }) {
   const hits = [];
   for (const [mmsi, p] of positions) if (inBox(box, p)) hits.push([mmsi, p]);
   // campione stabile per MMSI, così le navi mostrate non cambiano a ogni aggiornamento
   const k = Math.ceil(hits.length / limit);
-  const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : hits;
+  const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : [...hits];   // copia: include= non deve toccare hits
+  // navi chieste con include= (punto 3): sempre presenti se hanno una posizione, anche fuori dal bbox e oltre
+  // il limite, una volta sola; total resta il numero di navi nel bbox
+  if (include.length) {
+    const ids = new Set(shown.map(([mmsi]) => mmsi));
+    for (const mmsi of include) if (!ids.has(mmsi) && positions.has(mmsi)) shown.push([mmsi, positions.get(mmsi)]);
+  }
   return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => {
     const v = vessels.get(mmsi) || {};
     return { type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },

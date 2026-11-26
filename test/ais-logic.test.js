@@ -363,3 +363,20 @@ test('boatradar.html: simbolo da symbol(), freccia corta e riga «Prua» nella s
   assert.match(html, /options\.short/);
   assert.match(html, /row\('Prua'/);
 });
+
+// --- Punto 3: nave selezionata sempre in mappa ---------------------------------------------------------
+test('includeParam: MMSI interi > 0, senza doppioni, al massimo 50, nell\'ordine dato', () => {
+  assert.equal(AL.includeParam([null]), '');
+  assert.equal(AL.includeParam([]), '');
+  assert.equal(AL.includeParam(undefined), '');
+  assert.equal(AL.includeParam([1, 1, 2]), '&include=1,2');
+  assert.equal(AL.includeParam([247000002, 247000001]), '&include=247000002,247000001', 'la prima (la selezionata) resta prima');
+  assert.equal(AL.includeParam(['5', 1.5, -3, 0, undefined, NaN, Infinity]), '', 'scartati stringhe, non interi, ≤ 0');
+  const many = Array.from({ length: 60 }, (_, i) => i + 1);
+  assert.equal(AL.includeParam(many), '&include=' + many.slice(0, 50).join(','), 'al massimo 50');
+});
+
+test('boatradar.html chiede sempre la nave selezionata a /api/locations', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  assert.match(html, /\/locations\?bbox=\$\{viewBox\(\)\}\$\{includeParam\(\[selected\]\)\}/);
+});

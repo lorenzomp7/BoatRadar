@@ -114,7 +114,7 @@ if (!window.AisLogic) {
   throw new Error(msg);
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
-  clockSample, createClock } = AisLogic;
+  clockSample, createClock, includeParam } = AisLogic;
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
@@ -237,7 +237,7 @@ async function loadStatus() {
 
 async function loadLocations() {
   const [med, baltic, status] = await Promise.allSettled([
-    features(`${API}/locations?bbox=${viewBox()}`), features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`), loadStatus()]);
+    features(`${API}/locations?bbox=${viewBox()}${includeParam([selected])}`), features(`${BALTIC}/locations?from=${clock.now() - WINDOW_MS}`), loadStatus()]);
   if (med.status === 'rejected' && baltic.status === 'rejected') throw med.reason;
   // stessa nave in entrambe le fonti: tengo la posizione più recente (properties.source dice da dove viene)
   const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }]);

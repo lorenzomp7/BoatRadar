@@ -103,3 +103,70 @@ test('un salto confermato porta in mappa la prua della posizione che lo conferma
   assert.equal(f.properties.heading, 30);
   assert.equal(f.properties.rot, 3);
 });
+
+// --- Punto 3: include= in /api/locations -----------------------------------------------------------------
+const pos = (mmsi, lat, lon) => report(mmsi, lat, lon, { Sog: 5, NavigationalStatus: 0 });
+const ids = fc => fc.features.map(f => f.mmsi);
+
+test('include: la nave indicata c\'è anche fuori dal campione e fuori dal bbox, una volta sola; total invariato (punto 3)', async () => {
+  // 10 navi nella zona: con limit=1 il campione (mmsi % 10 === 0) ne tiene una sola, 247530000
+  const zone = Array.from({ length: 10 }, (_, i) => 247530000 + i);
+  await sendAll(srv, ...zone.map((m, i) => pos(m, 44.1, 11.1 + i / 100)), pos(247539999, -30, -40));
+  const box = '/api/locations?bbox=11,44,12,45&limit=1';
+  const plain = await srv.getJson(box);
+  assert.deepEqual(ids(plain), [247530000]);
+  const x = 247530003;
+  const inc = await srv.getJson(`${box}&include=${x}`);
+  assert.deepEqual(ids(inc).sort(), [247530000, x], 'la nave inclusa si aggiunge al campione');
+  assert.equal(inc.total, plain.total, 'total conta solo le navi del bbox');
+  assert.deepEqual(inc.features.find(f => f.mmsi === x).geometry.coordinates, [11.1 + 3 / 100, 44.1]);
+  const far = await srv.getJson(`${box}&include=247539999`);
+  assert.deepEqual(ids(far).sort(), [247530000, 247539999], 'inclusa anche fuori dal bbox');
+  assert.equal(far.total, plain.total);
+  const dup = await srv.getJson(`${box}&include=247530000,247530000`);
+  assert.deepEqual(ids(dup), [247530000], 'già nel campione: nessun doppione');
+  const two = await srv.getJson(`${box}&include=${x}&include=247530005`);
+  assert.deepEqual(ids(two).sort(), [247530000, x, 247530005], 'più parametri include si sommano');
+});
+
+test('include: MMSI sconosciuti o senza posizione assenti; valori non validi = come senza include (punto 3)', async () => {
+  await sendAll(srv, pos(247540001, 44.3, 11.3),
+    { MessageType: 'ShipStaticData', MetaData: { MMSI: 247540099 }, Message: { ShipStaticData: { Name: 'SOLO STATICA' } } });
+  const url = '/api/locations?bbox=11.2,44.2,11.4,44.4';
+  const plain = await srv.getJson(url);
+  assert.deepEqual(ids(plain), [247540001]);
+  assert.deepEqual(ids(await srv.getJson(`${url}&include=999999999,247540099`)), [247540001], 'sconosciuta e senza posizione assenti');
+  for (const bad of ['abc,,-5', '', '0', '1.5', '1e3', '%20', 'abc'.repeat(100)]) {
+    const res = await srv.get(`${url}&include=${bad}`);
+    assert.equal(res.status, 200, bad);
+    assert.deepEqual(JSON.parse(res.body), plain, `include=${bad}`);
+  }
+});
+
+test('include fa parte della chiave della cache, normalizzato; la nave inclusa c\'è anche servita dalla cache (punto 3)', async () => {
+  const c = await startServer();   // cache accesa con i valori di default (LOCATIONS_CACHE_MS 3000)
+  try {
+    const zone = Array.from({ length: 10 }, (_, i) => 247550000 + i);
+    await sendAll(c, ...zone.map((m, i) => pos(m, 44.5, 11.5 + i / 100)), pos(247559999, -31, -41));
+    const url = '/api/locations?bbox=11.4,44.4,11.7,44.6&limit=1';
+    const get = async q => { const r = await c.get(url + q); return { cache: r.headers['x-cache'], ids: ids(JSON.parse(r.body)).sort() }; };
+    assert.deepEqual(await get(''), { cache: 'miss', ids: [247550000] });
+    assert.deepEqual(await get('&include=abc,,-5'), { cache: 'hit', ids: [247550000] }, 'include non valido = stessa voce di senza include');
+    assert.deepEqual(await get('&include=247550003'), { cache: 'miss', ids: [247550000, 247550003] }, 'include diverso: voce diversa');
+    assert.deepEqual(await get('&include=247550003'), { cache: 'hit', ids: [247550000, 247550003] }, 'servita dalla cache con la nave inclusa');
+    assert.deepEqual(await get('&include=247559999'), { cache: 'miss', ids: [247550000, 247559999] });
+    assert.deepEqual(await get('&include=247559999,247550003'), { cache: 'miss', ids: [247550000, 247550003, 247559999] });
+    for (const q of ['&include=247550003,247559999', '&include=247559999,247550003,247559999', '&include=247550003&include=247559999',
+      '&include=247559999,x,247550003']) {
+      assert.deepEqual(await get(q), { cache: 'hit', ids: [247550000, 247550003, 247559999] }, `${q}: ordine e doppioni non contano`);
+    }
+  } finally { await c.stop(); }
+});
+
+test('include: al massimo 50 MMSI, i primi validi nell\'ordine dato (punto 3)', async () => {
+  const many = Array.from({ length: 55 }, (_, i) => 247560001 + i);
+  await sendAll(srv, ...many.map((m, i) => pos(m, 44.8, 11.0 + i / 1000)));
+  const fc = await srv.getJson(`/api/locations?bbox=-1,-1,0,0&include=x,${[...many].reverse().join(',')}`);
+  assert.deepEqual(ids(fc).sort(), [...many].reverse().slice(0, 50).sort(), 'le prime 50 della lista');
+  assert.equal(fc.total, 0, 'total conta solo il bbox, anche quando il campione non riduce nulla');
+});
