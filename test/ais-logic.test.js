@@ -244,11 +244,6 @@ test('isNewer: confronta gli orari come toMs (usato dalla pagina per non far tor
   assert.equal(AL.isNewer(undefined, undefined), false);
 });
 
-test('boatradar.html non sposta un marker su una posizione più vecchia di quella che mostra', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
-  assert.match(html, /isNewer\(m\.props\?\.timestampExternal, f\.properties\.timestampExternal\)/);
-});
-
 test('mergeFeatures: duplicati nello stesso gruppo, vince il più recente; a parità il primo', () => {
   const m = AL.mergeFeatures([{ source: 'aisstream', features: [feat(1, 1000, [10, 60]), feat(1, 3000, [11, 60]), feat(1, 2000, [12, 60])] }]);
   assert.deepEqual(m.get(1).geometry.coordinates, [11, 60]);
@@ -272,4 +267,137 @@ test('typeOf e typeName per 0-99 come in test/fixtures/tipi-nave.json', () => {
     assert.equal(AL.typeOf(code).key, typeOf, `typeOf(${code})`);
     assert.equal(AL.typeName(code), typeName, `typeName(${code})`);
   }
+});
+
+// --- Punto 43: orologio del telefono corretto con l'ora del server ---------------------------------
+test('clockSample: scarto = metà della richiesta − ora del server; rtt = durata', () => {
+  assert.deepEqual(AL.clockSample(1000, 1200, 500), { offset: 600, rtt: 200 });
+  assert.deepEqual(AL.clockSample(1000, 1000, 1000), { offset: 0, rtt: 0 });
+  for (const bad of [undefined, null, NaN, Infinity, '500', {}]) assert.equal(AL.clockSample(1000, 1200, bad), null, String(bad));
+  assert.equal(AL.clockSample(NaN, 1200, 500), null, 't0 non numerico');
+  assert.equal(AL.clockSample(1200, 1000, 500), null, 'fine prima dell\'inizio (orologio spostato durante la richiesta)');
+});
+
+test('createClock: telefono avanti di 5 min → now() dà l\'ora vera; senza campioni scarto 0', () => {
+  let real = Date.parse('2026-11-26T08:00:00Z');
+  const phone = () => real + 300000;   // orologio del telefono avanti di 5 minuti
+  const clock = AL.createClock({ now: phone });
+  assert.equal(clock.offset(), 0, 'senza campioni nessuna correzione');
+  assert.equal(clock.now(), phone());
+  for (let i = 0; i < 3; i++) {
+    const t0 = phone(); real += 40; const serverTime = real; real += 40;   // 80 ms di andata e ritorno
+    clock.add(AL.clockSample(t0, phone(), serverTime));
+  }
+  assert.equal(clock.offset(), 300000);
+  assert.ok(Math.abs(clock.now() - real) <= 1, `now() ${clock.now()} contro ora vera ${real}`);
+  real += 60000;   // now() chiama l'orologio a ogni uso, non lo memorizza
+  assert.ok(Math.abs(clock.now() - real) <= 1);
+});
+
+test('createClock: mediana degli ultimi 5 campioni, risposte lente e campioni null ignorati', () => {
+  const sample = (offset, rtt = 100) => ({ offset, rtt });
+  let c = AL.createClock({ now: () => 0 });
+  for (const o of [300000, 300000, 310000]) c.add(sample(o));
+  assert.equal(c.offset(), 300000, 'mediana, non media');
+  c.add(sample(999999, 5000));   // risposta lenta (oltre maxRtt 2000 ms): non conta
+  c.add(null);                   // risposta senza serverTime
+  assert.equal(c.offset(), 300000);
+  c = AL.createClock({ now: () => 0 });
+  for (const o of [100, 200]) c.add(sample(o));
+  assert.equal(c.offset(), 150, 'numero pari: media dei due centrali');
+  c = AL.createClock({ now: () => 0 });
+  for (const o of [1000, 1000, 1000, 0, 0, 0]) c.add(sample(o));
+  assert.equal(c.offset(), 0, 'dopo 6 campioni contano solo gli ultimi 5 (1000, 1000, 0, 0, 0)');
+  c = AL.createClock({ now: () => 0, keep: 2, maxRtt: 50 });
+  for (const o of [5, 7, 9]) c.add(sample(o, 10));
+  c.add(sample(1, 60));
+  assert.equal(c.offset(), 8, 'keep e maxRtt configurabili');
+  assert.equal(AL.createClock().now() <= Date.now(), true, 'senza opzioni usa Date.now');
+});
+
+test('createClock.now(): millisecondi interi anche con scarto frazionario (from= di Digitraffic è un intero)', () => {
+  const c = AL.createClock({ now: () => 1000 });
+  c.add(AL.clockSample(1000, 1001, 500));   // offset 500,5
+  assert.equal(c.offset(), 500.5);
+  assert.ok(Number.isInteger(c.now()), `now() ${c.now()}`);
+  assert.equal(c.now(), 500);
+});
+
+test('createClock.add ignora campioni con rtt negativo o non finito (punto 7)', () => {
+  const c = AL.createClock({ now: () => 0, maxRtt: Infinity });
+  c.add({ offset: 100, rtt: 10 });
+  for (const rtt of [-1, -Infinity, NaN, Infinity, undefined, null, '10']) c.add({ offset: 999999, rtt });
+  assert.equal(c.offset(), 100, 'contano solo campioni con 0 ≤ rtt ≤ maxRtt finito');
+  c.add({ offset: 200, rtt: 0 });
+  assert.equal(c.offset(), 150, 'rtt 0 è valido');
+});
+
+// Il comportamento (from= del Baltico e ora nella riga di stato con l'ora vera) è in test/pagina-vm.test.js;
+// qui resta solo la regola sul sorgente, che vale anche per codice nuovo non ancora coperto da quel test
+test('boatradar.html: nessun new Date() senza argomenti; Date.now() solo per misurare /api/status', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8').split('<script src="public/ais-logic.js"></script>')[1];
+  assert.doesNotMatch(code, /new Date\(\)/, 'nessun new Date() senza argomenti (ora del telefono)');
+  const uses = [...code.matchAll(/Date\.now\(\)/g)].length;
+  assert.equal(uses, 2, 'Date.now() solo per t0 e t1 della misura di /api/status');
+});
+
+// --- Punto 5: prua vera --------------------------------------------------------------------------------
+test('validHeading: interi 0-359, il resto null', () => {
+  for (const h of [0, 45, 359]) assert.equal(AL.validHeading(h), h);
+  for (const h of [511, 496, 360, -1, 45.5, null, undefined, '45', NaN]) assert.equal(AL.validHeading(h), null, String(h));
+});
+
+test('heading: prua vera se c\'è, altrimenti la rotta solo per navi in movimento', () => {
+  assert.equal(AL.heading({ heading: 45, sog: 0 }), 45, 'nave ferma con prua');
+  assert.equal(AL.heading({ heading: 45, sog: 10, cog: 90 }), 45, 'la prua vince sulla rotta');
+  assert.equal(AL.heading({ heading: 511, sog: 10, cog: 90 }), 90, 'prua n.d.: rotta');
+  assert.equal(AL.heading({ heading: 511, sog: 0.3, cog: 90 }), null, 'prua n.d. e nave ferma: pallino');
+  assert.equal(AL.heading({ heading: 0, sog: 0 }), 0, 'prua 0 (nord) è valida');
+  assert.equal(AL.heading({ heading: 511, sog: 102.3, cog: 90 }), null, 'velocità n.d.');
+});
+
+test('symbol: freccia corta per le navi ferme con prua, normale in moto, pallino senza direzione', () => {
+  assert.deepEqual(AL.symbol({ heading: 45, sog: 0 }), { heading: 45, short: true });
+  assert.deepEqual(AL.symbol({ heading: 0, sog: 0.5 }), { heading: 0, short: true }, '0,5 kn conta come ferma');
+  assert.deepEqual(AL.symbol({ heading: 45, sog: 102.3 }), { heading: 45, short: true }, 'velocità n.d.: non in moto');
+  assert.deepEqual(AL.symbol({ heading: 45, sog: 10, cog: 90 }), { heading: 45, short: false });
+  assert.deepEqual(AL.symbol({ heading: 511, sog: 10, cog: 90 }), { heading: 90, short: false });
+  assert.deepEqual(AL.symbol({ heading: 511, sog: 0 }), { heading: null, short: false });
+  assert.deepEqual(AL.symbol({}), { heading: null, short: false });
+});
+
+// --- Punto 3: nave selezionata sempre in mappa ---------------------------------------------------------
+test('includeParam: MMSI interi > 0, senza doppioni, al massimo 50, nell\'ordine dato', () => {
+  assert.equal(AL.includeParam([null]), '');
+  assert.equal(AL.includeParam([]), '');
+  assert.equal(AL.includeParam(undefined), '');
+  assert.equal(AL.includeParam([1, 1, 2]), 'include=1,2');
+  assert.equal(AL.includeParam([247000002, 247000001]), 'include=247000002,247000001', 'la prima (la selezionata) resta prima');
+  assert.equal(AL.includeParam(['5', 1.5, -3, 0, undefined, NaN, Infinity]), '', 'scartati stringhe, non interi, ≤ 0');
+  const many = Array.from({ length: 60 }, (_, i) => i + 1);
+  assert.equal(AL.includeParam(many), 'include=' + many.slice(0, 50).join(','), 'al massimo 50');
+});
+
+test('includeParam: ingresso non array → stringa vuota (punto 7)', () => {
+  for (const bad of ['247000001', 247000001, { 0: 1, length: 1 }, new Set([1]), null, true, () => [1]])
+    assert.equal(AL.includeParam(bad), '', String(bad));
+});
+
+// Marcatura della pagina (il comportamento è in test/pagina-vm.test.js)
+test('boatradar.html: legenda dei simboli (anche su telefono), separatore e nome della × (punto 6)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
+  for (const t of ['freccia = in moto', 'freccia corta = ferma o velocità non nota, prua nota', 'pallino = direzione non nota'])
+    assert.ok(html.includes(t), t);
+  assert.match(html, /<details id="legend"[^>]*>\s*<summary>Legenda<\/summary>\s*<div id="legend-types"><\/div>\s*(<!--[\s\S]*?-->\s*)?<div class="sym">/,
+    'legenda apribile (anche da tastiera), simboli subito dopo i tipi');
+  assert.match(html, /#legend-types \+ \.sym \{ border-top:/, 'separatore fra tipi e simboli');
+  const mobile = html.slice(html.indexOf('@media (max-width: 640px)'));
+  assert.doesNotMatch(mobile.slice(0, mobile.indexOf('</style>')), /#legend \{ display:none/, 'su telefono non è nascosta');
+  assert.match(html, /<button id="close" aria-label="Chiudi la scheda"/, 'la × ha un nome per i lettori di schermo');
+});
+
+test('stopped: ferma solo con velocità nota fino a 0,5 kn', () => {
+  for (const sog of [0, 0.3, 0.5]) assert.equal(AL.stopped({ sog }), true, String(sog));
+  for (const sog of [0.6, 10, 102.3, 102.2, -1, null, undefined, NaN, '0']) assert.equal(AL.stopped({ sog }), false, String(sog));
+  assert.equal(AL.stopped({}), false);
 });

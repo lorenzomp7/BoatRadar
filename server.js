@@ -13,6 +13,7 @@ const { isValidFix, step, pruneOlder } = require('./position-check');
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
 const MAX_FEATURES = 6000; // oltre questo numero la pagina riceve un campione delle navi visibili
+const MAX_INCLUDE = 50;    // navi chieste con include= (selezionata, preferite) aggiunte sempre alla risposta
 const STALE_MS = 30 * 60 * 1000;
 const KEY_FILE = path.join(__dirname, 'aisstream-key.txt');
 // Cache di /api/locations (punto 84): una risposta si riusa per LOCATIONS_CACHE_MS, oppure finché i dati
@@ -29,7 +30,7 @@ const LOCATIONS_CACHE_BYTES = envNumber('LOCATIONS_CACHE_BYTES', 32 * 1024 * 102
 const LOCATIONS_CACHE_STABLE_MS = envNumber('LOCATIONS_CACHE_STABLE_MS', 60000);
 const LOCATIONS_CACHE_CLEANUP_MS = envNumber('LOCATIONS_CACHE_CLEANUP_MS', 60000) || 60000;
 
-const positions = new Map(); // mmsi -> { lat, lon, sog, cog, navStat, ts }
+const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
 const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
 const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
@@ -71,6 +72,11 @@ function isIMO(n) {
   return sum % 10 === d[6];
 }
 
+// Prua vera AIS (TrueHeading, 9 bit): 0-359 gradi; 511 = non disponibile, gli altri valori (es. 496) non sono una prua
+const hdg = h => Number.isInteger(h) && h >= 0 && h <= 359 ? h : null;
+// Velocità di accostata AIS (RateOfTurn, da -127 a 127): -128 = non disponibile. La classe B non la trasmette.
+const rotOf = r => Number.isInteger(r) && r >= -127 && r <= 127 ? r : null;
+
 function vessel(mmsi) {
   let v = vessels.get(mmsi);
   if (!v) { v = { mmsi }; vessels.set(mmsi, v); }
@@ -98,8 +104,9 @@ function handle(msg) {
   const pos = m.PositionReport || m.StandardClassBPositionReport || m.ExtendedClassBPositionReport;
   if (pos) {
     if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; setDimensions(v, pos.Dimension); }
+    // heading e rot fanno parte del fix: passano anche per candidato e conferma di position-check.js
     const fix = { lat: pos.Latitude, lon: pos.Longitude, sog: pos.Sog, cog: pos.Cog,
-      navStat: pos.NavigationalStatus, ts: Date.now() };
+      heading: hdg(pos.TrueHeading), rot: rotOf(pos.RateOfTurn), navStat: pos.NavigationalStatus, ts: Date.now() };
     // scarto posizioni non valide e salti impossibili (un salto confermato due volte è accettato)
     if (!isValidFix(pos)) status.rejected++;
     else {
@@ -237,15 +244,21 @@ function inBox(box, p) {
   return w <= e ? p.lon >= w && p.lon <= e : p.lon >= w || p.lon <= e;
 }
 
-// Parametri di /api/locations, letti solo qui: gli stessi valori filtrano le navi in locations() e formano la
-// chiave della cache, quindi due richieste con la stessa chiave hanno la stessa risposta e i parametri
-// sconosciuti non creano voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui (anche nella chiave).
+// Parametri di /api/locations, letti solo qui: gli stessi valori filtrano le navi e formano la chiave della
+// cache, quindi due richieste con la stessa chiave hanno la stessa risposta e i parametri sconosciuti non creano
+// voci nuove. Ogni nuovo parametro di /api/locations va aggiunto qui; nella chiave entrano bbox e limit, non
+// include, perché le richieste con include non passano dalla cache (vedi sendLocations).
 function locationsParams(query) {
   const box = roundBox(query.get('bbox')?.split(',').map(Number));
   // limit valido: intero da 1 a MAX_FEATURES; negativo, zero o non intero vale come il massimo
   const asked = Number(query.get('limit'));
   const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_FEATURES) : MAX_FEATURES;
-  return { box, limit, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
+  // include=mmsi1,mmsi2 (anche ripetuto, spazi attorno ai valori ignorati): null se assente o vuoto, altrimenti
+  // i primi MAX_INCLUDE MMSI validi (1-9 cifre, > 0) nell'ordine dato, senza doppioni ([] se nessuno è valido)
+  const parts = query.getAll('include').flatMap(v => v.split(',')).map(x => x.trim()).filter(Boolean);
+  const include = parts.length
+    ? [...new Set(parts.filter(x => /^\d{1,9}$/.test(x)).map(Number).filter(n => n > 0))].slice(0, MAX_INCLUDE) : null;
+  return { box, limit, include, key: `bbox=${box ? box.join(',') : ''}&limit=${limit}` };
 }
 
 // bbox arrotondato verso l'esterno, così viste quasi uguali (piccoli spostamenti della mappa) condividono la
@@ -265,18 +278,29 @@ function roundBox(box) {
   return [w, s, e, n];
 }
 
+// Feature GeoJSON di una nave; heading e rot mancanti (null) non vanno nella risposta: undefined = chiave omessa
+function shipFeature(mmsi, p) {
+  const v = vessels.get(mmsi) || {};
+  return { type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+    properties: { mmsi, name: v.name, shipType: v.shipType, sog: p.sog, cog: p.cog, heading: p.heading ?? undefined,
+      rot: p.rot ?? undefined, navStat: p.navStat, timestampExternal: p.ts } };
+}
+
 function locations({ box, limit }) {
   const hits = [];
   for (const [mmsi, p] of positions) if (inBox(box, p)) hits.push([mmsi, p]);
   // campione stabile per MMSI, così le navi mostrate non cambiano a ogni aggiornamento
   const k = Math.ceil(hits.length / limit);
   const shown = k > 1 ? hits.filter(([mmsi]) => mmsi % k === 0) : hits;
-  return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => {
-    const v = vessels.get(mmsi) || {};
-    return { type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
-      properties: { mmsi, name: v.name, shipType: v.shipType, sog: p.sog, cog: p.cog, navStat: p.navStat,
-        timestampExternal: p.ts } };
-  }) };
+  return { type: 'FeatureCollection', total: hits.length, features: shown.map(([mmsi, p]) => shipFeature(mmsi, p)) };
+}
+
+// Navi chieste con include= (punto 3: la nave selezionata, più avanti le preferite): solo quelle che hanno una
+// posizione, nell'ordine dato, senza bbox né campione; total = navi trovate. Sempre calcolata al momento, così la
+// nave selezionata è aggiornata anche quando la vista viene dalla cache.
+function included(include) {
+  const features = include.filter(mmsi => positions.has(mmsi)).map(mmsi => shipFeature(mmsi, positions.get(mmsi)));
+  return { type: 'FeatureCollection', total: features.length, features };
 }
 
 // Cache di /api/locations. Una voce tiene la risposta compressa (gz); il JSON (raw) resta solo finché serve
@@ -330,6 +354,8 @@ setInterval(() => {
 
 function sendLocations(req, res, query) {
   const params = locationsParams(query);
+  // include: risposta piccola e diversa per ogni utente, fuori dalla cache condivisa (non crea voci)
+  if (params.include) return json(req, res, included(params.include));
   const key = params.key, now = Date.now(), gzip = acceptsGzip(req);
   let entry = LOCATIONS_CACHE_SIZE > 0 ? locationsCache.get(key) : undefined;
   const hit = !!entry && (now - entry.t < LOCATIONS_CACHE_MS
@@ -402,8 +428,10 @@ http.createServer((req, res) => {
   if (url === '/api/locations') return sendLocations(req, res, query);
   if (url === '/api/vessel') return json(req, res, vessels.get(Number(query.get('mmsi'))) || null);
   if (url === '/api/search') return json(req, res, search(query.get('q') || ''));
+  // serverTime: ora del server in ms, con cui la pagina corregge l'orologio del telefono (punto 43).
+  // Solo qui e non in /api/locations, che può essere servita dalla cache con un'ora vecchia.
   if (url === '/api/status') return json(req, res, { ...status, vessels: positions.size,
-    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes } });
+    locationsCache: { ...cacheStats, size: locationsCache.size, bytes: cacheBytes }, serverTime: Date.now() });
   if (url === '/config.js') {
     // su GitHub Pages questo file indica l'indirizzo del server; qui le API sono sullo stesso server
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });

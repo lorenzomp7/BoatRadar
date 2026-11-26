@@ -85,6 +85,19 @@ fra 1/64° e 0,25°); `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenu
   la ricezione AIS e le altre richieste vanno avanti durante la compressione (questo il carico
   sequenziale non lo misura). Un `chunkSize` più grande per `zlib.gzip` non cambia i tempi.
 
+Punto 5 (26/11/2026, `heading` e `rot` nelle properties di `/api/locations`): con le navi di
+`tools/carico.js` (tutte con TrueHeading, nessuna con RateOfTurn, quindi `"rot":null`) la vista mondo
+passa da 227,2 a 247,6 KB gzip (+9%; 1459,5 → 1603,7 KB non compressi) e la vista porto da 53,1 a
+58 KB. Tempi a cache spenta (`LOCATIONS_CACHE_SIZE=0`, non registrati in tabella), stessa sessione:
+mondo 36 / 44,4 ms prima e 36 / 46,7 ms dopo, porto 9,8 / 15,3 e 10 / 14,1 ms (mediana / p95).
+
+Correzioni dei punti 43, 5, 3 (26/11/2026): `heading` e `rot` si omettono quando sono null. Con le navi di
+`tools/carico.js` (nessuna con RateOfTurn) la vista mondo passa da 1603,7 a 1539,5 KB non compressi (−4%) e da
+248,2 a 245,5 KB gzip; la vista porto da 381,3 a 366 KB (58,1 → 57,5 KB gzip). `include=` non passa più dalla
+cache: la misura non lo usa. A cache spenta (non registrate), stessa sessione: prima (a298b83) mondo 39,2 / 47,1 ms
+e porto 11,3 / 18,9 ms; dopo mondo 41,1 / 54 ms (un'altra prova 42,8 / 54,1) e porto 10,3 / 12,3 ms (mediana / p95):
+differenze nel rumore della misura.
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |
@@ -94,4 +107,8 @@ fra 1/64° e 0,25°); `LOCATIONS_CACHE_SIZE` (default 50, 0 = spenta) viste tenu
 | 2026-11-26 | dopo punto 84 (cache /api/locations, caso migliore: vista ripetuta senza messaggi) | 30000 | 0.5 | 168.9 | 5979 | 227.8 (1459.5) | 0.9 / 1.5 | 1427 | 53.3 (346.9) | 0.5 / 0.8 | v22.23.5 |
 | 2026-11-26 | dopo punto 84 con LOCATIONS_CACHE_SIZE=0 (cache spenta, gzip asincrono) | 30000 | 0.5 | 167.7 | 5979 | 227.3 (1459.5) | 34.5 / 40.6 | 1427 | 53.1 (346.9) | 11.5 / 16.2 | v22.23.5 |
 | 2026-11-26 | dopo correzioni revisione/QA punti 7, 11, 84 (caso migliore: vista ripetuta) | 30000 | 0.5 | 167.5 | 5979 | 227.5 (1459.5) | 1.1 / 1.8 | 1427 | 53.2 (346.9) | 0.5 / 0.8 | v22.23.5 |
+| 2026-11-26 | prima punto 5 (prua vera), con punto 43 | 30000 | 0.5 | 168.9 | 5979 | 227.2 (1459.5) | 1 / 1.9 | 1427 | 53.1 (346.9) | 0.7 / 0.9 | v22.23.5 |
+| 2026-11-26 | dopo punto 5 (heading e rot in /api/locations) | 30000 | 0.51 | 168.3 | 5979 | 247.6 (1603.7) | 0.9 / 5.5 | 1427 | 58 (381.3) | 0.6 / 2.8 | v22.23.5 |
+| 2026-11-26 | dopo punto 3 (include=, senza include nella misura) | 30000 | 0.51 | 169.9 | 5979 | 248.2 (1603.7) | 1 / 4.3 | 1427 | 58.1 (381.3) | 0.6 / 2.4 | v22.23.5 |
+| 2026-11-26 | dopo correzioni 43/5/3 (include fuori dalla cache, heading/rot omessi se null) | 30000 | 0.51 | 170.1 | 5979 | 245.5 (1539.5) | 0.8 / 1.5 | 1427 | 57.5 (366) | 0.5 / 3.9 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
