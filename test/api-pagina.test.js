@@ -33,11 +33,16 @@ test('serve public/ais-logic.js come JavaScript e nient\'altro di public/', asyn
 });
 
 test('file statico illeggibile: risposta 500 e il server resta in piedi', async () => {
-  // copia di server.js senza pagine né public/: ogni file statico manca
+  // copia di server.js senza pagine: ogni file statico manca. public/ais-logic.js serve all'avvio (server.js lo usa
+  // per la conservazione delle posizioni, punto 8): lo copio e lo cancello a server avviato
   const ROOT = path.join(__dirname, '..');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-statici-'));
-  for (const f of ['server.js', 'position-check.js', 'sample.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
+  for (const f of ['server.js', 'position-check.js', 'sample.js', 'public/ais-logic.js']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
+  }
   const solo = await startServer({ NODE_PATH: path.join(ROOT, 'node_modules') }, {}, { cwd: dir });
+  fs.rmSync(path.join(dir, 'public', 'ais-logic.js'));
   try {
     for (const p of ['/public/ais-logic.js', '/', '/vesselfinder.html']) {
       const res = await solo.get(p);

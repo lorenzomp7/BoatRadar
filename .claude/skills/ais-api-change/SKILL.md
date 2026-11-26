@@ -30,6 +30,9 @@ Leggi `server.js` e `test/server.test.js` prima di cambiare qualcosa.
   aggiornata; la pagina la chiede a parte dalla vista e unisce le due con `mergeFeatures`.
 - Ogni parametro di `/api/locations` si legge solo in `locationsParams()`; nella chiave della cache entrano,
   normalizzati, quelli della vista (`bbox` arrotondato e `limit`), non `include`.
+- Posizioni oltre il loro limite (`isLive` in server.js: in moto `STALE_MOVING_MS`, ferme `STALE_STILL_MS`) non
+  vanno in nessuna risposta (`/api/locations`, `include=`, `/api/search`), anche prima della pulizia periodica; una
+  voce della cache vale a dati fermi solo fino a `expires` (prima scadenza delle sue navi). Test: `test/eta-posizione.test.js`.
 - Nelle properties di `/api/locations` i campi facoltativi mancanti (`heading`, `rot`) si omettono
   (`undefined`), non si mandano come `null`: la pagina li legge con `== null`.
 - Le risposte JSON passano per la compressione gzip esistente.

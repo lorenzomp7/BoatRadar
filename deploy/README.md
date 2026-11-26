@@ -43,13 +43,16 @@ aggiornano da soli.
 ## Variabili del server (facoltative)
 
 Oltre a `AISSTREAM_KEY` e `CORS_ORIGIN` (già in `deploy/compose.yml`), `server.js` legge queste
-variabili per la cache di `/api/locations`. I default vanno bene per la VM; per cambiarne una
+variabili per la conservazione delle posizioni e per la cache di `/api/locations`. I default vanno bene per la VM; per cambiarne una
 aggiungila sotto `environment:` in `deploy/compose.yml`. Un valore non valido (non numerico o
 negativo) vale come il default. Lo stato della cache è in `locationsCache` di `/api/status`
 (`hits`, `misses`, `compressions`, `size`, `bytes`).
 
 | Variabile | Default | Significato |
 |---|---|---|
+| `STALE_MOVING_MS` | `1800000` (30 min) | per quanto si tiene la posizione di una nave in moto (anche i candidati di `position-check.js`) |
+| `STALE_STILL_MS` | `21600000` (6 h) | per quanto si tiene la posizione di una nave ferma, all'ancora o ormeggiata (mai meno di `STALE_MOVING_MS`); i due limiti in uso sono `limits` di `/api/status`. `0` vale come il default |
+| `POSITIONS_CLEANUP_MS` | `60000` | ogni quanti ms si tolgono dalla memoria le posizioni scadute (le risposte le escludono già prima) |
 | `LOCATIONS_CACHE_MS` | `3000` | ms per cui una risposta si riusa anche se nel frattempo i dati sono cambiati |
 | `LOCATIONS_CACHE_STABLE_MS` | `60000` | ms per cui una risposta si riusa se i dati non sono cambiati |
 | `LOCATIONS_CACHE_SIZE` | `50` | viste tenute al massimo; `0` = cache spenta |

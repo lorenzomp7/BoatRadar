@@ -155,6 +155,48 @@
     return ids.length ? 'include=' + ids.join(',') : '';
   }
 
+  // Punto 8: età della posizione. Una nave in moto si conserva movingMs (30 min); ferma, all'ancora o
+  // ormeggiata stillMs (6 h, come la conservazione per stato di OpenCPN), disegnata sbiadita e tratteggiata.
+  // Li usa anche server.js (pulizia e filtro delle risposte), con i limiti da STALE_MOVING_MS / STALE_STILL_MS.
+  const MIN_MS = 60 * 1000, HOUR_MS = 60 * MIN_MS;
+  const DEFAULT_LIMITS = Object.freeze({ movingMs: 30 * MIN_MS, stillMs: 6 * HOUR_MS });
+  // Velocità nota: numero fra 0 e 102,2 kn (102,3 = non disponibile)
+  const validSog = s => typeof s === 'number' && s >= 0 && s < 102.3;
+  // Ferma: velocità nota fino a 0,5 kn, oppure stato all'ancora (1), ormeggiata (5) o incagliata (6) se la velocità
+  // nota non dice che va ad almeno 3 kn (stato non aggiornato dall'equipaggio). Senza dati = in moto (limite corto).
+  const STILL_STATUS = [1, 5, 6];
+  const isStill = p => (validSog(p.sog) && p.sog <= 0.5) || (STILL_STATUS.includes(p.navStat) && !(validSog(p.sog) && p.sog >= 3));
+  // Per quanto si conserva la posizione p (ms); una nave ferma mai meno di una in moto
+  const retentionMs = (p, limits = DEFAULT_LIMITS) => isStill(p) ? Math.max(limits.stillMs, limits.movingMs) : limits.movingMs;
+  // Età (ms) di un orario (toMs: numero, stringa numerica o ISO) all'ora now; mai negativa; orario non valido = Infinity
+  function ageMs(ts, now) {
+    const t = toMs(ts);
+    return Number.isFinite(t) && Number.isFinite(now) ? Math.max(0, now - t) : Infinity;
+  }
+  // Opacità per età (come fadeCurve di AIS-catcher): 1 fino a fullMs, poi lineare fino a min a endMs, poi min.
+  // Età non valida (NaN) = la più vecchia.
+  function fadeOpacity(age, { fullMs = 2 * MIN_MS, endMs = 30 * MIN_MS, min = 0.2 } = {}) {
+    if (!(age > fullMs)) return Number.isNaN(age) ? min : 1;
+    if (age >= endMs) return min;
+    return 1 - (1 - min) * (age - fullMs) / (endMs - fullMs);
+  }
+  // Aspetto di una nave dalle sue properties (timestampExternal, sog, navStat) all'ora now (clock.now() nella pagina):
+  // age in ms, opacity, dashed = più vecchia del limite delle navi in moto (solo le ferme arrivano a esserlo),
+  // gone = oltre la sua conservazione (da togliere). Al limite esatto vale ancora come prima.
+  function ageStyle(p, now, limits = DEFAULT_LIMITS) {
+    const age = ageMs(p.timestampExternal, now);
+    return { age, opacity: fadeOpacity(age), dashed: age > limits.movingMs, gone: !(age <= retentionMs(p, limits)) };
+  }
+  // Età in parole: «adesso» sotto il minuto, «12 min fa», «1 h 30 min fa», «3 h fa»; non finita = null
+  function formatAge(age) {
+    if (typeof age !== 'number' || !Number.isFinite(age)) return null;
+    if (age < MIN_MS) return 'adesso';
+    const min = Math.floor(age / MIN_MS);
+    if (min < 60) return `${min} min fa`;
+    const h = Math.floor(min / 60), m = min % 60;
+    return m ? `${h} h ${m} min fa` : `${h} h fa`;
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
-    clockSample, createClock, includeParam };
+    clockSample, createClock, includeParam, DEFAULT_LIMITS, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge };
 });

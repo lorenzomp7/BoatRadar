@@ -14,6 +14,8 @@ const html = fs.readFileSync(path.join(ROOT, 'boatradar.html'), 'utf8');
 const pageScript = html.split('<script src="public/ais-logic.js"></script>')[1].split('<script>')[1].split('</script>')[0];
 const logicScript = fs.readFileSync(path.join(ROOT, 'public/ais-logic.js'), 'utf8');
 const WINDOW_MS = 30 * 60 * 1000;
+// orari delle posizioni di prova: T0 + pochi ms, cioè posizioni appena ricevute (punto 8: le più vecchie spariscono)
+const T0 = Date.now();
 const TIME_SCALE = 10;   // i timer della pagina corrono 10 volte più veloci (attesa massima 3000 ms → 300 ms)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -23,7 +25,7 @@ async function until(fn, what, ms = 3000) {
   throw new Error('timeout in attesa di: ' + what);
 }
 const feature = (mmsi, lon, lat, ts) => ({ type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [lon, lat] },
-  properties: { mmsi, sog: 5, cog: 90, timestampExternal: ts } });
+  properties: { mmsi, sog: 5, cog: 90, timestampExternal: T0 + ts } });
 
 // Avvia la pagina. skewMs = quanto l'orologio del telefono è avanti; routes(url) → { body, delay } o undefined (404).
 // Restituisce il contesto, il registro delle richieste ({ url, at, phoneAt }) e funzioni di comodo.
@@ -222,7 +224,7 @@ test('pagina: include= solo con una nave selezionata e la scheda aperta; la nave
   assert.equal(page.markers().get(B).marker.options.color, '#ffc83d');
   incFails = false;
   // riga «Prua» nella scheda, aggiornata a ogni giro
-  incFeatures = [{ ...feature(B, -42, -32, 4000), properties: { mmsi: B, sog: 5, cog: 90, heading: 45, timestampExternal: 4000 } }];
+  incFeatures = [{ ...feature(B, -42, -32, 4000), properties: { mmsi: B, sog: 5, cog: 90, heading: 45, timestampExternal: T0 + 4000 } }];
   await page.tick();
   assert.match(page.el('content').innerHTML + page.el('facts').innerHTML, /<td>Prua<\/td><td>45°<\/td>/);
 
@@ -291,8 +293,8 @@ test('pagina: Esc chiude la scheda (non dalla ricerca con i risultati aperti); f
 test('pagina: tooltip con «ferma» per le navi ferme', async () => {
   const S = 247600010, M = 247600011;
   let features = [
-    { ...feature(S, 11, 44, 1000), properties: { mmsi: S, name: 'FERMA', sog: 0, heading: 90, timestampExternal: 1000 } },
-    { ...feature(M, 11.5, 44, 1000), properties: { mmsi: M, name: 'IN MOTO', sog: 12, cog: 90, timestampExternal: 1000 } }];
+    { ...feature(S, 11, 44, 1000), properties: { mmsi: S, name: 'FERMA', sog: 0, heading: 90, timestampExternal: T0 + 1000 } },
+    { ...feature(M, 11.5, 44, 1000), properties: { mmsi: M, name: 'IN MOTO', sog: 12, cog: 90, timestampExternal: T0 + 1000 } }];
   const page = startPage({ routes: url => {
     if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 2, serverTime: Date.now() }) };
     if (url.endsWith('/vessels')) return { body: [] };
@@ -300,15 +302,99 @@ test('pagina: tooltip con «ferma» per le navi ferme', async () => {
     if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
   } });
   await page.firstTickDone();
-  assert.equal(page.markers().get(S).marker.tooltip(), 'FERMA · ferma');
-  assert.equal(page.markers().get(M).marker.tooltip(), 'IN MOTO');
+  assert.equal(page.markers().get(S).marker.tooltip(), 'FERMA · ferma · adesso');
+  assert.equal(page.markers().get(M).marker.tooltip(), 'IN MOTO · adesso');
   assert.equal(page.markers().get(S).marker.options.short, true, 'freccia corta');
   assert.equal(page.markers().get(M).marker.options.heading, 90);
   // giro dopo: la nave ferma riparte, quella in moto perde rotta e prua → setSymbol aggiorna il simbolo
-  features = [{ ...feature(S, 11, 44, 2000), properties: { mmsi: S, sog: 8, heading: 90, timestampExternal: 2000 } },
-    { ...feature(M, 11.5, 44, 2000), properties: { mmsi: M, sog: 0, timestampExternal: 2000 } }];
+  features = [{ ...feature(S, 11, 44, 2000), properties: { mmsi: S, sog: 8, heading: 90, timestampExternal: T0 + 2000 } },
+    { ...feature(M, 11.5, 44, 2000), properties: { mmsi: M, sog: 0, timestampExternal: T0 + 2000 } }];
   await page.tick();
   assert.deepEqual([page.markers().get(S).marker.options.short, page.markers().get(S).marker.options.heading], [false, 90]);
   assert.equal(page.markers().get(M).marker.options.heading, null, 'pallino');
-  assert.equal(page.markers().get(M).marker.tooltip(), 'IN MOTO · ferma');
+  assert.equal(page.markers().get(M).marker.tooltip(), 'IN MOTO · ferma · adesso');
+});
+
+// --- Punto 8: età della posizione (opacità, tratteggio, sparizione, testo) con l'ora corretta ---------------
+const MIN = 60 * 1000, H = 60 * MIN;
+test('pagina: navi sbiadite con l\'età, ferme vecchie tratteggiate, oltre il limite tolte; età con l\'ora del server (punto 8)', async () => {
+  const skewMs = 5 * MIN;   // telefono 5 min avanti: con la sua ora la nave di 28 min sarebbe di 33 min e sparirebbe
+  const FRESH = 247610001, OLD16 = 247610002, MOORED3H = 247610003, MOVING31 = 247610004, MOORED7H = 247610005, MOVING28 = 247610006;
+  const ship = (mmsi, ageMs, extra) => ({ type: 'Feature', mmsi, geometry: { type: 'Point', coordinates: [11, 44] },
+    properties: { mmsi, name: 'N' + mmsi, sog: 10, cog: 90, navStat: 0, timestampExternal: Date.now() - ageMs, ...extra } });
+  const moored = { sog: 0, navStat: 5, heading: 90 };
+  const t = Date.now();
+  const all = [ship(FRESH, 0), ship(OLD16, 16 * MIN), ship(MOORED3H, 3 * H, moored), ship(MOVING31, 31 * MIN),
+    ship(MOORED7H, 7 * H, moored), ship(MOVING28, 28 * MIN)].map(f => ({ ...f, properties: { ...f.properties,
+    timestampExternal: f.properties.timestampExternal - (Date.now() - t) } }));
+  const features = () => all;   // posizioni fisse: il tempo passa con l'ora del server (advance)
+  let advance = 0;
+  const page = startPage({ skewMs, routes: url => {
+    if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 6, serverTime: Date.now() + advance }) };
+    if (url.endsWith('/vessels')) return { body: [] };
+    if (url.startsWith('/api/vessel')) return { body: null };
+    if (isView(url)) return { body: () => ({ type: 'FeatureCollection', total: 6, features: features() }) };
+    if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
+  } });
+  await page.firstTickDone();
+  const opt = mmsi => page.markers().get(mmsi).marker.options;
+  assert.deepEqual([...page.markers().keys()].sort(), [FRESH, OLD16, MOORED3H, MOVING28].sort(),
+    'in moto di 31 min e ormeggiata di 7 h non sono in mappa; quella di 28 min sì (ora del server, non del telefono)');
+  assert.deepEqual([opt(FRESH).opacity, opt(FRESH).fillOpacity, opt(FRESH).dashArray], [1, 0.95, null], 'appena ricevuta: piena');
+  assert.ok(Math.abs(opt(OLD16).fillOpacity - 0.95 * 0.6) < 0.01, `16 min: fillOpacity ${opt(OLD16).fillOpacity}`);
+  assert.ok(Math.abs(opt(OLD16).opacity - 0.6) < 0.01, 'anche il bordo sbiadisce');
+  assert.equal(opt(OLD16).dashArray, null, 'sotto i 30 min non tratteggiata');
+  assert.ok(Math.abs(opt(MOORED3H).fillOpacity - 0.95 * 0.2) < 1e-9, 'ormeggiata di 3 h: 20 %');
+  assert.ok(opt(MOORED3H).dashArray, 'ormeggiata di 3 h: tratteggiata');
+  assert.notEqual(opt(MOORED3H).color, '#0b1118', 'il tratteggio ha un bordo chiaro, visibile sulla mappa scura');
+  // tooltip con l'età (calcolata al momento con clock.now())
+  assert.equal(page.markers().get(FRESH).marker.tooltip(), `N${FRESH} · adesso`);
+  assert.equal(page.markers().get(OLD16).marker.tooltip(), `N${OLD16} · 16 min fa`);
+  assert.equal(page.markers().get(MOORED3H).marker.tooltip(), `N${MOORED3H} · ferma · posizione di 3 h fa`);
+
+  // nave selezionata vecchia: bordo giallo pieno e tratteggiato, riempimento non sotto il 60 %; scheda con l'età
+  page.ctx.select(MOORED3H);
+  assert.deepEqual([opt(MOORED3H).color, opt(MOORED3H).radius, opt(MOORED3H).opacity], ['#ffc83d', 8, 1], 'selezionata ben visibile');
+  assert.ok(opt(MOORED3H).dashArray, 'resta tratteggiata anche selezionata');
+  assert.ok(opt(MOORED3H).fillOpacity >= 0.95 * 0.6 - 1e-9, `fillOpacity ${opt(MOORED3H).fillOpacity}`);
+  const hms = t => new Date(t).toLocaleTimeString('it-IT');
+  const html = page.el('content').innerHTML;
+  const ts3h = page.markers().get(MOORED3H).props.timestampExternal;
+  assert.ok(html.includes(`posizione di 3 h fa (${hms(ts3h)})`), 'scheda: «posizione di 3 h fa (ora)»');
+  // deselezionata (×): torna sbiadita e tratteggiata, non lo stile normale pieno
+  page.el('close').onclick();
+  assert.deepEqual([opt(MOORED3H).color === '#ffc83d', opt(MOORED3H).radius], [false, 4]);
+  assert.ok(opt(MOORED3H).dashArray && opt(MOORED3H).fillOpacity < 0.2, 'dopo la × di nuovo sbiadita');
+  page.ctx.select(OLD16);
+  const ts16 = page.markers().get(OLD16).props.timestampExternal;
+  assert.ok(page.el('content').innerHTML.includes(`16 min fa (${hms(ts16)})`), 'scheda: «16 min fa (ora)»');
+
+  // 15 min dopo (ora del server avanti di 15 min; l'orologio la segue dopo due campioni) con le stesse posizioni: la
+  // fresca sbiadisce anche se il marker non si sposta, quella di 16 min (ora 31) sparisce, l'ormeggiata resta
+  advance = 15 * MIN;
+  await page.tick();
+  await page.tick();
+  assert.deepEqual([...page.markers().keys()].sort(), [FRESH, MOORED3H].sort(), 'oltre i 30 min le navi in moto spariscono');
+  assert.ok(opt(FRESH).fillOpacity < 0.95 * 0.7, `di 15 min: sbiadita (${opt(FRESH).fillOpacity})`);
+});
+
+test('pagina: un marker già in mappa sparisce quando la sua posizione supera il limite, anche senza posizioni nuove (punto 8)', async () => {
+  const A = 247610011;
+  const ts = Date.now() - 29 * MIN;
+  let advance = 0;
+  const page = startPage({ routes: url => {
+    if (url === '/api/status') return { body: () => ({ hasKey: true, connected: true, vessels: 1, serverTime: Date.now() + advance }) };
+    if (url.endsWith('/vessels')) return { body: [] };
+    if (isView(url)) return { body: () => ({ type: 'FeatureCollection', total: 1, features: [{ ...feature(A, 11, 44, 0),
+      properties: { mmsi: A, sog: 9, timestampExternal: ts } }] }) };
+    if (url.includes('digitraffic')) return { body: { type: 'FeatureCollection', features: [] } };
+  } });
+  await page.firstTickDone();
+  assert.ok(page.markers().has(A));
+  const marker = page.markers().get(A).marker;
+  advance = 2 * MIN;   // 2 min dopo la stessa posizione (es. la vista dalla cache del server) è di 31 min fa
+  await page.tick();
+  await page.tick();   // l'orologio segue l'ora nuova dopo due campioni (mediana)
+  assert.equal(page.markers().has(A), false);
+  assert.equal(marker.removed, true);
 });

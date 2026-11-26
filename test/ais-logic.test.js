@@ -401,3 +401,87 @@ test('stopped: ferma solo con velocità nota fino a 0,5 kn', () => {
   for (const sog of [0.6, 10, 102.3, 102.2, -1, null, undefined, NaN, '0']) assert.equal(AL.stopped({ sog }), false, String(sog));
   assert.equal(AL.stopped({}), false);
 });
+
+// --- Punto 8: età della posizione, sparizione graduale, conservazione più lunga per le navi ferme -------------
+const MIN = 60 * 1000, H = 60 * MIN;
+
+test('DEFAULT_LIMITS: 30 min per le navi in moto, 6 h per le ferme (punto 8)', () => {
+  assert.deepEqual(AL.DEFAULT_LIMITS, { movingMs: 30 * MIN, stillMs: 6 * H });
+  assert.ok(Object.isFrozen(AL.DEFAULT_LIMITS), 'non modificabile per sbaglio dalla pagina o dal server');
+});
+
+test('validSog: velocità nota fra 0 e 102,2 kn (102,3 = non disponibile)', () => {
+  for (const s of [0, 0.5, 3, 102.2]) assert.equal(AL.validSog(s), true, String(s));
+  for (const s of [102.3, 200, -0.1, NaN, Infinity, null, undefined, '0']) assert.equal(AL.validSog(s), false, String(s));
+});
+
+test('isStill: ferma con velocità ≤ 0,5 kn, oppure all\'ancora, ormeggiata o incagliata se non va ad almeno 3 kn (punto 8)', () => {
+  assert.equal(AL.isStill({ navStat: 5, sog: 0 }), true, 'ormeggiata');
+  assert.equal(AL.isStill({ navStat: 1, sog: 102.3 }), true, 'all\'ancora con velocità non disponibile');
+  assert.equal(AL.isStill({ navStat: 1, sog: 8 }), false, 'all\'ancora ma a 8 kn: stato non aggiornato, è in moto');
+  assert.equal(AL.isStill({ navStat: 0, sog: 0.2 }), true, 'in navigazione ma a 0,2 kn');
+  assert.equal(AL.isStill({}), false, 'niente dati: non si sa, vale come in moto');
+  assert.equal(AL.isStill({ navStat: 6, sog: 2.9 }), true, 'incagliata sotto 3 kn');
+  assert.equal(AL.isStill({ navStat: 5, sog: 3 }), false, 'ormeggiata a 3 kn');
+  assert.equal(AL.isStill({ navStat: 5 }), true, 'ormeggiata senza velocità');
+  assert.equal(AL.isStill({ navStat: 0, sog: 0.6 }), false);
+  assert.equal(AL.isStill({ navStat: 15, sog: 102.3 }), false, 'stato non definito e velocità n.d.');
+});
+
+test('retentionMs: quanto si conserva una posizione; le ferme mai meno delle navi in moto (punto 8)', () => {
+  assert.equal(AL.retentionMs({ navStat: 5, sog: 0 }), 6 * H);
+  assert.equal(AL.retentionMs({ navStat: 0, sog: 10 }), 30 * MIN);
+  const limits = { movingMs: 300, stillMs: 1500 };
+  assert.equal(AL.retentionMs({ navStat: 5, sog: 0 }, limits), 1500);
+  assert.equal(AL.retentionMs({ sog: 12 }, limits), 300);
+  assert.equal(AL.retentionMs({ sog: 0 }, { movingMs: 1000, stillMs: 10 }), 1000, 'stillMs più corto di movingMs: vale movingMs');
+});
+
+test('ageMs: età da timestamp e ora (mai negativa; orario mancante = infinita)', () => {
+  assert.equal(AL.ageMs(1000, 4000), 3000);
+  assert.equal(AL.ageMs(5000, 4000), 0, 'posizione «nel futuro» (orologi diversi): età 0');
+  assert.equal(AL.ageMs('2026-11-26T08:00:00Z', Date.parse('2026-11-26T08:12:00Z')), 12 * MIN, 'ISO di Digitraffic');
+  for (const ts of [undefined, null, 'abc', NaN]) assert.equal(AL.ageMs(ts, 4000), Infinity, String(ts));
+  assert.equal(AL.ageMs(1000, NaN), Infinity);
+});
+
+test('fadeOpacity: piena fino a 2 min, poi lineare fino al 20 % a 30 min (come AIS-catcher) (punto 8)', () => {
+  assert.equal(AL.fadeOpacity(0), 1);
+  assert.equal(AL.fadeOpacity(2 * MIN), 1);
+  assert.ok(Math.abs(AL.fadeOpacity(16 * MIN) - 0.6) < 1e-9, String(AL.fadeOpacity(16 * MIN)));
+  assert.ok(Math.abs(AL.fadeOpacity(30 * MIN) - 0.2) < 1e-9);
+  assert.equal(AL.fadeOpacity(3 * H), 0.2);
+  assert.equal(AL.fadeOpacity(Infinity), 0.2);
+  assert.equal(AL.fadeOpacity(NaN), 0.2, 'età non valida: come la più vecchia');
+  assert.equal(AL.fadeOpacity(-5), 1);
+  assert.equal(AL.fadeOpacity(10, { fullMs: 0, endMs: 20, min: 0.5 }), 0.75, 'curva configurabile');
+});
+
+test('ageStyle: opacità, tratteggio oltre il limite delle navi in moto, gone oltre la conservazione (punto 8)', () => {
+  const now = Date.parse('2026-11-26T12:00:00Z');
+  const at = ms => now - ms;
+  const moored3h = AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(3 * H) }, now);
+  assert.deepEqual(moored3h, { age: 3 * H, opacity: 0.2, dashed: true, gone: false }, 'ormeggiata di 3 h fa: tratteggiata, resta');
+  assert.equal(AL.ageStyle({ navStat: 0, sog: 12, timestampExternal: at(31 * MIN) }, now).gone, true, 'in moto di 31 min fa: sparisce');
+  assert.equal(AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(7 * H) }, now).gone, true, 'ormeggiata di 7 h fa: sparisce');
+  assert.deepEqual(AL.ageStyle({ sog: 12, timestampExternal: at(MIN) }, now), { age: MIN, opacity: 1, dashed: false, gone: false });
+  const edge = AL.ageStyle({ sog: 12, timestampExternal: at(30 * MIN) }, now);
+  assert.deepEqual([edge.dashed, edge.gone], [false, false], 'esattamente al limite: ancora normale');
+  assert.equal(AL.ageStyle({ sog: 12 }, now).gone, true, 'senza orario: sparisce');
+  assert.deepEqual(AL.ageStyle({ navStat: 5, sog: 0, timestampExternal: at(1000) }, now, { movingMs: 300, stillMs: 1500 }),
+    { age: 1000, opacity: 1, dashed: true, gone: false }, 'limiti dati');
+});
+
+test('formatAge: età in parole, per tooltip e scheda (punto 8)', () => {
+  assert.equal(AL.formatAge(20 * 1000), 'adesso');
+  assert.equal(AL.formatAge(-5 * 1000), 'adesso');
+  assert.equal(AL.formatAge(59 * 1000), 'adesso');
+  assert.equal(AL.formatAge(60 * 1000), '1 min fa');
+  assert.equal(AL.formatAge(12 * MIN + 59 * 1000), '12 min fa');
+  assert.equal(AL.formatAge(59 * MIN), '59 min fa');
+  assert.equal(AL.formatAge(H), '1 h fa');
+  assert.equal(AL.formatAge(90 * MIN), '1 h 30 min fa');
+  assert.equal(AL.formatAge(3 * H), '3 h fa');
+  assert.equal(AL.formatAge(5 * H + 59 * MIN + 59 * 1000), '5 h 59 min fa');
+  for (const a of [Infinity, NaN, undefined, null]) assert.equal(AL.formatAge(a), null, String(a));
+});

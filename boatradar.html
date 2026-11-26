@@ -46,6 +46,7 @@
   #legend .sym { display:flex; align-items:center; gap:6px; margin-top:4px; }
   #legend-types + .sym { border-top:1px solid var(--line); padding-top:6px; }   /* separatore fra tipi e simboli */
   #legend svg { width:12px; height:16px; flex:none; fill:var(--text); stroke:#0b1118; stroke-width:1; }
+  #legend svg .old { fill-opacity:.2; stroke:#c9d4e0; stroke-width:1.5; stroke-dasharray:3 2; }
   /* scheda aperta (desktop): l'header (z-index 1100) non si allarga sopra la scheda (destra 12 px + 340 px) e va
      a capo; prima con una riga di stato lunga copriva la × e il clic arrivava al pulsante VesselFinder */
   @media (min-width: 641px) {
@@ -115,6 +116,8 @@
        (fino a 0,5 kn) o con la velocità non nota; «ferma» nel tooltip invece solo con la velocità nota (stopped) -->
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><path d="M0,-5.2L4.4,3.9L0,2.34L-4.4,3.9Z"/></svg>freccia corta = ferma o velocità non nota, prua nota</div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4"/></svg>pallino = direzione non nota</div>
+  <!-- punto 8: le navi sbiadiscono con l'età della posizione; le ferme restano fino a 6 h, tratteggiate dopo 30 min -->
+  <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="old"/></svg>sbiadita, tratteggiata = posizione vecchia (ferma)</div>
 </details>
 <aside id="panel"><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
@@ -128,7 +131,11 @@
 const API = (window.BOATRADAR_API || '/api').replace(/\/$/, '');
 const BALTIC = 'https://meri.digitraffic.fi/api/ais/v1';
 const REFRESH_MS = 15000;
-const WINDOW_MS = 30 * 60 * 1000; // Baltico: solo navi viste negli ultimi 30 minuti
+// Baltico: solo navi viste negli ultimi 30 minuti. Resta 30 min anche dopo il punto 8 (navi ferme fino a 6 h in
+// mappa): con 6 h la risposta di Digitraffic, che arriva intera a ogni giro, diventerebbe molto più pesante e non è
+// stata misurata (Digitraffic non era raggiungibile dalla sessione di sviluppo). Nel Baltico le navi ferme da più
+// di 30 min si vedono solo se arrivano anche da aisstream.
+const WINDOW_MS = 30 * 60 * 1000;
 const CLOCK_WAIT_MS = 3000;       // primo aggiornamento: attesa massima di /api/status prima di chiedere il Baltico
 
 // Logica pura (tipi di nave, ETA, ricerca…) in public/ais-logic.js, provata da test/ais-logic.test.js.
@@ -139,7 +146,7 @@ if (!window.AisLogic) {
   throw new Error(msg);
 }
 const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, isNewer, mergeFeatures,
-  clockSample, createClock, includeParam } = AisLogic;
+  clockSample, createClock, includeParam, toMs, ageStyle, formatAge } = AisLogic;
 
 // Ora corretta con serverTime di /api/status (punto 43): un telefono con l'orologio sbagliato di qualche
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
@@ -217,6 +224,35 @@ let selected = null;
 let worldTotal = 0;
 // Bordo dei marker: normale e nave selezionata (giallo, più grande)
 const STYLE = { normal: { radius:4, color:'#0b1118', weight:1 }, selected: { radius:8, color:'#ffc83d', weight:3 } };
+// Punto 8: posizione più vecchia del limite delle navi in moto (solo le ferme restano in mappa così a lungo):
+// bordo chiaro tratteggiato, perché il bordo normale scuro non si vedrebbe sulla mappa scura
+const AGE_DASH = { color:'#c9d4e0', weight:1.5, dashArray:'3 2' };
+
+// Stile del marker: STYLE (normale o selezionata) combinato con l'età della posizione (ageStyle, ora corretta).
+// Riempimento e bordo sbiadiscono con l'età; la nave selezionata tiene il bordo giallo pieno e il riempimento
+// almeno al 60 %, così resta ben visibile anche se la posizione è vecchia.
+function markerStyle(props, sel, now = clock.now()) {
+  const a = ageStyle(props || {}, now);
+  if (sel) return { ...STYLE.selected, opacity: 1, fillOpacity: 0.95 * Math.max(a.opacity, 0.6), dashArray: a.dashed ? '6 3' : null };
+  if (a.dashed) return { ...STYLE.normal, ...AGE_DASH, opacity: 0.9, fillOpacity: 0.95 * a.opacity };
+  return { ...STYLE.normal, opacity: a.opacity, fillOpacity: 0.95 * a.opacity, dashArray: null };
+}
+
+// Età della posizione in parole: «12 min fa (08:41:03)», oltre il limite delle navi in moto «posizione di 3 h fa
+// (05:41:03)»; null senza orario
+function ageText(props, now = clock.now()) {
+  const a = ageStyle(props || {}, now), age = formatAge(a.age);
+  if (!age) return null;
+  return `${a.dashed ? 'posizione di ' : ''}${age} (${new Date(toMs(props.timestampExternal)).toLocaleTimeString('it-IT')})`;
+}
+
+// Tooltip: nome, «ferma» e età (senza l'ora), calcolati quando compare
+function tooltipText(mmsi) {
+  const p = markers.get(mmsi)?.props || {};
+  const a = ageStyle(p, clock.now()), age = formatAge(a.age);
+  return (meta.get(mmsi)?.name || String(mmsi)) + (stopped(p) ? ' · ferma' : '')
+    + (age ? ' · ' + (a.dashed ? 'posizione di ' : '') + age : '');
+}
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -285,7 +321,10 @@ async function loadLocations() {
   // stessa nave in più fonti: tengo la posizione più recente (properties.source dice da dove viene); la nave
   // inclusa vince sulla vista (forse dalla cache) se è più recente
   const merged = mergeFeatures([{ source: 'digitraffic', features: baltic.value }, { source: 'aisstream', features: med.value }, { source: 'aisstream', features: inc.value }]);
+  // età con l'ora corretta (punto 8): una posizione oltre il suo limite (in moto 30 min, ferma 6 h) non entra in mappa
+  const now = clock.now();
   for (const [mmsi, f] of merged) {
+    if (ageStyle(f.properties, now).gone) continue;
     const [lon, lat] = f.geometry.coordinates;
     const { name, shipType } = f.properties;
     if (name || shipType != null) meta.set(mmsi, { ...meta.get(mmsi), ...(name && { name }), ...(shipType != null && { shipType }) });
@@ -296,24 +335,28 @@ async function loadLocations() {
     if (!m) {
       // la nave selezionata (es. scelta dalla ricerca, arrivata con include=) nasce già con il bordo giallo
       const sel = mmsi === selected;
-      const marker = new ShipMarker([lat, lon], { renderer, ...(sel ? STYLE.selected : STYLE.normal), fillColor:color,
-        fillOpacity:.95, ...symbol(f.properties) })
+      const marker = new ShipMarker([lat, lon], { renderer, ...markerStyle(f.properties, sel, now), fillColor:color,
+        ...symbol(f.properties) })
         .on('click', () => select(mmsi)).addTo(map);
       if (sel) marker.bringToFront();
-      marker.bindTooltip(() => (meta.get(mmsi)?.name || String(mmsi)) + (stopped(markers.get(mmsi)?.props || {}) ? ' · ferma' : ''),
-        { direction:'top' });
+      marker.bindTooltip(() => tooltipText(mmsi), { direction:'top' });
       m = { marker };
       markers.set(mmsi, m);
     } else {
       m.marker.setLatLng([lat, lon]);
       m.marker.setSymbol(symbol(f.properties));
-      m.marker.setStyle({ fillColor: color });
+      m.marker.setStyle({ fillColor: color });   // opacità e tratteggio dopo il ciclo, per tutti i marker
     }
     m.props = f.properties;
   }
   // se è fallita la richiesta include=, la nave selezionata non è sparita: manca solo la risposta, resta dov'è
+  // (ma non oltre il limite della sua posizione). Ogni marker rimasto prende lo stile della sua età di adesso,
+  // anche se in questo giro non si è spostato.
   const keep = inc.status === 'rejected' ? selected : null;
-  for (const [mmsi, m] of markers) if (!merged.has(mmsi) && mmsi !== keep) { m.marker.remove(); markers.delete(mmsi); }
+  for (const [mmsi, m] of markers) {
+    if ((!merged.has(mmsi) && mmsi !== keep) || ageStyle(m.props || {}, now).gone) { m.marker.remove(); markers.delete(mmsi); }
+    else m.marker.setStyle(markerStyle(m.props, mmsi === selected, now));
+  }
   const st = statusResult.status === 'fulfilled' ? statusResult.value : null;
   const note = !st ? ' · Mondo: server non raggiungibile (ora solo Baltico)'
     : !st.hasKey ? ' · Mondo: manca la chiave gratuita di aisstream.io in aisstream-key.txt (ora solo Baltico)'
@@ -330,7 +373,7 @@ async function loadLocations() {
 
 // Nessuna nave scelta: tolgo il bordo giallo; senza selected la pagina non chiede più la nave con include=
 function deselect() {
-  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle(STYLE.normal);
+  if (selected && markers.has(selected)) markers.get(selected).marker.setStyle(markerStyle(markers.get(selected).props, false));
   selected = null;
 }
 
@@ -356,7 +399,7 @@ function select(mmsi) {
   deselect();
   selected = mmsi;
   const m = markers.get(mmsi);
-  if (m) { m.marker.setStyle(STYLE.selected).bringToFront(); }
+  if (m) { m.marker.setStyle(markerStyle(m.props, true)).bringToFront(); }
   render(mmsi);
   openPanel();
   if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
@@ -395,7 +438,7 @@ function facts(mmsi) {
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
-      ${row('Ultimo segnale', p.timestampExternal ? new Date(p.timestampExternal).toLocaleString('it-IT') : null)}
+      ${row('Ultimo segnale', ageText(p))}
       ${row('Fonte', SOURCE_LABEL[p.source])}`;
 }
 
