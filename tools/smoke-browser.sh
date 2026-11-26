@@ -11,6 +11,10 @@
 #      con la scheda aperta, 30 navi finte nello stesso punto: popup con 15 righe e «e altre 15» fra l'header e la
 #      scheda (o il fondo della mappa), ogni riga raggiungibile scorrendo, × «Chiudi elenco», zoom «Ingrandisci»/«Riduci»,
 #      e un clic vero su «e altre 15» che chiude il popup e ingrandisce di 2;
+#   3a. (solo con il server locale, punto 9) un clic vero su «Cargo» nella legenda (aperta con un clic vero sul suo
+#      titolo se chiusa, come su telefono; riga da almeno 44 px a 390) tolga il cargo LAGUNA PRIMA (247123450) e salvi il
+#      filtro in localStorage; ricaricando la pagina il filtro resti (Cargo spento, nave assente, «filtri attivi»); un
+#      secondo clic la riporti e svuoti localStorage. Prima della passata telefono localStorage si svuota;
 #   3b. la pagina non abbia errori JavaScript né messaggi console.error;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
@@ -89,6 +93,9 @@ if [ "${SMOKE_LEAFLET_LOCAL:-0}" = 1 ]; then
   AB+=("${INIT[@]}")
   ok "Leaflet caricato dal registro npm (SMOKE_LEAFLET_LOCAL=1)"
 fi
+
+# Clic vero del mouse nel punto x y della pagina
+click_at() { "${AB[@]}" mouse move "$1" "$2" >/dev/null; "${AB[@]}" mouse down >/dev/null; "${AB[@]}" mouse up >/dev/null; }
 
 # Valore di un'espressione JavaScript nella pagina, come testo JSON.
 js() { "${AB[@]}" eval --json "$1" | node -e '
@@ -296,6 +303,50 @@ check() {
     ok "$name: navi sovrapposte non controllate (pagina pubblicata, navi vere)"
   fi
 
+  # filtri (punto 9): clic veri su «Cargo» nella legenda; LAGUNA PRIMA (247123450, tipo 70) della fixture sparisce e
+  # torna, il filtro resta in localStorage anche ricaricando. Solo con il server locale (navi e tipi noti).
+  if [ -z "${SMOKE_URL:-}" ]; then
+    local FKEY="'boatradar:filtri'" NOCARGO="'types=tanker,passenger,fishing,pleasure,service,other'"
+    # centro di un elemento portato in vista (dentro la legenda che scorre), poi chi c'è davvero in quel punto
+    local center_of="(sel => { const b = document.querySelector(sel); b.scrollIntoView({ block: 'nearest' });
+      const r = b.getBoundingClientRect(); return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2) + ' ' + Math.round(r.height); })"
+    open_legend() {
+      [ "$(js "document.getElementById('legend').open")" = true ] && return 0
+      local sx sy _h
+      read -r sx sy _h <<<"$(js "$center_of('#legend > summary')" | tr -d '"')"
+      click_at "$sx" "$sy"
+      "${AB[@]}" wait --fn "document.getElementById('legend').open" >/dev/null || fail "$name: il clic sul titolo della legenda non la apre"
+    }
+    cargo_click() {
+      open_legend
+      local bx by bh hitb
+      read -r bx by bh <<<"$(js "$center_of('#lt-cargo')" | tr -d '"')"
+      hitb=$(js "document.elementFromPoint($bx, $by)?.closest('button')?.id || 'niente'" | tr -d '"')
+      [ "$hitb" = lt-cargo ] || { "${AB[@]}" screenshot "$OUT/$name-filtri-errore.png" >/dev/null || true; fail "$name: sopra «Cargo» ($bx $by) c'è $hitb"; }
+      click_at "$bx" "$by"
+      CARGO_H="$bh"
+    }
+    js "map.setView([45.4312, 12.3355], 10, { animate: false }), true" >/dev/null
+    "${AB[@]}" wait --fn "markers.has(247123450)" >/dev/null || fail "$name: LAGUNA PRIMA (247123450) non è in mappa per la prova dei filtri"
+    cargo_click
+    if [ "$(js "matchMedia('(max-width: 640px)').matches")" = true ]; then
+      [ "$CARGO_H" -ge 44 ] || fail "$name: la riga «Cargo» della legenda è alta $CARGO_H px, meno di 44"
+    fi
+    "${AB[@]}" wait --fn "!markers.has(247123450) && localStorage.getItem($FKEY) === $NOCARGO" >/dev/null       || { "${AB[@]}" screenshot "$OUT/$name-filtri-errore.png" >/dev/null || true
+           fail "$name: il clic su «Cargo» non toglie 247123450 · localStorage $(js "localStorage.getItem($FKEY)") · in mappa $(js "markers.has(247123450)")"; }
+    [ "$(js "document.getElementById('lt-cargo').getAttribute('aria-pressed')")" = '"false"' ] || fail "$name: «Cargo» spento senza aria-pressed=false"
+    ok "$name: clic su «Cargo» (riga $CARGO_H px) → 247123450 tolta, localStorage «$(js "localStorage.getItem($FKEY)" | tr -d '"')», conteggio «$(js "document.getElementById('filter-count').textContent" | tr -d '"')»"
+    "${AB[@]}" screenshot "$OUT/$name-filtri.png" >/dev/null
+    # ricaricando: il filtro resta (vista mondo, LAGUNA PRIMA è dentro ma non torna)
+    "${AB[@]}" open "$URL" >/dev/null || fail "$name: la pagina non si riapre"
+    "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0 && /filtri attivi/.test(document.getElementById('status').textContent)" >/dev/null       || fail "$name: dopo il ricaricamento niente navi o niente «filtri attivi» · stato: $(js "document.getElementById('status')?.textContent")"
+    [ "$(js "tick().then(() => !markers.has(247123450) && document.getElementById('lt-cargo').getAttribute('aria-pressed') === 'false')")" = true ]       || fail "$name: dopo il ricaricamento il filtro non vale (247123450 in mappa o «Cargo» acceso)"
+    ok "$name: ricaricando il filtro resta · stato «$(js "document.getElementById('status').textContent" | tr -d '"')»"
+    cargo_click
+    "${AB[@]}" wait --fn "markers.has(247123450) && localStorage.getItem($FKEY) === null" >/dev/null       || fail "$name: il secondo clic su «Cargo» non riporta 247123450 · localStorage $(js "localStorage.getItem($FKEY)")"
+    ok "$name: secondo clic su «Cargo» → 247123450 di nuovo in mappa, localStorage vuoto"
+  fi
+
   # errori JavaScript e console.error (i warning, come Digitraffic non raggiungibile, non contano)
   local problems
   problems=$( { "${AB[@]}" errors --json; echo; "${AB[@]}" console --json; } | node -e '
@@ -310,6 +361,8 @@ check() {
 }
 
 check desktop 1280 800
+# stessa sessione: niente filtri della passata desktop (punto 9) nella passata telefono
+js "(localStorage.clear(), true)" >/dev/null
 check telefono 390 844
 
 # --- orologio 40 min avanti (punto 8) --------------------------------------

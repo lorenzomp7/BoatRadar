@@ -30,7 +30,10 @@ async function until(fn, what, ms = 5000) {
 // che devono far passare minuti, come il ritorno al server principale dopo 5 min).
 // media: risposte di matchMedia per query (es. { '(pointer: coarse)': true }); size e project: dimensioni e proiezione
 // della mappa finta (punto 10, scelta tra navi sovrapposte).
-function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, media = {},
+// local: contenuto iniziale di localStorage (page.local, Map), oppure 'throw' per un localStorage che lancia (punto 9,
+// filtri salvati). Gli elementi registrano i loro listener (addEventListener) e page.fireEl(id, type, event) li chiama;
+// setAttribute li scrive in el.attributes.
+function startPage({ routes, config = {}, session = {}, local = {}, timeScale = TIME_SCALE, media = {},
   size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }) }) {
   const realStart = Date.now();
   const pageNow = () => realStart + (Date.now() - realStart) * timeScale;
@@ -47,7 +50,10 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
     } };
   const el = id => {
     if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
-      isConnected: true, addEventListener() {}, focus() { document.activeElement = this; }, getClientRects: () => [{}],
+      isConnected: true, listeners: [], attributes: {},
+      addEventListener(type, fn) { this.listeners.push({ type, fn }); },
+      setAttribute(k, v) { this.attributes[k] = String(v); }, getAttribute(k) { return this.attributes[k] ?? null; },
+      focus() { document.activeElement = this; }, getClientRects: () => [{}],
       contains(x) { return x === this; },
       getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }) });
     return elements.get(id);
@@ -148,6 +154,10 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
   const boom = () => { throw new Error('SecurityError: sessionStorage non disponibile'); };
   const sessionStorage = session === 'throw' ? { getItem: boom, setItem: boom, removeItem: boom }
     : { getItem: k => (storage.has(k) ? storage.get(k) : null), setItem: (k, v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) };
+  const localMap = new Map(Object.entries(local === 'throw' ? {} : local));
+  const boomLocal = () => { throw new Error('SecurityError: localStorage non disponibile'); };
+  const localStorage = local === 'throw' ? { getItem: boomLocal, setItem: boomLocal, removeItem: boomLocal }
+    : { getItem: k => (localMap.has(k) ? localMap.get(k) : null), setItem: (k, v) => localMap.set(k, String(v)), removeItem: k => localMap.delete(k) };
   const retryTimers = new Set();   // setTimeout(tick, …) in attesa
   const allTimers = new Set();
   let stopped = false;             // stop(): pagina chiusa, nessun timer parte più (il test può finire)
@@ -165,7 +175,7 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
     clearTimeout: id => { retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
     ResizeObserver: class { observe() {} }, matchMedia: q => ({ matches: !!media[q] }),
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, navigator: {},
+    localStorage, navigator: {},
     addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
   ctx.window = ctx;
@@ -179,7 +189,9 @@ function startPage({ routes, config = {}, session = {}, timeScale = TIME_SCALE, 
   const setHidden = hidden => { document.hidden = hidden; for (const fn of listeners.get('visibilitychange') || []) fn({ type: 'visibilitychange' }); };
   // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
   const fire = type => { for (const fn of winListeners.get(type) || []) fn({ type }); };
-  return { ctx, el, get, requests, stop, storage, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
+  // evento sull'elemento id (es. 'click' o 'change' delegati su #legend): event è il resto dell'evento (target…)
+  const fireEl = (id, type, event = {}) => { for (const l of el(id).listeners) if (l.type === type) l.fn({ type, ...event }); };
+  return { ctx, el, get, requests, stop, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }
