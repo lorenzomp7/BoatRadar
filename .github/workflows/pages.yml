@@ -41,6 +41,7 @@ jobs:
           mkdir -p _site/vendor/leaflet/images
           cp vendor/leaflet/leaflet.js _site/vendor/leaflet/
           cp vendor/leaflet/leaflet.css _site/vendor/leaflet/
+          cp vendor/leaflet/LICENSE _site/vendor/leaflet/
           cp vendor/leaflet/images/layers.png _site/vendor/leaflet/images/
           cp vendor/leaflet/images/layers-2x.png _site/vendor/leaflet/images/
           cp vendor/leaflet/images/marker-icon.png _site/vendor/leaflet/images/

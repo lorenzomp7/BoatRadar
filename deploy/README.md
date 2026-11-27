@@ -62,6 +62,7 @@ negativo) vale come il default. Lo stato della cache è in `locationsCache` di `
 | `SNAPSHOT_FILE` | nessuno (in `compose.yml`: `/data/vessels.json.gz`) | file dei dati statici delle navi conservati fra un riavvio e l'altro (punto 22, sezione «Dati statici dopo un riavvio»); senza, il server parte vuoto |
 | `SNAPSHOT_INTERVAL_MS` | `600000` (10 min) | ogni quanti ms si salvano i dati statici (solo con `SNAPSHOT_FILE`) |
 | `SNAPSHOT_EXIT_MS` | `8000` | a SIGTERM/SIGINT, tempo massimo dell'ultimo salvataggio prima di uscire comunque (sotto il `stop_grace_period` di 20 s di `compose.yml`) |
+| `SNAPSHOT_RESTORE_MS` | `5000` | tempo massimo del ripristino all'avvio prima di collegarsi comunque ad aisstream (il ripristino continua; i salvataggi aspettano la sua fine) |
 
 `vessels` di `/api/status` conta le posizioni in memoria, non le navi in mappa: comprende anche le posizioni già
 scadute che la pulizia non ha ancora tolto (al massimo `POSITIONS_CLEANUP_MS`, 60 s) e, con il punto 8, le navi ferme
@@ -76,12 +77,25 @@ circa per nave (`ShipStaticData`), mentre le posizioni arrivano di continuo: dop
 restavano a lungo senza nome né destinazione. Con `SNAPSHOT_FILE` (`snapshot.js`, punto 22) `server.js`:
 
 - all'avvio rilegge il file prima di collegarsi ad aisstream (al massimo 5 s, poi si collega comunque) e ripristina
-  solo i dati statici di meno di 48 h, validati campo per campo; nessuna posizione (le navi tornano in mappa con la
-  prima posizione nuova). Un file rovinato o di un altro formato non blocca l'avvio: il server parte vuoto;
-- li salva ogni `SNAPSHOT_INTERVAL_MS` (10 min) e a `docker stop` (SIGTERM), in gzip (circa 0,5 MB per 50.000 navi sintetiche di `tools/carico.js`; con nomi e destinazioni veri di più), su
-  un file `.tmp` poi rinominato: un'interruzione a metà lascia intero il file di prima;
-- riporta in `snapshot` di `/api/status` `store` (`file` o `null`), `restored` (navi ripristinate all'avvio), `savedAt`,
-  `bytes`, `vessels` e `ms` dell'ultimo salvataggio ed `error` (solo il codice, mai percorsi).
+  solo i dati statici di meno di 48 h, validati campo per campo con le stesse regole dei messaggi in arrivo (testi
+  ripuliti, IMO con la cifra di controllo, pescaggio maggiore di 0); nessuna posizione (le navi tornano in mappa con la
+  prima posizione nuova). Se nel frattempo è arrivato qualcosa di una nave (es. il nome in `MetaData`), vale quello e
+  dal file si prendono solo i campi che mancano;
+- un file non valido (rovinato, di un altro formato o versione, o oltre i tetti: 16 MB su disco, controllati prima di
+  leggerlo; 64 MB decompresso, dove 50.000 navi sono circa 12 MB; righe di al massimo 1000 navi e non più di quelle di
+  250.000 navi; JSON non a righe fino a 4 MB) non blocca l'avvio: diventa `vessels.json.gz.bad` (sostituisce un `.bad`
+  di prima, da guardare o cancellare a mano) e il server parte vuoto. Un file costruito per esaurire la memoria (es.
+  pochi KB di gzip con milioni di a capo) si ferma al tetto del decompresso, così il container non riparte all'infinito;
+- se invece la lettura fallisce per I/O (`EIO`, `EACCES`, non un file…) il file resta com'è e **fino al riavvio non si
+  salva più** (né a intervalli né a SIGTERM): il file può essere buono e il disco in difficoltà, e un salvataggio lo
+  sostituirebbe con le sole navi arrivate dopo l'avvio. Sistemato il disco, un riavvio lo rilegge;
+- li salva ogni `SNAPSHOT_INTERVAL_MS` (10 min) e a `docker stop` (SIGTERM), in gzip (circa 0,5 MB per 50.000 navi
+  sintetiche di `tools/carico.js`; con nomi e destinazioni veri di più), su un file `.tmp` scritto e sincronizzato su
+  disco (`fsync`) e poi rinominato: un'interruzione o un calo di corrente a metà lasciano intero il file di prima. Mai
+  prima della fine del ripristino; un segnale durante il ripristino esce senza salvare, un secondo segnale esce subito;
+- riporta in `snapshot` di `/api/status` `store` (`file` o `null`), `restored` (navi ripristinate all'avvio),
+  `restoreError` (problema del ripristino, resta fino al riavvio), `savedAt`, `bytes`, `vessels` e `ms` dell'ultimo
+  salvataggio ed `error` (dell'ultimo salvataggio; solo il codice o il motivo, mai percorsi).
 
 Sulla VM `deploy/compose.yml` imposta `SNAPSHOT_FILE: /data/vessels.json.gz` nel volume Docker `boatradar-data`
 (`/data`, creato nell'immagine per l'utente `node`), con `stop_grace_period: 20s` per l'ultimo salvataggio. Il volume

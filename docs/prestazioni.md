@@ -176,6 +176,12 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
   pool). In una misura senza `gc()` prima del ripristino il blocco è arrivato a 91 ms (raccolta dei rifiuti delle viste
   misurate prima): `measureBlocking` ora chiama `gc()` con `--expose-gc`. I picchi sopra 20 ms che restano variano molto
   fra esecuzioni uguali (probabilmente raccolte dei rifiuti; non verificato con un profilo).
+  Dopo le correzioni della revisione (tetti del ripristino, righe cercate con `indexOf` su un Buffer invece di
+  `split`, `fsync` del `.tmp`; riga «dopo correzioni revisione punto 22»), stessa sessione: 30.000 navi, 311-317 KB,
+  salvataggio 87-145 ms (blocco 1-7 ms), ripristino 170-227 ms (blocco 3-10 ms); 50.000 navi, 529 KB, salvataggio
+  154-172 ms (blocco 2 ms), ripristino 305-340 ms (blocco 14-17 ms). Entro le soglie; il `fsync` non si vede nei tempi
+  (disco della sessione cloud). Navi sintetiche con tutti i campi lunghi: 50.000 navi = 12,1 MB decompressi (243 byte
+  per nave), da cui il tetto di 64 MB del decompresso e di 250.000 navi di `snapshot.js`.
 
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -209,6 +215,7 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | dopo correzioni punto 12 | 30000 | 1.79 | 175.3 | 6000 | 254.6 (1550.5) | 0.7 / 1.1 | 1427 | 57.8 (366) | 0.4 / 0.5 | v22.23.5 |
 | 2026-11-27 | prima punto 22 | 30000 | 0.55 | 172.9 | 6000 | 255.9 (1550.5) | 1.4 / 1.9 | 1427 | 58.1 (366) | 0.8 / 1.4 | v22.23.5 |
 | 2026-11-27 | dopo punto 22 | 30000 | 0.55 | 174 | 6000 | 255 (1550.5) | 0.9 / 1.3 | 1427 | 57.8 (366) | 0.5 / 0.7 | v22.23.5 |
+| 2026-11-27 | dopo correzioni revisione punto 22 (tetti del ripristino, fsync) | 30000 | 0.55 | 173.8 | 6000 | 254.6 (1550.5) | 0.8 / 1.2 | 1427 | 57.8 (366) | 0.5 / 0.9 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
 
 ## Pagina
@@ -237,7 +244,7 @@ tabella è la mediana delle due misure dello stesso stato:
   interquartile (`anim.stats.loadMs`).
 
 ```
-SMOKE_LEAFLET_LOCAL=1 bash tools/misura-pagina.sh --registra "dopo correzioni revisione"
+bash tools/misura-pagina.sh --registra "dopo correzioni revisione"   # Leaflet da vendor/leaflet/, unpkg.com bloccato
 MISURA_CPU=4 bash tools/misura-pagina.sh     # facoltativo: CPU rallentata 4 volte via CDP
 ```
 

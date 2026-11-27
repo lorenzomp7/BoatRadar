@@ -44,20 +44,30 @@ Lavora su `main_claude` salvo indicazione diversa.
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
 - `snapshot.js` (punto 22): dati statici delle navi fra un riavvio e l'altro, solo con `SNAPSHOT_FILE` (sulla VM
   `/data/vessels.json.gz`, volume `boatradar-data` di `deploy/compose.yml`; su Render Free nessuna persistenza, parte
-  vuoto). `serialize` (navi con `staticTs` di meno di 48 h, ordinate per `staticTs`, un blocco di 1000 per riga con un
-  `setImmediate` fra i blocchi) → `encode` (gzip a stream) → `fileStore.save` (`.tmp` e rinomina); all'avvio
-  `restoreBuffer` (riga per riga; validazione di `restore`: formato e versione, MMSI, `staticTs` fra 48 h fa e 5 min nel
-  futuro, testi ≤ 64, numeri nei loro intervalli, ETA come `etaOf`; mai eccezioni per dati strani, errore per gzip o JSON
-  rovinati) e `mergeBatched` (una nave entra solo se in memoria non ha dati statici più recenti), poi `indexNames`.
-  `server.js`: ripristino nella callback di `listen` con tetto di 5 s, poi `connect()` e un salvataggio ogni
-  `SNAPSHOT_INTERVAL_MS` (10 min, mai due insieme, mai prima della fine del ripristino); SIGTERM/SIGINT: senza
-  destinazione `process.exit(0)` subito, altrimenti ultimo salvataggio con tetto `SNAPSHOT_EXIT_MS` (8 s; `stop_grace_period`
-  20 s), un secondo segnale esce subito. `snapshot` in `/api/status` (`store`, `restored`, `savedAt`, `bytes`, `vessels`,
-  `ms`, `error` con il solo codice, mai percorsi). Va nella `COPY` del `Dockerfile` (con `/data` dell'utente `node`), nei
-  `paths` di `deploy-backend.yml` e `browser.yml`, nel `buildFilter` di `render.yaml` e in `node --check` di `test.yml`
-  (lo controlla un test). Test in `test/snapshot.test.js` e `test/snapshot-server.test.js`; misura con
-  `tools/carico.js --snapshot` (`docs/prestazioni.md`); costi delle alternative in `deploy/README.md`, «Dati statici dopo
-  un riavvio». In locale: `SNAPSHOT_FILE=diagnosi/vessels.json.gz node server.js`.
+  vuoto). `serialize` (navi con `staticTs` di meno di 48 h, dalla più recente, un blocco di 1000 per riga con un
+  `setImmediate` fra i blocchi) → `encode` (gzip a stream) → `fileStore.save` (`.tmp` con open → write → sync, poi
+  rinomina); all'avvio `fileStore.load` (`stat` prima: oltre 16 MB non si legge) → `restoreBuffer` (gunzip con tetto di
+  64 MB, poi `restoreInflated`: righe cercate con `indexOf('\n')`, al massimo `ceil(max / batch) + 2` righe di al
+  massimo `batch × 2048` byte, riga vuota = errore, lettura ferma oltre `max` = 250.000 voci, JSON non a righe solo fino
+  a 4 MB, `setImmediate` fra le righe; validazione di `restore`: formato e versione, MMSI, `staticTs` fra 48 h fa e
+  5 min nel futuro, testi ≤ 64 ripuliti con `cleanText`, `isIMO`, pescaggio > 0, numeri nei loro intervalli, ETA come
+  `etaOf`) e `mergeBatched` (una nave entra solo se in memoria non ha dati statici più recenti; di una nave già in
+  memoria si prendono solo i campi mancanti), poi `indexNames` e `dataVersion++`. File non valido = `SnapshotFormatError`
+  (`isFormatError`): `server.js` lo rinomina `.bad` (`fileStore.quarantine`) e parte vuoto; un errore di I/O lascia il
+  file com'è e blocca i salvataggi fino al riavvio (`saveBlocked`). `cleanText` e `isIMO` sono in `public/ais-logic.js`,
+  usati anche da `handle()`. `server.js`: ripristino nella callback di `listen` con tetto `SNAPSHOT_RESTORE_MS` (5 s), poi
+  `connect()` e un salvataggio ogni `SNAPSHOT_INTERVAL_MS` (10 min, mai due insieme, mai prima della fine del
+  ripristino); SIGTERM/SIGINT: senza destinazione, durante il ripristino o con i salvataggi bloccati `process.exit(0)`
+  subito, altrimenti ultimo salvataggio con tetto `SNAPSHOT_EXIT_MS` (8 s; `stop_grace_period` 20 s), un secondo segnale
+  esce subito. `snapshot` in `/api/status` (`store`, `restored`, `restoreError` che resta fino al riavvio, `savedAt`,
+  `bytes`, `vessels`, `ms`, `error` dell'ultimo salvataggio; solo codici o motivi, mai percorsi). Va nella `COPY` del
+  `Dockerfile` (con `/data` dell'utente `node`), nei `paths` di `deploy-backend.yml` e `browser.yml`, nel `buildFilter`
+  di `render.yaml` e in `node --check` di `test.yml` (lo controlla un test). Test in `test/snapshot.test.js` e
+  `test/snapshot-server.test.js` (lettura e salvataggio rallentati o in errore con `test/snapshot-lento.js`, precaricato
+  con `NODE_OPTIONS=--require`); `test/helpers.js` (`startServer`) e `tools/smoke-server.js` tolgono le `SNAPSHOT_*`
+  dell'ambiente, come `tools/carico.js`: chi le vuole le passa esplicitamente. Misura con `tools/carico.js --snapshot`
+  (`docs/prestazioni.md`); costi delle alternative e comportamento con file non validi in `deploy/README.md`, «Dati
+  statici dopo un riavvio». In locale: `SNAPSHOT_FILE=diagnosi/vessels.json.gz node server.js`.
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
 - `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale, età della posizione, filtri…), modulo UMD
   (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js` (filtri: `test/filtri-logica.test.js`).
@@ -132,7 +142,10 @@ Lavora su `main_claude` salvo indicazione diversa.
   `vendor/` con `public, max-age=86400`, il resto `no-store`; ogni altro percorso 404). Js e css nella `COPY` del
   `Dockerfile`, le immagini con `COPY vendor/leaflet/images/`; `vendor/**` nei `paths` di `deploy-backend.yml`,
   `browser.yml`, `pages.yml` e nel `buildFilter` di `render.yaml`; `pages.yml` li copia in `_site/vendor/leaflet/` e
-  aggiunge `?v=<commit>` a js e css. Per aggiornare Leaflet: stessi passi con la nuova versione e nuovi SHA nel test.
+  aggiunge `?v=<commit>` a js e css; `LICENSE` va nell'immagine Docker e su Pages (server.js non la serve: 404).
+  Per aggiornare Leaflet: stessi passi con la nuova versione, nuovi SHA-256 in `test/leaflet-locale.test.js` e, dato che
+  la VM serve `vendor/` con un giorno di cache (`max-age=86400`, senza `?v=`), chi apre la pagina dalla VM può tenere i
+  file vecchi fino a un giorno dopo il deploy (Pages no: `?v=<commit>`).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -252,7 +265,7 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
 - Leaflet (punto 85): in ogni sessione del browser le richieste a `https://unpkg.com/**` sono bloccate
   (`agent-browser network route … --abort`, `block_unpkg`) e la verifica controlla `L.version === '1.9.4'`, il CSS
   applicato (`.leaflet-pane` con `position: absolute`) e nessuna richiesta a unpkg.com: la pagina usa solo
-  `vendor/leaflet/`. `SMOKE_LEAFLET_LOCAL` non serve più. Senza tile (rete limitata) la mappa resta scura: è normale.
+  `vendor/leaflet/` (anche `tools/misura-pagina.sh`). Senza tile (rete limitata) la mappa resta scura: è normale.
 - In CI il workflow `Browser` la esegue quando cambiano pagina, server, fixture o la verifica.
 
 ## Prestazioni (flameox)

@@ -95,6 +95,19 @@ test('Leaflet è nell\'immagine Docker e su Pages, con la versione del commit', 
     assert.match(pages, new RegExp(`cp vendor/leaflet/images/${re(img)} _site/vendor/leaflet/images/(\\s|$)`, 'm'), `${img} su Pages`);
   }
   assert.match(pages, /grep -q[^\n]*vendor\/leaflet\/leaflet\.js\?v=\$\{GITHUB_SHA\}[^\n]*_site\/index\.html/);
+  // la licenza BSD-2-Clause va con i file, nell'immagine e su Pages (server.js non la serve: 404, test sopra)
+  assert.ok(lines.some(l => l.includes('vendor/leaflet/LICENSE') && l.at(-1) === './vendor/leaflet/'), 'COPY di LICENSE');
+  assert.match(pages, /^\s*cp vendor\/leaflet\/LICENSE _site\/vendor\/leaflet\/\s*$/m, 'LICENSE su Pages');
+});
+
+test('misura della pagina e documenti: Leaflet da vendor/leaflet/, unpkg.com bloccato, niente SMOKE_LEAFLET_LOCAL', () => {
+  for (const f of ['tools/misura-pagina.sh', 'tools/smoke-browser.sh', 'docs/prestazioni.md', 'AGENTS.md']) {
+    assert.doesNotMatch(read(f), /SMOKE_LEAFLET_LOCAL/, f);
+  }
+  const misura = read('tools/misura-pagina.sh');
+  const block = misura.indexOf('network route "https://unpkg.com/**" --abort'), open = misura.indexOf('open "$URL"');
+  assert.ok(block > 0 && block < open, 'unpkg.com bloccato prima di aprire la pagina');
+  assert.match(misura, /L\.version[^\n]*unpkg/);
 });
 
 test('vendor/** fa partire deploy della VM, Render, Pages e la verifica nel browser', () => {

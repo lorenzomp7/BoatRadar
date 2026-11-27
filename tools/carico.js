@@ -169,8 +169,8 @@ async function main(argv) {
   Object.assign(process.env, { PORT: String(port), AISSTREAM_KEY: 'chiave-di-carico',
     AISSTREAM_URL: `ws://127.0.0.1:${fake.address().port}`, RENDER_EXTERNAL_URL: '' });
   delete process.env.NODE_USE_ENV_PROXY;
-  // senza --snapshot nessuna destinazione, come prima del punto 22 (anche se l'ambiente ha SNAPSHOT_FILE)
-  delete process.env.SNAPSHOT_FILE;
+  // senza --snapshot nessuna destinazione, come prima del punto 22 (anche se l'ambiente ha SNAPSHOT_FILE o altre SNAPSHOT_*)
+  for (const k of Object.keys(process.env)) if (/^SNAPSHOT_/i.test(k)) delete process.env[k];
   const snapDir = o.snapshot ? fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-carico-')) : null;
   if (snapDir) Object.assign(process.env, { SNAPSHOT_FILE: path.join(snapDir, 'vessels.json.gz'), SNAPSHOT_INTERVAL_MS: '3600000' });
 
