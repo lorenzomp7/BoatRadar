@@ -351,39 +351,11 @@ const clock = createClock();
 const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
   'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
 
-// Prime 3 cifre dell'MMSI (MID) = stato di bandiera. Tabella parziale.
-const MID = {201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',212:'Cipro',215:'Malta',218:'Germania',219:'Danimarca',
-  220:'Danimarca',224:'Spagna',225:'Spagna',226:'Francia',227:'Francia',228:'Francia',229:'Malta',230:'Finlandia',231:'Isole Faroe',
-  232:'Regno Unito',233:'Regno Unito',234:'Regno Unito',235:'Regno Unito',236:'Gibilterra',237:'Grecia',238:'Croazia',239:'Grecia',
-  240:'Grecia',241:'Grecia',244:'Paesi Bassi',245:'Paesi Bassi',246:'Paesi Bassi',247:'Italia',248:'Malta',249:'Malta',250:'Irlanda',
-  251:'Islanda',253:'Lussemburgo',255:'Madeira',256:'Malta',257:'Norvegia',258:'Norvegia',259:'Norvegia',261:'Polonia',263:'Portogallo',
-  265:'Svezia',266:'Svezia',269:'Svizzera',271:'Turchia',272:'Ucraina',273:'Russia',275:'Lettonia',276:'Estonia',277:'Lituania',
-  303:'USA (Alaska)',304:'Antigua e Barbuda',305:'Antigua e Barbuda',308:'Bahamas',309:'Bahamas',310:'Bermuda',311:'Bahamas',
-  316:'Canada',319:'Isole Cayman',338:'USA',351:'Panama',352:'Panama',353:'Panama',354:'Panama',355:'Panama',356:'Panama',357:'Panama',
-  366:'USA',367:'USA',368:'USA',369:'USA',370:'Panama',371:'Panama',372:'Panama',373:'Panama',374:'Panama',375:'St. Vincent e Grenadine',
-  376:'St. Vincent e Grenadine',377:'St. Vincent e Grenadine',378:'Isole Vergini Brit.',412:'Cina',413:'Cina',414:'Cina',431:'Giappone',
-  432:'Giappone',440:'Corea del Sud',441:'Corea del Sud',477:'Hong Kong',518:'Isole Cook',538:'Isole Marshall',563:'Singapore',
-  564:'Singapore',565:'Singapore',566:'Singapore',636:'Liberia',637:'Liberia',
-  242:'Marocco',252:'Liechtenstein',254:'Monaco',262:'Montenegro',264:'Romania',267:'Slovacchia',270:'Rep. Ceca',274:'Macedonia del Nord',
-  278:'Slovenia',279:'Serbia',207:'Bulgaria',208:'Vaticano',203:'Austria',204:'Azzorre',206:'Bielorussia',213:'Georgia',214:'Moldavia',
-  216:'Armenia',243:'Ungheria',
-  312:'Belize',314:'Barbados',323:'Cuba',325:'Dominica',327:'Rep. Dominicana',330:'Grenada',332:'Guatemala',334:'Honduras',
-  336:'Haiti',339:'Giamaica',341:'St. Kitts e Nevis',343:'St. Lucia',345:'Messico',350:'Nicaragua',362:'Trinidad e Tobago',
-  401:'Afghanistan',403:'Arabia Saudita',405:'Bangladesh',408:'Bahrein',410:'Bhutan',416:'Taiwan',417:'Sri Lanka',419:'India',
-  422:'Iran',423:'Azerbaigian',425:'Iraq',428:'Israele',436:'Kazakistan',438:'Giordania',445:'Corea del Nord',447:'Kuwait',
-  450:'Libano',455:'Maldive',457:'Mongolia',459:'Nepal',461:'Oman',463:'Pakistan',466:'Qatar',468:'Siria',470:'Emirati Arabi',
-  471:'Emirati Arabi',472:'Tagikistan',473:'Yemen',475:'Yemen',503:'Australia',506:'Myanmar',508:'Brunei',510:'Micronesia',
-  511:'Palau',512:'Nuova Zelanda',514:'Cambogia',515:'Cambogia',520:'Figi',523:'Isole Cocos',525:'Indonesia',529:'Kiribati',
-  533:'Malesia',536:'Isole Marianne',544:'Nauru',546:'Polinesia Francese',548:'Filippine',553:'Papua Nuova Guinea',557:'Isole Salomone',
-  559:'Samoa Americane',561:'Samoa',567:'Thailandia',570:'Tonga',572:'Tuvalu',574:'Vietnam',576:'Vanuatu',577:'Vanuatu',
-  601:'Sudafrica',603:'Angola',605:'Algeria',609:'Burundi',610:'Benin',613:'Camerun',616:'Comore',618:'Crozet',619:'Costa d\'Avorio',
-  620:'Comore',621:'Gibuti',622:'Egitto',624:'Etiopia',625:'Eritrea',626:'Gabon',627:'Ghana',629:'Gambia',630:'Guinea-Bissau',
-  631:'Guinea Equatoriale',632:'Guinea',634:'Kenya',642:'Libia',644:'Lesotho',645:'Mauritius',647:'Madagascar',649:'Mali',
-  650:'Mozambico',654:'Mauritania',655:'Malawi',656:'Niger',657:'Nigeria',659:'Namibia',660:'Riunione',661:'Ruanda',662:'Sudan',
-  663:'Senegal',664:'Seychelles',666:'Somalia',667:'Sierra Leone',668:'São Tomé',669:'Eswatini',671:'Togo',672:'Tunisia',
-  674:'Tanzania',675:'Uganda',676:'Congo (RD)',677:'Tanzania',678:'Zambia',679:'Zimbabwe',
-  701:'Argentina',710:'Brasile',720:'Bolivia',725:'Cile',730:'Colombia',735:'Ecuador',740:'Falkland',745:'Guyana francese',
-  750:'Guyana',755:'Paraguay',760:'Perù',765:'Suriname',770:'Uruguay',775:'Venezuela'};
+// Lotto B (punti 27, 44, 46, 23): scheda nave. Bandiera e tipo di MMSI (le stazioni costiere, gli AtoN e i dispositivi di
+// soccorso non battono bandiera), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
+const { mmsiKind, flagOf, mmsiWords } = AisLogic;
+// true se l'MMSI è di una nave (o di una sua imbarcazione ausiliaria): solo allora la scheda ha la riga «Bandiera»
+const hasFlag = mmsi => ['ship', 'auxiliary'].includes(mmsiKind(mmsi).kind);
 
 const $ = id => document.getElementById(id);
 const map = L.map('map', { preferCanvas:true, zoomControl:false, worldCopyJump:true }).setView([30, 10], 3);
@@ -1343,7 +1315,7 @@ function facts(mmsi) {
       ${savedOwner(mmsi) ? `<tr class="owned"><td>Proprietario</td><td>${esc(savedOwner(mmsi))}</td></tr>` : ''}
       ${waiting ? '<tr><td colspan="2" class="wait">Tipo, IMO, dimensioni e porto di arrivo non sono ancora arrivati: le navi li trasmettono ogni 6 minuti, la scheda si completa da sola.</td></tr>' : ''}
       ${row('Tipo', typeName(v.shipType) || typeOf(v.shipType).label)}
-      ${row('Bandiera', MID[String(mmsi).slice(0, 3)])}
+      ${hasFlag(mmsi) ? row('Bandiera', flagOf(mmsi)) : row('Tipo di MMSI', mmsiWords(mmsi))}
       ${row('IMO', imo)}
       ${row('MMSI', mmsi)}
       ${row('Nominativo', v.callSign)}
@@ -1368,18 +1340,19 @@ function render(mmsi) {
     if ($('content').dataset.known === known) { $('facts').innerHTML = facts(mmsi); return; }
   }
   const v = meta.get(mmsi) || {};
-  const flag = MID[String(mmsi).slice(0, 3)] || '—';
+  // sottotitolo: bandiera per le navi, tipo di MMSI per le stazioni («Stazione costiera · Italia»)
+  const flag = hasFlag(mmsi) ? 'bandiera ' + (flagOf(mmsi) || '—') : mmsiWords(mmsi);
   const imo = v.imo && v.imo > 0 ? v.imo : null;
   const ids = { IMO: imo, MMSI: mmsi, Nome: v.name };
   const yacht = v.shipType === 36 || v.shipType === 37 || !imo;
-  const italian = String(mmsi).startsWith('247');
+  const italian = flagOf(mmsi) === 'Italia';
   const group = (title, keys, open = false) => `<details${open ? ' open' : ''}><summary>${esc(title)}</summary>
       ${keys.map(k => registryButton(k, ids)).join('')}</details>`;
   $('content').dataset.mmsi = mmsi;
   $('content').dataset.known = imo ? 'imo' : '';
   $('content').innerHTML = `
     <h2>${esc(v.name || 'Senza nome')}</h2>
-    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
+    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · ${esc(flag)}</div>
     <table id="facts">${facts(mmsi)}</table>
     <a class="link vfmore" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">📷 Foto, stazza, anno di costruzione e porti
       <small>Dati che il segnale AIS non trasmette: scheda completa su VesselFinder</small></a>
@@ -1897,7 +1870,7 @@ function renderResults() {
     const v = meta.get(h.mmsi) || {}, name = norm(v.name), id = esc('res-' + h.mmsi);
     // conteggio esatto solo se il nome stesso corrisponde (allora le omonime hanno lo stesso punteggio) e il tetto non c'è
     const twins = twinsText(counts.get(name) || 0, searchComplete && name.includes(q));
-    const line = resultLine({ typeName: typeName(v.shipType), flag: MID[String(h.mmsi).slice(0, 3)], length: v.length,
+    const line = resultLine({ typeName: typeName(v.shipType), flag: flagOf(h.mmsi), length: v.length,
       age: ageWords(h.props, now), destination: v.destination });
     // nome accessibile = solo il nome; descrizione = seconda riga, omonimi e MMSI (le parti che ci sono)
     const described = [line && `${id}-d`, twins && `${id}-t`, `${id}-m`].filter(Boolean).join(' ');

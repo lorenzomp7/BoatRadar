@@ -108,6 +108,12 @@ Lavora su `main_claude` salvo indicazione diversa.
   `prefers-reduced-motion`): sotto l'header, su telefono sopra la cima più alta di pannello, legenda e attribuzione, su
   computer a sinistra della scheda o dell'elenco (`rightInset`). Esc: popup, risultati, scheda, pannello. Test in
   `test/pannello-logica.test.js` e `test/pagina-pannello.test.js` (anche il trascinamento con pointer event finti).
+- Scheda nave (lotto B, punti 27, 44, 46, 23; funzioni pure dopo `filterCount` in `public/ais-logic.js`, test in
+  `test/scheda-logica.test.js` e `test/pagina-scheda.test.js`). Punto 27: `mmsiKind` (ITU-R M.585: nave, stazione
+  costiera `00`, gruppo `0`, SAR `111`, AtoN `99`, ausiliaria `98`, portatile `8`, SART/MOB/EPIRB `970`/`972`/`974`, MID
+  fuori da 201-775 = non valido), `MID_NAMES` (tabella spostata dalla pagina), `flagOf` (paese solo per navi e ausiliarie)
+  e `mmsiWords`; in scheda riga «Bandiera» per le navi, «Tipo di MMSI» per le altre (anche nel sottotitolo); i registri
+  italiani e la bandiera dei risultati usano `flagOf`. Il server non scarta gli MMSI non validi: la scheda li marca.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
