@@ -19,6 +19,13 @@
 #      questo nome» (almeno 44 px su telefono, nome accessibile = solo il nome), «2 risultati» nella regione aria-live
 #      nascosta, freccia giù + Invio apra la scheda della prima e Esc la chiuda;
 #   3b. la pagina non abbia errori JavaScript né messaggi console.error;
+#   3b bis. (punto 71, vedi sheet_phone e sheet_desktop) a 390×844 il pannello in basso parta chiuso (72 px) con il numero
+#      di navi e l'attribuzione visibile sopra, si trascini con il mouse vero chiuso → metà → aperto → chiuso (± 8 px,
+#      legenda nascosta da aperto, nessun long task > 50 ms), un lancio veloce lo porti una tappa più in là (chiuso → metà,
+#      metà → chiuso), un tocco lo porti a metà, un clic su una riga apra la scheda a metà con la nave fra header e scheda e
+#      la × libera, Esc torni all'elenco con il focus sulla riga e un altro Esc lo chiuda; a 1280×800 «Elenco» apra l'elenco
+#      a destra non coperto dall'header, la riga di una nave sotto l'elenco apra la scheda e sposti la mappa con la nave a
+#      sinistra della scheda, Esc ed Esc;
 #   3c. (solo con il server locale, punti 13, 63, 42) a zoom 14 su LAGUNA PRIMA (247123450, che smoke-server fa avanzare
 #      coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: distanza dal primo fix mai in calo, nave
 #      in movimento, stima entro il suo limite; #smooth spento con un clic vero sulla sua riga (≥ 44 px a 390) e la nave
@@ -110,6 +117,183 @@ js() { "${AB[@]}" eval --json "$1" | node -e '
   if (!d.success) { console.error(d.error || "eval fallito"); process.exit(1); }
   process.stdout.write(JSON.stringify(d.data.result));'; }
 
+# --- pannello con l'elenco (punto 71) -------------------------------------
+# Telefono: pannello chiuso (72 px) con il numero e l'attribuzione di OpenStreetMap visibile sopra; trascinamento vero
+# della maniglia (mouse giù, mosso in 12 passi, su) chiuso → metà (± 8 px), metà → aperto (legenda nascosta), aperto →
+# chiuso, misurando i long task (> 50 ms) del trascinamento; lancio veloce vero (mouse mosso di 100 px in 45 ms e
+# rilasciato subito) dal chiuso → metà e da metà verso il basso → chiuso; tocco vero → metà; clic vero su una riga → scheda a metà
+# con la nave fra header e scheda, × da 44 px non coperta; Esc → elenco a metà con il focus sulla riga; Esc → chiuso con
+# il focus sulla maniglia. Screenshot: chiuso, metà, aperto, scheda sopra.
+# tappa, altezza visibile (dal fondo della finestra alla cima del pannello, anche durante la transizione), cima, tappe, transform
+sheet_state() { js "(() => { const r = document.getElementById('sheet').getBoundingClientRect();
+  return sheet.stop + ' ' + Math.round(innerHeight - r.top) + ' ' + Math.round(r.top) + ' ' + sheet.stops.join(',') + ' ' + (document.getElementById('sheet').style.transform || '-'); })()" | tr -d '"'; }
+handle_center() { js "(() => { const r = document.getElementById('sheet-handle').getBoundingClientRect();
+  return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2) + ' ' + Math.round(r.height); })()" | tr -d '"'; }
+# trascina la maniglia di dy px (negativo = verso l'alto) con il mouse vero, in 12 passi
+drag_handle() {
+  local hx hy _hh
+  read -r hx hy _hh <<<"$(handle_center)"
+  "${AB[@]}" mouse move "$hx" "$hy" >/dev/null
+  "${AB[@]}" mouse down >/dev/null
+  "${AB[@]}" mouse move "$hx" "$((hy + $1))" --steps 12 --duration 360 >/dev/null
+  "${AB[@]}" wait 150 >/dev/null
+  "${AB[@]}" mouse up >/dev/null
+  "${AB[@]}" wait 350 >/dev/null   # transizione di 200 ms
+}
+# lancio: dy px in 45 ms e rilascio subito (snapStop: una tappa più in là della più vicina)
+fling_handle() {
+  local hx hy _hh
+  read -r hx hy _hh <<<"$(handle_center)"
+  "${AB[@]}" mouse move "$hx" "$hy" >/dev/null
+  "${AB[@]}" mouse down >/dev/null
+  "${AB[@]}" mouse move "$hx" "$((hy + $1))" --steps 3 --duration 45 >/dev/null
+  "${AB[@]}" mouse up >/dev/null
+  "${AB[@]}" wait 350 >/dev/null
+}
+# dopo il trascinamento: tappa attesa e altezza vera entro 8 px dalla sua, senza transform rimasti
+expect_stop() {
+  local name="$1" want="$2" st h top stops tr
+  read -r st h top stops tr <<<"$(sheet_state)"
+  local target; target=$(cut -d, -f$((want + 1)) <<<"$stops")
+  [ "$st" = "$want" ] && [ $((h - target)) -le 8 ] && [ $((target - h)) -le 8 ] && [ "$tr" = - ] \
+    || { "${AB[@]}" screenshot "$OUT/$name-pannello-errore.png" >/dev/null || true
+         fail "$name: dopo il trascinamento tappa $st (attesa $want), altezza $h px (attesa $target ± 8), transform $tr"; }
+  echo "$h"
+}
+sheet_phone() {
+  local name="$1"
+  # legenda chiusa (i controlli dei filtri l'hanno aperta), come all'avvio su telefono
+  js "map.setView([45.4312, 12.3355], 9, { animate: false }), document.getElementById('legend').open = false, true" >/dev/null
+  "${AB[@]}" wait 300 >/dev/null   # fine della transizione del pannello dopo l'ultima scheda chiusa
+  "${AB[@]}" wait --fn "markers.has(247123450) && /in quest'area/.test(document.getElementById('sheet-count').textContent)" >/dev/null \
+    || fail "$name: pannello: nessun conteggio («$(js "document.getElementById('sheet-count').textContent")»)"
+  local st h top stops tr
+  read -r st h top stops tr <<<"$(sheet_state)"
+  [ "$st" = 0 ] && [ "$h" -ge 70 ] && [ "$h" -le 74 ] || fail "$name: pannello all'avvio tappa $st, alto $h px (atteso chiuso, 72)"
+  local hx hy hh
+  read -r hx hy hh <<<"$(handle_center)"
+  [ "$hh" -ge 44 ] || fail "$name: maniglia alta $hh px, meno di 44"
+  local attr
+  attr=$(js "(() => { const a = document.querySelector('.leaflet-control-attribution'), r = a.getBoundingClientRect();
+    const s = document.getElementById('sheet').getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return r.bottom <= s.top + 1 && a.contains(e) ? 'ok' : 'attribuzione ' + Math.round(r.top) + '-' + Math.round(r.bottom) + ', pannello da ' + Math.round(s.top) + ', sopra c\'è ' + (e?.id || e?.className || 'niente'); })()" | tr -d '"')
+  [ "$attr" = ok ] || fail "$name: $attr"
+  "${AB[@]}" screenshot "$OUT/$name-pannello-chiuso.png" >/dev/null
+  ok "$name: pannello chiuso ($h px, maniglia $hh px) «$(js "document.getElementById('sheet-count').textContent" | tr -d '"')», attribuzione visibile sopra"
+
+  # long task durante i trascinamenti (PerformanceObserver; dove non c'è, nessuna misura)
+  js "(window.__long = [], (() => { try { new PerformanceObserver(l => { for (const e of l.getEntries()) window.__long.push(Math.round(e.duration)); })
+    .observe({ type: 'longtask', buffered: false }); return true; } catch { return false; } })())" >/dev/null
+  local s0 s1 s2
+  IFS=, read -r s0 s1 s2 <<<"$stops"
+  local t0; t0=$(date +%s%N)
+  drag_handle "-$((s1 - s0))"
+  local hm; hm=$(expect_stop "$name" 1)
+  [ "$(js "document.getElementById('sheet-handle').getAttribute('aria-expanded')")" = '"true"' ] || fail "$name: a metà aria-expanded non è true"
+  [ "$(js "document.querySelectorAll('#list .row').length > 0")" = true ] || fail "$name: a metà nessuna riga nell'elenco"
+  "${AB[@]}" screenshot "$OUT/$name-pannello-meta.png" >/dev/null
+  ok "$name: trascinamento vero chiuso → metà: $hm px (tappa $s1), $(js "document.querySelectorAll('#list .row').length") righe"
+  drag_handle "-$((s2 - s1))"
+  local ha; ha=$(expect_stop "$name" 2)
+  [ "$(js "getComputedStyle(document.getElementById('legend')).visibility")" = '"hidden"' ] || fail "$name: da aperto la legenda si vede ancora"
+  "${AB[@]}" screenshot "$OUT/$name-pannello-aperto.png" >/dev/null
+  ok "$name: trascinamento vero metà → aperto: $ha px (tappa $s2), legenda nascosta"
+  drag_handle "$((s2 - s0))"
+  local hc; hc=$(expect_stop "$name" 0)
+  local t1; t1=$(date +%s%N)
+  local long; long=$(js "window.__long.filter(d => d > 50).join(' ')" | tr -d '"')
+  [ -z "$long" ] || fail "$name: long task oltre 50 ms durante i trascinamenti: $long ms"
+  ok "$name: trascinamento vero aperto → chiuso: $hc px; nessun long task > 50 ms in $(( (t1 - t0) / 1000000 )) ms di trascinamenti (tutti: $(js "window.__long.join(' ') || 'nessuno'" | tr -d '"'))"
+  # lancio veloce: 100 px verso l'alto dal chiuso (più vicina: chiuso) → metà; 80 px verso il basso da metà → chiuso
+  fling_handle -100
+  local hf; hf=$(expect_stop "$name" 1)
+  fling_handle 80
+  expect_stop "$name" 0 >/dev/null
+  ok "$name: lancio vero di 100 px in 45 ms dal chiuso → metà ($hf px); lancio di 80 px verso il basso → chiuso"
+
+  # tocco vero → metà; clic vero sulla riga di LAGUNA PRIMA → scheda a metà, zoom 11, nave fra header e scheda
+  read -r hx hy hh <<<"$(handle_center)"
+  click_at "$hx" "$hy"
+  "${AB[@]}" wait 300 >/dev/null
+  expect_stop "$name" 1 >/dev/null
+  local rx ry
+  read -r rx ry <<<"$(js "(() => { const b = document.querySelector('#list .row[data-mmsi=\"247123450\"]'); b.scrollIntoView({ block: 'nearest' });
+    const r = b.getBoundingClientRect(); return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')"
+  [ "$(js "document.elementFromPoint($rx, $ry)?.closest('.row')?.dataset.mmsi")" = '"247123450"' ] || fail "$name: sopra la riga di 247123450 ($rx $ry) c'è altro"
+  click_at "$rx" "$ry"
+  "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none' && selected === 247123450
+    && document.activeElement?.id === 'close' && document.getElementById('sheet').inert" >/dev/null \
+    || fail "$name: il clic sulla riga non apre la scheda di 247123450 con il focus sulla × e l'elenco inert (focus su $(js "document.activeElement?.id"))"
+  "${AB[@]}" wait 700 >/dev/null   # spostamento animato della mappa
+  local vis
+  vis=$(js "(() => { const m = document.getElementById('map').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect();
+    const p = document.getElementById('panel').getBoundingClientRect(), pt = map.latLngToContainerPoint(markers.get(247123450).marker.getLatLng());
+    const x = m.left + pt.x, y = m.top + pt.y, c = document.getElementById('close').getBoundingClientRect();
+    const hit = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2), out = [];
+    if (!(y > h.bottom && y < p.top && x > 0 && x < m.right)) out.push('nave in ' + Math.round(x) + ',' + Math.round(y) + ' fuori da header ' + Math.round(h.bottom) + ' - scheda ' + Math.round(p.top));
+    if (sheet.stop !== 1 || Math.abs(p.height - sheet.stops[1]) > 2) out.push('scheda alta ' + Math.round(p.height) + ' (tappa ' + sheet.stop + ')');
+    if (map.getZoom() < 11) out.push('zoom ' + map.getZoom());
+    if (c.width < 44 || c.height < 44) out.push('× ' + Math.round(c.width) + 'x' + Math.round(c.height));
+    if (hit?.id !== 'close') out.push('sopra la × c\'è ' + (hit?.id || hit?.className || 'niente'));
+    return out.length ? out.join('; ') : 'ok nave in ' + Math.round(x) + ',' + Math.round(y) + ' fra ' + Math.round(h.bottom) + ' e ' + Math.round(p.top) + ', zoom ' + map.getZoom(); })()" | tr -d '"')
+  "${AB[@]}" screenshot "$OUT/$name-pannello-scheda.png" >/dev/null
+  case "$vis" in ok*) ;; *) fail "$name: riga → scheda: $vis (screenshot in $OUT/)" ;; esac
+  ok "$name: clic vero sulla riga → scheda a metà, ${vis#ok }, × 44 px libera"
+  "${AB[@]}" press Escape >/dev/null
+  "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none' && sheet.stop === 1
+    && document.activeElement?.dataset?.mmsi === '247123450'" >/dev/null \
+    || fail "$name: Esc dalla scheda: tappa $(js "sheet.stop"), focus su $(js "document.activeElement?.dataset?.mmsi || document.activeElement?.id")"
+  "${AB[@]}" press Escape >/dev/null
+  "${AB[@]}" wait --fn "sheet.stop === 0 && document.activeElement?.id === 'sheet-handle'" >/dev/null \
+    || fail "$name: secondo Esc: tappa $(js "sheet.stop"), focus su $(js "document.activeElement?.id")"
+  ok "$name: Esc → elenco a metà con il focus sulla riga; Esc → pannello chiuso, focus sulla maniglia"
+}
+# Computer: clic vero su «Elenco» → elenco a destra (aria-pressed, nessun header sopra), clic vero su una riga di una nave
+# che sta sotto l'elenco (spostata a destra di 460 px) → scheda sopra l'elenco e mappa spostata con la nave a sinistra
+# della scheda; Esc → elenco con il focus sulla riga; Esc → elenco chiuso, focus su «Elenco»
+sheet_desktop() {
+  local name="$1"
+  js "map.setView([45.4312, 12.3355], 9, { animate: false }), map.panBy([-460, 0], { animate: false }), true" >/dev/null
+  "${AB[@]}" wait --fn "markers.has(247123450)" >/dev/null || fail "$name: 247123450 non è in mappa per l'elenco"
+  local bx by _bh
+  read -r bx by _bh <<<"$(js "(() => { const r = document.getElementById('listbtn').getBoundingClientRect();
+    return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2) + ' 0'; })()" | tr -d '"')"
+  click_at "$bx" "$by"
+  "${AB[@]}" wait --fn "document.body.classList.contains('list-open') && document.querySelectorAll('#list .row').length > 0" >/dev/null \
+    || fail "$name: il clic su «Elenco» non apre l'elenco"
+  local cov
+  cov=$(js "(() => { const s = document.getElementById('sheet').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect(), out = [];
+    if (document.getElementById('listbtn').getAttribute('aria-pressed') !== 'true') out.push('aria-pressed non true');
+    if (h.right > s.left) out.push('header fino a ' + Math.round(h.right) + ', elenco da ' + Math.round(s.left));
+    for (const y of [s.top + 8, s.top + 40]) { const e = document.elementFromPoint(s.left + s.width / 2, y); if (!document.getElementById('sheet').contains(e)) out.push('in ' + Math.round(y) + ' c\'è ' + (e?.id || e?.tagName)); }
+    return out.length ? out.join('; ') : 'ok ' + Math.round(s.left) + '-' + Math.round(s.right) + ' px, ' + document.querySelectorAll('#list .row').length + ' righe'; })()" | tr -d '"')
+  case "$cov" in ok*) ;; *) "${AB[@]}" screenshot "$OUT/$name-elenco-errore.png" >/dev/null || true; fail "$name: elenco: $cov" ;; esac
+  "${AB[@]}" screenshot "$OUT/$name-elenco.png" >/dev/null
+  ok "$name: clic vero su «Elenco» → elenco a destra ${cov#ok }, «$(js "document.getElementById('list-count').textContent" | tr -d '"')»"
+  local rx ry
+  read -r rx ry <<<"$(js "(() => { const b = document.querySelector('#list .row[data-mmsi=\"247123450\"]'); b.scrollIntoView({ block: 'nearest' });
+    const r = b.getBoundingClientRect(); return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')"
+  click_at "$rx" "$ry"
+  "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none' && selected === 247123450
+    && document.activeElement?.id === 'close' && document.getElementById('sheet').inert" >/dev/null \
+    || fail "$name: il clic sulla riga non apre la scheda con il focus sulla × e l'elenco inert"
+  "${AB[@]}" wait 700 >/dev/null   # spostamento animato della mappa
+  local side
+  side=$(js "(() => { const m = document.getElementById('map').getBoundingClientRect(), p = document.getElementById('panel').getBoundingClientRect();
+    const pt = map.latLngToContainerPoint(markers.get(247123450).marker.getLatLng()), x = m.left + pt.x;
+    return x > 0 && x < p.left ? 'ok nave in x ' + Math.round(x) + ', scheda da ' + Math.round(p.left) : 'nave in x ' + Math.round(x) + ' sotto la scheda da ' + Math.round(p.left); })()" | tr -d '"')
+  "${AB[@]}" screenshot "$OUT/$name-elenco-scheda.png" >/dev/null
+  case "$side" in ok*) ;; *) fail "$name: riga → scheda: $side" ;; esac
+  ok "$name: riga di una nave sotto l'elenco → scheda e mappa spostata: ${side#ok }"
+  "${AB[@]}" press Escape >/dev/null
+  "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none' && document.body.classList.contains('list-open')
+    && document.activeElement?.dataset?.mmsi === '247123450'" >/dev/null || fail "$name: Esc dalla scheda non torna all'elenco con il focus sulla riga"
+  "${AB[@]}" press Escape >/dev/null
+  "${AB[@]}" wait --fn "!document.body.classList.contains('list-open') && document.activeElement?.id === 'listbtn'
+    && getComputedStyle(document.getElementById('sheet')).display === 'none'" >/dev/null || fail "$name: secondo Esc non chiude l'elenco"
+  ok "$name: riga → scheda sopra l'elenco; Esc → elenco (focus sulla riga); Esc → chiuso (focus su «Elenco»)"
+}
+
 # --- controlli per ogni dimensione ----------------------------------------
 check() {
   local name="$1" w="$2" h="$3"
@@ -166,7 +350,11 @@ check() {
   [ -n "$focus" ] || fail "$name: dopo la × il focus non è su un elemento visibile"
   ok "$name: la × ($size px) si chiude con un clic vero, focus su #$focus · stato: $(js "document.getElementById('status').textContent.length") caratteri"
 
-  # Esc chiude la scheda
+  # Esc chiude la scheda. Su telefono la scheda ha spostato la mappa (punto 71: la nave fra header e scheda): il punto
+  # della nave va ricalcolato
+  point=$(js "(() => { const r = document.getElementById('map').getBoundingClientRect();
+    const p = map.latLngToContainerPoint(markers.get($mmsi).marker.getLatLng());
+    return Math.round(r.left + p.x) + ' ' + Math.round(r.top + p.y); })()" | tr -d '"')
   "${AB[@]}" mouse move $point >/dev/null
   "${AB[@]}" mouse down >/dev/null
   "${AB[@]}" mouse up >/dev/null
@@ -464,6 +652,9 @@ check() {
     ok "$name: Esc chiude la scheda aperta dalla ricerca"
     "${AB[@]}" fill "#q" "" >/dev/null
   fi
+
+  # pannello con l'elenco (punto 71): trascinamento vero a telefono, pulsante «Elenco» a computer
+  if [ "$(js "matchMedia('(max-width: 640px)').matches")" = true ]; then sheet_phone "$name"; else sheet_desktop "$name"; fi
 
   # errori JavaScript e console.error (i warning, come Digitraffic non raggiungibile, non contano)
   local problems
