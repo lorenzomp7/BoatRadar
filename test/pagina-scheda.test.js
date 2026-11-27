@@ -36,8 +36,11 @@ async function ready(opts = {}) {
 // scheda della nave mmsi con i dati statici v (meta), aperta come da un clic
 function card(page, mmsi, v = {}) {
   page.get(`meta.set(${mmsi}, ${JSON.stringify(v)}); select(${mmsi})`);
-  return page.el('content').innerHTML;
+  return shown(page);
 }
+// titolo e sottotitolo stanno in #panel-head (punto 25, prima dei pulsanti «Segui» e «Condividi»), i dati in #content:
+// la scheda come la vede chi guarda è l'unione dei due
+const shown = page => page.el('panel-head').innerHTML + page.el('content').innerHTML;
 // testo di una cella come lo legge chi guarda (senza tag; «n.d.» senza il testo per i lettori di schermo)
 const visible = h => h.replace(/<span class="sr-only">[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '');
 const cell = (html, key) => { const m = new RegExp(`<td>${key}</td><td[^>]*>(.*?)</td>`).exec(html); return m ? visible(m[1]) : undefined; };
@@ -240,7 +243,7 @@ test('pagina: «⚠ Carico pericoloso» nel sottotitolo anche per una nave senza
   // dell'aggiornamento periodico, che rifà solo la tabella se i dati del sottotitolo non sono cambiati
   const browserLike = `document.getElementById('content').dataset.mmsi = '${LIBERIA}'`;
   page.get(`${browserLike}; meta.set(${LIBERIA}, { ...meta.get(${LIBERIA}), shipType: 71, staticTs: ${T0} }); render(${LIBERIA})`);
-  html = page.el('content').innerHTML;
+  html = shown(page);
   assert.equal(sub(html), 'Nave cargo · bandiera Liberia · ⚠ Carico pericoloso cat. X');
   assert.match(html, /<h2>MONROVIA<\/h2>/);
   // stesso tipo: aggiornamento periodico, solo la tabella
