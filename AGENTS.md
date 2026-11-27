@@ -182,6 +182,42 @@ Lavora su `main_claude` salvo indicazione diversa.
   Nel browser: passo 2 bis di `tools/smoke-browser.sh` (scheda di LAGUNA PRIMA: ordine dei gruppi, `scope`, virgola e
   prossimo porto in vista senza scorrere, anche a 390 con la scheda a metà; screenshot
   `diagnosi/smoke/<desktop|telefono>-scheda.png`).
+- Link condivisibili (punto 25): `?mmsi=…&segui=1#lat,lon,zoom` (`parseLink`, `viewHash`, `linkUrl` di
+  `public/ais-logic.js`: numeri senza esponente, al più 4 cifre intere e 10 decimali (zoom 2 intere), lat, lon e zoom
+  finiti; lat oltre ±90 = vista non valida, altrimenti entro ±85,0511; lon normalizzata; zoom intero 1–18; MMSI 1–9 cifre
+  > 0; `segui=1` solo con l'MMSI). Vista iniziale dal link; con `?mmsi=` `select` prima del primo giro (la nave arriva con
+  `include=`, i dati statici da `/api/vessel`) e il link in sospeso (`linkPending`), completato da `linkRound` alla fine di
+  `loadLocations` quando la nave è in mappa (anche dopo giri falliti): senza vista nel link `setView` sulla nave a zoom
+  almeno 11, sempre `keepVisible`, con `segui=1` «Segui» acceso. L'avviso «Nessuna posizione recente» (scheda con i dati
+  noti) solo dopo un giro con vista e `include=` riusciti senza la nave; dopo 3 giri così (`LINK_MAX_MISSES`) `linkDead`:
+  niente più `include=` né `/api/vessel` per quella nave finché l'utente non la sceglie (`select`). L'indirizzo segue la
+  pagina (`syncUrl`: `history.replaceState` al più ogni 300 ms con la chiamata finale, in try/catch per il limite di
+  Safari, riprovato dopo 1,5 s fino a 5 volte) su `moveend`, scelta e chiusura della scheda, registri; `hashchange` →
+  `setView` (mai un errore; con «Segui» acceso e la vista cambiata lo spegne con l'avviso). `location` e `history` possono
+  mancare (contesti di test). Scheda: `#panel-head` (titolo `h2` e sottotitolo) prima di `#panel-actions`, poi
+  `#content`, nello stesso ordine sullo schermo. «Condividi» (`#share` in `#panel-actions`, fuori da `#content`, nascosto
+  nei registri): su schermo touch `navigator.share` (annullato: niente), altrimenti `navigator.clipboard` e «Link
+  copiato», altrimenti l'avviso con il link in un campo da selezionare (`select()` e `setSelectionRange` per iOS; l'avviso
+  resta finché il focus è dentro, Esc o un clic lo chiudono e il focus torna su `#share`). Gli avvisi (`toast`) si
+  annunciano da `#toast-live` (sr-only, `role="status"`, sempre presente; `#toast` non ha `role`). Test in `test/link-logica.test.js` e
+  `test/pagina-link.test.js` (`href`, `nav`, `trackView` di `test/pagina-helpers.js`).
+- «Segui» (punto 24): `#follow` (`aria-pressed`, acceso = pieno giallo con «✓») in `#panel-actions`; `setFollow(on, why)`,
+  `followCheck(force)`: con la nave selezionata fuori dalla zona centrale (25 % per lato) dell'area libera (`freeArea()`,
+  estratta da `keepVisible`: sotto l'header, sopra la scheda su telefono, a sinistra della scheda su computer)
+  `panBy` animato 0,8 s (senza animazione con `prefers-reduced-motion`) che la riporta al centro (`followPan` di
+  `public/ais-logic.js`, 0 con un'area libera sotto 2 × 44 px per lato, es. pannello aperto fin sotto l'header); premendo
+  «Segui» la nave si centra subito (`force`). Mai `map.stop()`: in Leaflet 1.9.4 manda sempre un `moveend` (e quindi un
+  giro); con la mappa in movimento (`mapMoving` fra `movestart` e `moveend`, es. `keepVisible`) il controllo si ripete al
+  `moveend`. Chiamato alla fine di `animFrame` dopo una scelta (ogni 3 s, mai in `animStep`), alla fine di
+  `loadLocations` (ad animazione spenta solo lì) e dopo `zoomend`; mai durante `sheet.drag` o un trascinamento della
+  mappa, a scheda nascosta, con il popup «N navi qui» aperto, durante l'animazione dello zoom o mentre il suo
+  spostamento è in corso (`followPanning` fino al `moveend`). Il `moveend` di uno spostamento di «Segui» non fa il giro
+  se la vista chiesta l'ultima volta (`lastAsked`, allargata del 20 %) copre ancora la mappa (antimeridiano: sempre il
+  giro; `followStats.skipped`). Si spegne con l'avviso trascinando la mappa (a `dragend`, oltre 10 px e senza uno
+  `zoomstart` nel frattempo: un pizzico a due dita no), con le frecce con il focus su `#map` (non sui pulsanti dentro) o
+  cambiando la vista nell'indirizzo; senza avviso scegliendo un'altra nave, chiudendo la scheda, aprendo i registri; lo
+  zoom lo lascia acceso. Nel link come `segui=1`. Test in `test/link-logica.test.js` e `test/pagina-segui.test.js`
+  (proiezione che segue `page.map.pans`; `stop()` e `panBy([0, 0])` della mappa finta mandano `moveend` come Leaflet).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -290,7 +326,13 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   spento `#smooth` con un clic vero sulla sua riga (≥ 44 px a 390), resti sull'ultimo fix (punti 13, 63, 42), il pannello con l'elenco (punto 71: a 390 chiuso con il numero e
   l'attribuzione visibile, trascinamenti veri chiuso → metà → aperto → chiuso senza long task, lanci veloci veri, tocco, clic
   su una riga → scheda a metà con la nave fra header e scheda, Esc; a 1280 «Elenco» non coperto dall'header, riga di una nave
-  sotto l'elenco → scheda e nave spostata a sinistra della scheda, Esc) e assenza
+  sotto l'elenco → scheda e nave spostata a sinistra della scheda, Esc), il link `?mmsi=247123450&segui=1#45.4312,12.3355,14`
+  (punti 25 e 24: scheda a zoom 14 con «Segui» acceso, «Segui» e «Condividi» ≥ 44 px e la × libera; mappa spostata da
+  script → nave di nuovo nella zona centrale entro 4 s con «Segui» acceso; a zoom 17 la nave che scorre fa spostare la
+  mappa a «Segui» e partono tante richieste `/locations?bbox` quante ne vuole la vista chiesta (0 se la copre ancora, 1 se
+  no; `follow_requests_check`); trascinamento vero → «Segui» spento e
+  `location.hash` cambiato; indirizzo che segue la mappa, stessa vista ricaricando, clic vero su «Condividi» → «Link
+  copiato» o il link da copiare) e assenza
   di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
