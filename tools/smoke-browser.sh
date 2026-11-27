@@ -28,7 +28,8 @@
 #      sinistra della scheda, Esc ed Esc;
 #   3c. (solo con il server locale, punti 13, 63, 42) a zoom 14 su LAGUNA PRIMA (247123450, che smoke-server fa avanzare
 #      coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: distanza dal primo fix mai in calo, nave
-#      in movimento, stima entro il suo limite; con #smooth spento la nave resta esattamente sull'ultimo fix;
+#      in movimento, stima entro il suo limite; #smooth spento con un clic vero sulla sua riga (≥ 44 px a 390) e la nave
+#      resta esattamente sull'ultimo fix;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
@@ -581,7 +582,19 @@ check() {
     ' "$readings")
     case "$verdict" in "✗"*) "${AB[@]}" screenshot "$OUT/$name-movimento-errore.png" >/dev/null || true; fail "$name: movimento: ${verdict#✗ }" ;; esac
     ok "$name: movimento fluido a zoom 14, distanza dal primo fix: $verdict"
-    js "(document.getElementById('smooth').click(), true)" >/dev/null
+    # interruttore spento con un clic vero sulla sua riga della legenda (almeno 44 px su telefono)
+    open_legend
+    local smx smy smh hits
+    read -r smx smy smh <<<"$(js "$center_of('#legend label.smooth')" | tr -d '"')"
+    hits=$(js "document.elementFromPoint($smx, $smy)?.closest('label')?.className || 'niente'" | tr -d '"')
+    [ "$hits" = smooth ] || { "${AB[@]}" screenshot "$OUT/$name-smooth-errore.png" >/dev/null || true; fail "$name: sopra la riga di #smooth ($smx $smy) c'è $hits"; }
+    if [ "$(js "matchMedia('(max-width: 640px)').matches")" = true ]; then
+      [ "$smh" -ge 44 ] || fail "$name: la riga «Movimento fluido» della legenda è alta $smh px, meno di 44"
+    fi
+    "${AB[@]}" screenshot "$OUT/$name-movimento.png" >/dev/null
+    click_at "$smx" "$smy"
+    "${AB[@]}" wait --fn "!document.getElementById('smooth').checked && !anim.enabled" >/dev/null || fail "$name: il clic sulla riga di #smooth non spegne il movimento"
+    ok "$name: clic vero sulla riga «Movimento fluido» (alta $smh px) → spento"
     local still
     still=$(js "new Promise(done => {
       const m = markers.get(247123450), out = [];

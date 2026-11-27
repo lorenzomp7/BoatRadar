@@ -44,6 +44,11 @@ async function until(fn, what, ms = 5000) {
 // (page.bodyClasses); document.documentElement e style.setProperty (variabili CSS, page.cssVar); el.querySelector e
 // el.contains per i figli [data-mmsi="N"] scritti in innerHTML (page.child; un innerHTML nuovo li scollega:
 // isConnected false); map.panBy registrato in page.map.pans; page.dispatch passa anche key e altri campi dell'evento.
+// I setTimeout dell'animatore (animWake della pagina, quando il prossimo passo è lontano più di ~100 ms) con ora manuale
+// seguono l'ora della pagina: page.frame() esegue prima quelli scaduti (che chiedono un requestAnimationFrame) e poi i
+// fotogrammi in coda; page.rafPending() conta fotogrammi e risvegli in coda (i «cicli» vivi).
+// matchMedia(q) restituisce { matches, addEventListener('change'), addListener }; page.setMedia(q, v) cambia la
+// risposta e manda l'evento change, come il browser (es. prefers-reduced-motion cambiato nelle impostazioni).
 function startPage({ routes, config = {}, session = {}, local = {}, timeScale = TIME_SCALE, media = {},
   size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }),
   manualTime = null, raf = manualTime != null, zoom = 6, bounds = { w: 10, s: 43, e: 12, n: 45 }, canvas = () => ({}),
@@ -197,12 +202,26 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const boomLocal = () => { throw new Error('SecurityError: localStorage non disponibile'); };
   const localStorage = local === 'throw' ? { getItem: boomLocal, setItem: boomLocal, removeItem: boomLocal }
     : { getItem: k => (localMap.has(k) ? localMap.get(k) : null), setItem: (k, v) => localMap.set(k, String(v)), removeItem: k => localMap.delete(k) };
+  // matchMedia: un oggetto per query, con i listener di change
+  const mediaLists = new Map();
+  const mediaList = q => {
+    if (!mediaLists.has(q)) {
+      const l = { media: q, listeners: [], get matches() { return !!media[q]; },
+        addEventListener(type, fn) { if (type === 'change') this.listeners.push(fn); }, addListener(fn) { this.listeners.push(fn); } };
+      mediaLists.set(q, l);
+    }
+    return mediaLists.get(q);
+  };
+  const setMedia = (q, v) => { media[q] = v; for (const fn of mediaList(q).listeners) fn({ matches: !!v, media: q }); };
   const retryTimers = new Set();   // setTimeout(tick, …) in attesa
   const allTimers = new Set();
   let stopped = false;             // stop(): pagina chiusa, nessun timer parte più (il test può finire)
   // coda di requestAnimationFrame (raf): id → callback, eseguiti da page.frame()
   const rafQueue = new Map();
   let rafId = 0;
+  // risvegli dell'animatore con ora manuale: id → { due, fn }
+  const animTimers = new Map();
+  let animTimerId = 0;
   const rafApi = raf ? {
     requestAnimationFrame: fn => { if (stopped) return 0; rafQueue.set(++rafId, fn); return rafId; },
     cancelAnimationFrame: id => { rafQueue.delete(id); },
@@ -213,15 +232,16 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     AbortController, Date: PageDate, fetch, L, document, sessionStorage,
     setTimeout: (fn, ms, ...a) => {
       if (stopped) return 0;
+      if (manual != null && fn === ctx.animWake) { animTimers.set(--animTimerId, { due: pageNow() + (ms || 0), fn }); return animTimerId; }
       const isTick = fn === ctx.tick;
       const id = setTimeout((...b) => { retryTimers.delete(id); allTimers.delete(id); if (!stopped) fn(...b); }, (ms || 0) / timeScale, ...a);
       allTimers.add(id);
       if (isTick) retryTimers.add(id);
       return id;
     },
-    clearTimeout: id => { retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
+    clearTimeout: id => { if (animTimers.delete(id)) return; retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
-    ResizeObserver: class { observe() {} }, matchMedia: q => ({ matches: !!media[q] }),
+    ResizeObserver: class { observe() {} }, matchMedia: q => mediaList(q),
     localStorage, navigator: {}, innerWidth: viewport.w, innerHeight: viewport.h,
     addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
@@ -231,10 +251,13 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   vm.runInContext(pageScript, ctx);
   const get = expr => vm.runInContext(expr, ctx);
   const status = () => el('status').textContent;
-  const stop = () => { stopped = true; for (const id of allTimers) clearTimeout(id); allTimers.clear(); rafQueue.clear(); };
-  // un fotogramma: esegue i callback in coda adesso (quelli che chiedono un altro fotogramma vanno al prossimo);
-  // restituisce quanti erano
-  const frame = () => { const list = [...rafQueue.values()]; rafQueue.clear(); for (const fn of list) fn(pageNow()); return list.length; };
+  const stop = () => { stopped = true; for (const id of allTimers) clearTimeout(id); allTimers.clear(); rafQueue.clear(); animTimers.clear(); };
+  // un fotogramma: prima i risvegli dell'animatore scaduti, poi i callback in coda adesso (quelli che chiedono un altro
+  // fotogramma vanno al prossimo); restituisce quanti callback di requestAnimationFrame ha eseguito
+  const frame = () => {
+    for (const [id, t] of [...animTimers]) if (t.due <= pageNow()) { animTimers.delete(id); t.fn(); }
+    const list = [...rafQueue.values()]; rafQueue.clear(); for (const fn of list) fn(pageNow()); return list.length;
+  };
   // scheda nascosta o di nuovo visibile, come fa il browser: document.hidden e poi l'evento visibilitychange
   const setHidden = hidden => { document.hidden = hidden; for (const fn of listeners.get('visibilitychange') || []) fn({ type: 'visibilitychange' }); };
   // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
@@ -249,7 +272,8 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     return e;
   };
   const cssVar = name => el('html').style[name];
-  return { ctx, el, get, requests, dispatch, stop, bodyClasses, cssVar, child: childOf, frame, rafPending: () => rafQueue.size, moves: () => moves,
+  return { ctx, el, get, requests, dispatch, stop, bodyClasses, cssVar, child: childOf, frame, rafPending: () => rafQueue.size + animTimers.size, rafOnly: () => rafQueue.size,
+    animTimers: () => [...animTimers.values()].map(t => t.due - pageNow()), setMedia, moves: () => moves,
     setNow: t => { manual = t; }, advance: ms => { manual += ms; }, setZoom: z => { zoomNow = z; }, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
