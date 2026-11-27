@@ -179,3 +179,27 @@ test('filter nella risposta: il filtro effettivo in forma canonica, anche dalla 
     if (!want) assert.deepEqual(ids(JSON.parse(a.body)), plain, `${q}: come senza filtro`);
   }
 });
+
+// Punto 46: hazard=1, solo carichi pericolosi o inquinanti (tipi x1-x4); in cache come gli altri filtri
+test('hazard=1: solo i carichi pericolosi, voce di cache sua (mancata poi colpita), chiave senza filtro invariata', async () => {
+  const ZONE46 = '/api/locations?bbox=149,-31,151,-29';
+  const DG = 247902001, OS = 247902002, PLAIN = 247902003;
+  await sendAll(classA(DG, -30.1, 150.1, 10, 0), staticA(DG, 71), classA(OS, -30.2, 150.2, 0, 5), staticA(OS, 84),
+    classA(PLAIN, -30.3, 150.3, 10, 0), staticA(PLAIN, 70));
+  assert.deepEqual(ids(await srv.getJson(ZONE46)), [DG, OS, PLAIN]);
+  const fc = await srv.getJson(ZONE46 + '&hazard=1');
+  assert.deepEqual(ids(fc), [DG, OS]);
+  assert.equal(fc.total, 2);
+  assert.equal(fc.filter, 'hazard=1');
+  for (const bad of ['0', 'abc', '']) {
+    const r = await srv.getJson(`${ZONE46}&hazard=${bad}`);
+    assert.deepEqual(ids(r), [DG, OS, PLAIN], 'hazard=' + bad + ': nessun filtro');
+    assert.equal(r.filter, '');
+  }
+  assert.deepEqual(ids(await srv.getJson(ZONE46 + '&hazard=1&types=tanker')), [OS]);
+  // cache: a dati fermi la stessa vista filtrata si riusa; senza filtro resta la voce di prima
+  assert.equal(await xcache('/api/locations?bbox=159,-31,161,-29&hazard=1'), 'miss');
+  assert.equal(await xcache('/api/locations?bbox=159,-31,161,-29&hazard=1'), 'hit');
+  assert.equal(await xcache('/api/locations?bbox=159,-31,161,-29&hazard=0'), 'miss', 'hazard=0 = voce senza filtro');
+  assert.equal(await xcache('/api/locations?bbox=159,-31,161,-29'), 'hit', 'stessa voce di hazard=0');
+});

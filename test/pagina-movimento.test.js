@@ -289,7 +289,7 @@ test('pagina: riga «Posizione» della scheda: ultimo segnale, fra due segnali, 
   page.fireEl('smooth', 'change', { target: page.el('smooth') });
   assert.equal(row(A), 'ultimo segnale', 'animazione spenta');
   // velocità e rotta in scheda restano quelle del fix
-  assert.match(page.get(`facts(${A})`), /10\.0 kn \/ 90\.0°/);
+  assert.match(page.get(`facts(${A})`), /10,0 kn \/ 90,0°/);
 });
 
 // --- Correzioni da revisione e QA ---------------------------------------------------------------------------------

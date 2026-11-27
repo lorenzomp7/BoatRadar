@@ -19,5 +19,5 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: node --check server.js && node --check position-check.js && node --check sample.js && node --check public/ais-logic.js
+      - run: node --check server.js && node --check position-check.js && node --check sample.js && node --check snapshot.js && node --check public/ais-logic.js
       - run: npm test

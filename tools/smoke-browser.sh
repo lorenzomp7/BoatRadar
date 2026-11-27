@@ -5,6 +5,11 @@
 #   1. compaiano le navi;
 #   2. un clic del mouse su una nave apra la scheda con il suo MMSI, e un clic vero sulla × (almeno 44×44 px)
 #      o Esc la chiudano, lasciando il focus su un elemento visibile;
+#   2 bis. (solo con il server locale, lotto B, punti 27, 44, 46, 23) la scheda di LAGUNA PRIMA (247123450) abbia, dopo
+#      il nominativo, il gruppo «Viaggio (dichiarato dalla nave, …)» (prossimo porto, ETA completa dell'anno, pescaggio) e
+#      poi «Movimento», ognuno nel suo <tbody> con <th scope="rowgroup">, «Bandiera» Italia, decimali con la virgola e
+#      nessun «—», e che il prossimo porto si veda senza scorrere, anche su telefono con la scheda a metà (screenshot
+#      $name-scheda.png senza scorrere);
 #   3. (punto 10) un clic vero sulle due navi sovrapposte della fixture (GEMELLA, 247555001 e 247555002, a 10 m a
 #      Genova) apra il popup «2 navi qui» con due righe e la × da almeno 44 px e il focus sulla prima, Esc lo chiuda, e un clic
 #      vero sulla seconda riga apra la scheda di 247555002; la nave isolata del punto 2 apre la scheda senza popup; poi,
@@ -50,15 +55,15 @@
 #   SMOKE_URL=https://.../ bash tools/smoke-browser.sh   # pagina già pubblicata (nessun server locale)
 #
 # Variabili: SMOKE_PORT (8799), SMOKE_FIXTURE, SMOKE_URL, SMOKE_APIS (JSON di window.BOATRADAR_APIS per il controllo 5:
-# primo server morto, secondo buono; di solito non serve), SMOKE_LEAFLET_LOCAL=1 per caricare Leaflet dal
-# registro npm quando unpkg.com non è raggiungibile (ambienti con rete limitata), AGENT_BROWSER_EXECUTABLE_PATH
+# primo server morto, secondo buono; di solito non serve), AGENT_BROWSER_EXECUTABLE_PATH
 # per usare un Chrome già installato invece di quello scaricato da «agent-browser install».
+# Leaflet (punto 85) viene da vendor/leaflet/ della repo: in ogni sessione del browser le richieste a unpkg.com sono
+# bloccate (block_unpkg), così la verifica fallisce se la pagina torna a dipendere dal CDN.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SESSION="boatradar-smoke-$$"
 AB=(agent-browser --session "$SESSION")
-INIT=()   # init script comuni (Leaflet locale) anche per il passaggio con l'orologio avanti
 PORT="${SMOKE_PORT:-8799}"
 OUT="diagnosi/smoke"
 mkdir -p "$OUT"
@@ -94,24 +99,10 @@ else
 fi
 ok "pagina: $URL"
 
-# --- Leaflet senza unpkg (facoltativo) -------------------------------------
-# La pagina carica Leaflet da unpkg.com. Se non è raggiungibile, Leaflet 1.9.4 preso dal registro npm
-# viene eseguito appena il browser crea <html>, prima degli script della pagina.
-if [ "${SMOKE_LEAFLET_LOCAL:-0}" = 1 ]; then
-  (cd "$TMP" && npm pack leaflet@1.9.4 --silent >/dev/null && tar xzf leaflet-1.9.4.tgz)
-  node -e '
-    const fs = require("fs"), d = process.argv[1] + "/package/dist/";
-    const js = fs.readFileSync(d + "leaflet.js", "utf8"), css = fs.readFileSync(d + "leaflet.css", "utf8");
-    fs.writeFileSync(process.argv[1] + "/leaflet-init.js", "(function(){if(window.top!==window)return;" +
-      "function run(){if(window.L)return;" + js + "\n;var s=document.createElement(\"style\");s.textContent=" +
-      JSON.stringify(css) + ";document.documentElement.appendChild(s);}" +
-      "if(document.documentElement)run();else new MutationObserver(function(_,o){if(document.documentElement)" +
-      "{o.disconnect();run();}}).observe(document,{childList:true});})();");
-  ' "$TMP"
-  INIT+=(--init-script "$TMP/leaflet-init.js")
-  AB+=("${INIT[@]}")
-  ok "Leaflet caricato dal registro npm (SMOKE_LEAFLET_LOCAL=1)"
-fi
+# --- Leaflet senza unpkg (punto 85) ----------------------------------------
+# La pagina carica Leaflet 1.9.4 da vendor/leaflet/: le richieste a unpkg.com si annullano in ogni sessione, prima di
+# aprire la pagina (il browser parte qui, con gli init script della sessione già in AB).
+block_unpkg() { "${AB[@]}" network route "https://unpkg.com/**" --abort >/dev/null || fail "non riesco a bloccare unpkg.com"; }
 
 # Clic vero del mouse nel punto x y della pagina
 click_at() { "${AB[@]}" mouse move "$1" "$2" >/dev/null; "${AB[@]}" mouse down >/dev/null; "${AB[@]}" mouse up >/dev/null; }
@@ -264,7 +255,8 @@ sheet_desktop() {
   read -r bx by _bh <<<"$(js "(() => { const r = document.getElementById('listbtn').getBoundingClientRect();
     return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2) + ' 0'; })()" | tr -d '"')"
   click_at "$bx" "$by"
-  "${AB[@]}" wait --fn "document.body.classList.contains('list-open') && document.querySelectorAll('#list .row').length > 0" >/dev/null \
+  # la riga della nave, non solo una riga qualsiasi: prima dei dati c'è la riga «Nessuna nave in quest'area»
+  "${AB[@]}" wait --fn "document.body.classList.contains('list-open') && document.querySelector('#list .row[data-mmsi=\"247123450\"]')" >/dev/null \
     || fail "$name: il clic su «Elenco» non apre l'elenco"
   local cov
   cov=$(js "(() => { const s = document.getElementById('sheet').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect(), out = [];
@@ -447,6 +439,13 @@ check() {
   "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0" >/dev/null \
     || fail "$name: nessuna nave in mappa (Leaflet caricato? $(js "typeof L") · stato: $(js "document.getElementById('status')?.textContent"))"
   ok "$name: $(js "markers.size") navi in mappa"
+  # punto 85: Leaflet 1.9.4 della repo, con il suo CSS applicato (con unpkg.com bloccato)
+  local lf
+  lf=$(js "(() => { const p = document.querySelector('.leaflet-pane');
+    return (window.L && L.version) + ' ' + (p && getComputedStyle(p).position) + ' '
+      + performance.getEntriesByType('resource').filter(e => /unpkg\\.com/.test(e.name)).length; })()" | tr -d '"')
+  [ "$lf" = "1.9.4 absolute 0" ] || fail "$name: Leaflet locale non caricato o CSS non applicato (versione, .leaflet-pane, richieste a unpkg: $lf)"
+  ok "$name: Leaflet $(cut -d' ' -f1 <<<"$lf") da vendor/leaflet/, CSS applicato, nessuna richiesta a unpkg.com"
 
   # nave da aprire: quella della fixture di esempio se c'è, altrimenti la prima ricevuta
   local mmsi
@@ -467,6 +466,45 @@ check() {
   [ "$(js "!document.querySelector('.leaflet-popup.pick')")" = true ] || fail "$name: il clic sulla nave $mmsi apre il popup di scelta invece della scheda"
   ok "$name: il clic sulla nave $mmsi apre la scheda ($(js "document.querySelector('#panel-head h2')?.textContent || ''"))"
   "${AB[@]}" screenshot "$OUT/$name.png" >/dev/null
+
+  # scheda nave (lotto B, punti 27, 44, 46, 23): LAGUNA PRIMA della fixture, con i dati statici arrivati da /api/vessel,
+  # ha dopo il nominativo il gruppo «Viaggio (dichiarato dalla nave, …)» e poi «Movimento», «Bandiera» Italia, decimali con la
+  # virgola e nessun «—» (i mancanti sono «n.d.»); il prossimo porto si vede senza scorrere (su telefono con la scheda a
+  # metà). Solo con il server locale (dati noti). Screenshot della scheda com'è aperta, senza scorrere.
+  if [ -z "${SMOKE_URL:-}" ] && [ "$mmsi" = 247123450 ]; then
+    "${AB[@]}" wait --fn "document.getElementById('content').textContent.includes('Viaggio (dichiarato dalla nave')" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-scheda-errore.png" >/dev/null || true; fail "$name: la scheda di LAGUNA PRIMA non ha il gruppo «Viaggio»"; }
+    local card
+    card=$(js "(() => { const c = document.getElementById('content'), t = c.textContent;
+      const rows = [...c.querySelectorAll('#facts tr')], rowOf = k => rows.find(r => r.cells[0]?.textContent === k);
+      const flag = rowOf('Bandiera')?.cells[1]?.textContent;
+      const heads = [...c.querySelectorAll('#facts tbody > tr.group > th')];
+      const group = heads.find(h => /^Viaggio \\(dichiarato dalla nave, /.test(h.textContent));
+      const moving = heads.find(h => h.textContent === 'Movimento');
+      if (t.includes('—')) return 'trovato «—» nella scheda';
+      if (flag !== 'Italia') return 'Bandiera: ' + flag;
+      if (!group) return 'nessun gruppo «Viaggio»: ' + heads.map(h => h.textContent).join(', ');
+      if (!moving) return 'nessun gruppo «Movimento»';
+      if (heads.some(h => h.getAttribute('scope') !== 'rowgroup' || h.colSpan !== 2)) return 'titolo di gruppo senza scope=rowgroup e colspan 2';
+      const bodies = [...c.querySelectorAll('#facts tbody')], at = el => bodies.indexOf(el.closest('tbody'));
+      if (!(at(rowOf('Nominativo')) < at(group) && at(group) < at(moving))) return 'ordine: Nominativo, Viaggio, Movimento';
+      for (const k of ['Prossimo porto', 'ETA', 'Pescaggio']) if (!rowOf(k) || at(rowOf(k)) !== at(group)) return k + ' fuori dal gruppo Viaggio';
+      for (const k of ['Velocità / Rotta', 'Stato', 'Ultimo segnale']) if (at(rowOf(k)) !== at(moving)) return k + ' fuori dal gruppo Movimento';
+      if (!/\\d{4}/.test(rowOf('ETA').cells[1].textContent)) return 'ETA senza anno';
+      if (/\\d\\.\\d/.test(rowOf('Velocità / Rotta').cells[1].textContent)) return 'velocità con il punto decimale';
+      // la destinazione si vede senza scorrere (su telefono con la scheda a metà altezza)
+      for (let e = document.getElementById('facts'); e; e = e.parentElement) if (e.scrollTop) return 'scheda già scorsa';
+      const r = rowOf('Prossimo porto').getBoundingClientRect(), pr = document.getElementById('panel').getBoundingClientRect();
+      const hdr = document.querySelector('header')?.getBoundingClientRect().bottom || 0;
+      if (r.top < Math.max(pr.top, hdr) || r.bottom > Math.min(pr.bottom, innerHeight))
+        return 'Prossimo porto fuori vista senza scorrere (riga ' + Math.round(r.top) + '-' + Math.round(r.bottom) + ', scheda '
+          + Math.round(pr.top) + '-' + Math.round(Math.min(pr.bottom, innerHeight)) + ')';
+      return 'ok ' + group.textContent + ' · ' + rowOf('Prossimo porto').cells[1].textContent; })()" | tr -d '"')
+    case "$card" in ok*) ;; *) "${AB[@]}" screenshot "$OUT/$name-scheda-errore.png" >/dev/null || true; fail "$name: scheda: $card (screenshot in $OUT/)" ;; esac
+    "${AB[@]}" wait 200 >/dev/null
+    "${AB[@]}" screenshot "$OUT/$name-scheda.png" >/dev/null
+    ok "$name: scheda di LAGUNA PRIMA con «${card#ok }» in vista senza scorrere, gruppi Viaggio e Movimento, bandiera Italia, ETA con l'anno e nessun «—»"
+  fi
 
   # × della scheda: almeno 44×44 px, raggiungibile con un clic vero anche con una riga di stato lunga
   # (l'header non deve coprirla), e dopo la chiusura il focus resta su un elemento visibile
@@ -817,6 +855,7 @@ check() {
   "${AB[@]}" errors --clear >/dev/null; "${AB[@]}" console --clear >/dev/null
 }
 
+block_unpkg
 check desktop 1280 800
 # stessa sessione: niente filtri della passata desktop (punto 9) nella passata telefono
 js "(localStorage.clear(), true)" >/dev/null
@@ -854,7 +893,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
   };
 })();
 JS
-  AB=(agent-browser --session "$SESSION-40min" "${INIT[@]}" --init-script "$TMP/orologio-40.js")
+  AB=(agent-browser --session "$SESSION-40min" --init-script "$TMP/orologio-40.js")
+  block_unpkg
   STILL=538001234 MOVING=247123450
   "${AB[@]}" set viewport 1280 800 >/dev/null
   "${AB[@]}" open "$URL" >/dev/null || fail "40 min: la pagina non si apre"
@@ -923,7 +963,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
   apis_init "$TMP/riserva.js" "${SMOKE_APIS:-$DEFAULT_APIS}"
   for size in "desktop 1280 800" "telefono 390 844"; do
     set -- $size
-    AB=(agent-browser --session "$SESSION-riserva-$1" "${INIT[@]}" --init-script "$TMP/riserva.js")
+    AB=(agent-browser --session "$SESSION-riserva-$1" --init-script "$TMP/riserva.js")
+    block_unpkg
     "${AB[@]}" set viewport "$2" "$3" >/dev/null
     "${AB[@]}" open "$URL" >/dev/null || fail "riserva $1: la pagina non si apre"
     "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0
@@ -943,7 +984,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
 
   # primo server buono: resta sul primo, al secondo (qui morto) non arriva nessuna richiesta, neanche al giro dopo
   apis_init "$TMP/primo-buono.js" "[{\"url\":\"$GOOD_API\",\"name\":\"VM Oracle\",\"sleeps\":false},{\"url\":\"$DEAD_API\",\"name\":\"Render\",\"sleeps\":true}]"
-  AB=(agent-browser --session "$SESSION-primo-buono" "${INIT[@]}" --init-script "$TMP/primo-buono.js")
+  AB=(agent-browser --session "$SESSION-primo-buono" --init-script "$TMP/primo-buono.js")
+  block_unpkg
   "${AB[@]}" set viewport 1280 800 >/dev/null
   "${AB[@]}" open "$URL" >/dev/null || fail "primo buono: la pagina non si apre"
   "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0" >/dev/null \
@@ -993,7 +1035,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
 JS
   for size in "desktop 1280 800" "telefono 390 844"; do
     set -- $size
-    AB=(agent-browser --session "$SESSION-ritorno-$1" "${INIT[@]}" --init-script "$TMP/ritorno.js")
+    AB=(agent-browser --session "$SESSION-ritorno-$1" --init-script "$TMP/ritorno.js")
+    block_unpkg
     "${AB[@]}" set viewport "$2" "$3" >/dev/null
     "${AB[@]}" open "$URL" >/dev/null || fail "ritorno $1: la pagina non si apre"
     "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0

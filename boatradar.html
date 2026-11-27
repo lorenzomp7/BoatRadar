@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BoatRadar</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <style>
   :root { --bg:#0f1720; --panel:#17212d; --line:#263444; --text:#e6edf3; --muted:#8b9bb0; --accent:#ffc83d;
     --sheet-h:0px; }   /* --sheet-h: altezza del pannello in basso (punto 71, solo telefono; 0 su computer) */
@@ -141,6 +141,8 @@
   #panel summary { cursor:pointer; padding:8px 0; font-size:13px; }
   #panel summary:hover { color:var(--accent); }
   #panel td.wait { color:var(--muted); font-size:12px; font-style:italic; width:auto; }
+  /* punto 23: titoli dei gruppi («Viaggio», «Movimento») nella tabella della scheda */
+  #panel tr.group th { text-align:left; font-weight:600; font-size:12.5px; padding:14px 0 5px; border-bottom:1px solid var(--line); }
   #panel .vfmore { border-color:#2c4a63; }
   #panel tr.owned td { color:var(--accent); font-weight:600; }
   /* punto 10: popup di scelta fra navi sovrapposte, scuro come la scheda; righe e × da almeno 44 px */
@@ -280,6 +282,8 @@
     <p class="fnote">Con un limite di velocità le navi che non la trasmettono non si vedono.</p>
     <div class="frow"><label for="f-seen">Ricevute negli ultimi</label><select id="f-seen"></select></div>
     <details id="f-status-box"><summary>Stato di navigazione</summary><div id="f-status" role="group" aria-label="Stato di navigazione"></div></details>
+    <!-- punto 46: hazard=1, tipi di nave con categoria di carico pericoloso o inquinante (X, Y, Z, OS) -->
+    <label><input type="checkbox" id="f-hazard"> Solo carichi pericolosi o inquinanti</label>
     <button type="button" id="f-reset" class="hbtn">Mostra tutte</button>
   </details>
 </details>
@@ -299,7 +303,7 @@
 </section>
 <aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="panel-head"></div><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="follow" class="pbtn" aria-pressed="false" title="Tiene la nave al centro della mappa">Segui</button><button type="button" id="share" class="pbtn">Condividi</button></div><div id="content"></div></aside>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
 <script src="config.js"></script>
 <script src="public/ais-logic.js"></script>
 <script>
@@ -324,6 +328,12 @@ const PRIMARY_RECHECK_MS = 5 * 60 * 1000;   // su un server di riserva: ogni 5 m
 // Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
 if (!window.AisLogic) {
   const msg = 'Errore: public/ais-logic.js non è stato caricato. Ricarica la pagina (Ctrl+F5 o trascina giù sul telefono).';
+  document.getElementById('status').textContent = msg;
+  throw new Error(msg);
+}
+// Leaflet 1.9.4 dalla repo (vendor/leaflet/, punto 85): stesso controllo, se manca la mappa non può partire
+if (!window.L) {
+  const msg = 'Errore: Leaflet (vendor/leaflet/leaflet.js) non è stato caricato. Ricarica la pagina (Ctrl+F5 o trascina giù sul telefono).';
   document.getElementById('status').textContent = msg;
   throw new Error(msg);
 }
@@ -362,42 +372,16 @@ let wakeView = false;    // vista a Render in avvio in corso (fino a WAKE_TIMEOU
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
 const clock = createClock();
 
-const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
-  'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
-
-// Prime 3 cifre dell'MMSI (MID) = stato di bandiera. Tabella parziale.
-const MID = {201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',212:'Cipro',215:'Malta',218:'Germania',219:'Danimarca',
-  220:'Danimarca',224:'Spagna',225:'Spagna',226:'Francia',227:'Francia',228:'Francia',229:'Malta',230:'Finlandia',231:'Isole Faroe',
-  232:'Regno Unito',233:'Regno Unito',234:'Regno Unito',235:'Regno Unito',236:'Gibilterra',237:'Grecia',238:'Croazia',239:'Grecia',
-  240:'Grecia',241:'Grecia',244:'Paesi Bassi',245:'Paesi Bassi',246:'Paesi Bassi',247:'Italia',248:'Malta',249:'Malta',250:'Irlanda',
-  251:'Islanda',253:'Lussemburgo',255:'Madeira',256:'Malta',257:'Norvegia',258:'Norvegia',259:'Norvegia',261:'Polonia',263:'Portogallo',
-  265:'Svezia',266:'Svezia',269:'Svizzera',271:'Turchia',272:'Ucraina',273:'Russia',275:'Lettonia',276:'Estonia',277:'Lituania',
-  303:'USA (Alaska)',304:'Antigua e Barbuda',305:'Antigua e Barbuda',308:'Bahamas',309:'Bahamas',310:'Bermuda',311:'Bahamas',
-  316:'Canada',319:'Isole Cayman',338:'USA',351:'Panama',352:'Panama',353:'Panama',354:'Panama',355:'Panama',356:'Panama',357:'Panama',
-  366:'USA',367:'USA',368:'USA',369:'USA',370:'Panama',371:'Panama',372:'Panama',373:'Panama',374:'Panama',375:'St. Vincent e Grenadine',
-  376:'St. Vincent e Grenadine',377:'St. Vincent e Grenadine',378:'Isole Vergini Brit.',412:'Cina',413:'Cina',414:'Cina',431:'Giappone',
-  432:'Giappone',440:'Corea del Sud',441:'Corea del Sud',477:'Hong Kong',518:'Isole Cook',538:'Isole Marshall',563:'Singapore',
-  564:'Singapore',565:'Singapore',566:'Singapore',636:'Liberia',637:'Liberia',
-  242:'Marocco',252:'Liechtenstein',254:'Monaco',262:'Montenegro',264:'Romania',267:'Slovacchia',270:'Rep. Ceca',274:'Macedonia del Nord',
-  278:'Slovenia',279:'Serbia',207:'Bulgaria',208:'Vaticano',203:'Austria',204:'Azzorre',206:'Bielorussia',213:'Georgia',214:'Moldavia',
-  216:'Armenia',243:'Ungheria',
-  312:'Belize',314:'Barbados',323:'Cuba',325:'Dominica',327:'Rep. Dominicana',330:'Grenada',332:'Guatemala',334:'Honduras',
-  336:'Haiti',339:'Giamaica',341:'St. Kitts e Nevis',343:'St. Lucia',345:'Messico',350:'Nicaragua',362:'Trinidad e Tobago',
-  401:'Afghanistan',403:'Arabia Saudita',405:'Bangladesh',408:'Bahrein',410:'Bhutan',416:'Taiwan',417:'Sri Lanka',419:'India',
-  422:'Iran',423:'Azerbaigian',425:'Iraq',428:'Israele',436:'Kazakistan',438:'Giordania',445:'Corea del Nord',447:'Kuwait',
-  450:'Libano',455:'Maldive',457:'Mongolia',459:'Nepal',461:'Oman',463:'Pakistan',466:'Qatar',468:'Siria',470:'Emirati Arabi',
-  471:'Emirati Arabi',472:'Tagikistan',473:'Yemen',475:'Yemen',503:'Australia',506:'Myanmar',508:'Brunei',510:'Micronesia',
-  511:'Palau',512:'Nuova Zelanda',514:'Cambogia',515:'Cambogia',520:'Figi',523:'Isole Cocos',525:'Indonesia',529:'Kiribati',
-  533:'Malesia',536:'Isole Marianne',544:'Nauru',546:'Polinesia Francese',548:'Filippine',553:'Papua Nuova Guinea',557:'Isole Salomone',
-  559:'Samoa Americane',561:'Samoa',567:'Thailandia',570:'Tonga',572:'Tuvalu',574:'Vietnam',576:'Vanuatu',577:'Vanuatu',
-  601:'Sudafrica',603:'Angola',605:'Algeria',609:'Burundi',610:'Benin',613:'Camerun',616:'Comore',618:'Crozet',619:'Costa d\'Avorio',
-  620:'Comore',621:'Gibuti',622:'Egitto',624:'Etiopia',625:'Eritrea',626:'Gabon',627:'Ghana',629:'Gambia',630:'Guinea-Bissau',
-  631:'Guinea Equatoriale',632:'Guinea',634:'Kenya',642:'Libia',644:'Lesotho',645:'Mauritius',647:'Madagascar',649:'Mali',
-  650:'Mozambico',654:'Mauritania',655:'Malawi',656:'Niger',657:'Nigeria',659:'Namibia',660:'Riunione',661:'Ruanda',662:'Sudan',
-  663:'Senegal',664:'Seychelles',666:'Somalia',667:'Sierra Leone',668:'São Tomé',669:'Eswatini',671:'Togo',672:'Tunisia',
-  674:'Tanzania',675:'Uganda',676:'Congo (RD)',677:'Tanzania',678:'Zambia',679:'Zimbabwe',
-  701:'Argentina',710:'Brasile',720:'Bolivia',725:'Cile',730:'Colombia',735:'Ecuador',740:'Falkland',745:'Guyana francese',
-  750:'Guyana',755:'Paraguay',760:'Perù',765:'Suriname',770:'Uruguay',775:'Venezuela'};
+// Lotto B (punti 27, 44, 46, 23): scheda nave. Bandiera e tipo di MMSI (i dispositivi di soccorso non battono bandiera;
+// una nave con l'MMSI in forma di stazione costiera, gruppo, SAR o AtoN ha un MMSI anomalo e la bandiera dal MID), stato dichiarato contro velocità (punto 44), carico pericoloso (punto 46) e gruppo
+// «Viaggio» con l'ETA completa dell'anno (punto 23), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
+const { mmsiKind, mmsiWords, anomalousMmsi, flagWords, italianRegistries, oneDecimal, knots, statusWords, hazardCategory,
+  etaWords, voyageTitle } = AisLogic;
+// valore non disponibile in scheda (punto 23: mai «—»): abbreviazione, letta «non disponibile» dai lettori di schermo
+const ND_HTML = '<abbr title="non disponibile"><span aria-hidden="true">n.d.</span><span class="sr-only">non disponibile</span></abbr>';
+const orNdHtml = val => val == null || val === '' ? ND_HTML : esc(val);
+// true se l'MMSI è di una nave (o di una sua imbarcazione ausiliaria): riga «Bandiera» senza «Tipo di MMSI»
+const hasFlag = mmsi => ['ship', 'auxiliary'].includes(mmsiKind(mmsi).kind);
 
 const $ = id => document.getElementById(id);
 // Punto 25: link condivisibili ?mmsi=…&segui=1#lat,lon,zoom (parseLink di ais-logic.js). La vista iniziale viene dal link,
@@ -525,7 +509,7 @@ let filter = null, noTypes = false, noStatus = false;
 const nearest = (list, v, up) => list.reduce((b, x) => (Math.abs(x - v) < Math.abs(b - v) || (up && Math.abs(x - v) === Math.abs(b - v)) ? x : b));
 // filtro → parametri di parseFilter (stringhe), da modificare e rileggere
 const queryOf = f => ({ types: f?.types?.join(',') ?? '', status: f?.status?.join(',') ?? '', minSog: f?.minSog ?? '',
-  maxSog: f?.maxSog ?? '', seen: f?.seen ?? '', moving: f?.moving == null ? '' : f.moving ? '1' : '0' });
+  maxSog: f?.maxSog ?? '', seen: f?.seen ?? '', moving: f?.moving == null ? '' : f.moving ? '1' : '0', hazard: f?.hazard ? '1' : '' });
 // testo salvato → { filter, types, status } (types/status: nessuno acceso); non valido o assente = nessun filtro
 // (parseFilter non lancia mai). Velocità e «ricevute negli ultimi» fuori dalle liste delle tendine (salvate a mano o da
 // una versione con altri valori) vanno al valore più vicino: il minimo verso il basso, il massimo verso l'alto a parità
@@ -533,7 +517,7 @@ function readFilter(raw) {
   const q = new URLSearchParams(typeof raw === 'string' ? raw : ''), types = q.getAll('types'), status = q.getAll('status');
   const none = list => list.length > 0 && list.every(t => !t.trim());
   let f = parseFilter({ types: types.join(','), status: status.join(','), minSog: q.get('minSog'),
-    maxSog: q.get('maxSog'), seen: q.get('seen'), moving: q.get('moving') });
+    maxSog: q.get('maxSog'), seen: q.get('seen'), moving: q.get('moving'), hazard: q.get('hazard') });
   if (f) f = parseFilter({ ...queryOf(f), minSog: f.minSog == null ? '' : nearest(SOG_FROM, f.minSog),
     maxSog: f.maxSog == null ? '' : nearest(SOG_TO, f.maxSog, true), seen: f.seen == null ? '' : nearest(SEEN_MIN, f.seen) });
   return { filter: f, types: none(types), status: none(status) };
@@ -572,6 +556,7 @@ function syncFilterControls() {
   $('f-min').value = String(filter?.minSog ?? 0);
   $('f-max').value = filter?.maxSog == null ? '' : String(filter.maxSog);
   $('f-seen').value = filter?.seen == null ? '' : String(filter.seen);
+  $('f-hazard').checked = !!filter?.hazard;
   for (const o of $('f-max').options || []) o.disabled = o.value !== '' && filter?.minSog != null && Number(o.value) < filter.minSog;
   for (const o of $('f-min').options || []) o.disabled = filter?.maxSog != null && Number(o.value) > filter.maxSog;
   const n = filterCount(filter) + (noTypes ? 1 : 0) + (noStatus ? 1 : 0);
@@ -618,6 +603,7 @@ $('legend').addEventListener('change', e => {
   else if (t.id === 'f-max') q.maxSog = t.value;
   else if (t.id === 'f-seen') q.seen = t.value;
   else if (t.name === 'f-moving') q.moving = t.value;
+  else if (t.id === 'f-hazard') q.hazard = t.checked ? '1' : '';
   else if (t.name === 'f-status') {
     // si può spegnere anche l'ultima casella: nessuno stato acceso = nessuna nave, come senza tipi (e la riga lo dice)
     const on = new Set(noStatus ? [] : filter?.status || NAV_GROUPS.map(g => g.key));
@@ -651,7 +637,7 @@ document.addEventListener('keydown', e => {
   syncFilterControls();
   // dopo una ricarica con filtri del pannello (non solo i tipi della legenda) il pannello parte aperto: si vede perché
   // mancano navi
-  $('filters').open = noStatus || ['status', 'minSog', 'maxSog', 'seen', 'moving'].some(k => filter?.[k] != null);
+  $('filters').open = noStatus || ['status', 'minSog', 'maxSog', 'seen', 'moving', 'hazard'].some(k => filter?.[k] != null);
 }
 // su telefono la legenda parte chiusa (resta il pulsante «Legenda»), così non copre la mappa
 if (matchMedia('(max-width: 640px)').matches) $('legend').open = false;
@@ -1364,56 +1350,73 @@ function facts(mmsi) {
   const v = meta.get(mmsi) || {};
   const p = propsOf(mmsi);
   const imo = v.imo && v.imo > 0 ? v.imo : null;
-  const two = n => String(n).padStart(2, '0');
-  const MONTHS = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
-  const eta = v.eta ? `${two(v.eta.day)} ${MONTHS[v.eta.month - 1]}` + (v.eta.hour != null ? `, ${two(v.eta.hour)}:${two(v.eta.minute ?? 0)} UTC` : '') : null;
-  const sog = p.sog != null && p.sog < 102.3 ? p.sog.toFixed(1) + ' kn' : null;
-  const cog = p.cog != null && p.cog < 360 ? p.cog.toFixed(1) + '°' : null;
+  // decimali con la virgola in tutta la scheda (oneDecimal e knots di public/ais-logic.js)
+  const sog = p.sog != null && p.sog < 102.3 ? knots(p.sog) : null;
+  const cog = p.cog != null && p.cog < 360 ? oneDecimal(p.cog) + '°' : null;
   const hdg = validHeading(p.heading);
-  const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? '—' : val)}</td></tr>`;
+  // punto 23: «n.d.» (non disponibile) per ogni valore mancante; row() passa i dati AIS da esc(), html() è markup nostro
+  const row = (k, val) => `<tr><td>${k}</td><td>${orNdHtml(val)}</td></tr>`;
+  const html = (k, markup) => `<tr><td>${k}</td><td>${markup}</td></tr>`;
   const waiting = !v.staticTs && !imo && !v.callSign && v.shipType == null;
-  return `
+  const now = clock.now(), eta = etaWords(v.eta, now), draught = v.draught ? oneDecimal(v.draught) + ' m' : null;
+  const hazard = hazardCategory(v.shipType);
+  // gruppo «Viaggio» (punto 23): dati del messaggio statico dichiarati dall'equipaggio, con la loro età; ETA con l'anno.
+  // Le navi di classe B (messaggio 24) non trasmettono destinazione, ETA né pescaggio.
+  const notSent = 'Dati di viaggio non trasmessi dalla nave' + (v.aisClass === 'B' ? ' (le navi di classe B non li trasmettono)' : '');
+  const voyage = (v.destination || eta || draught
+    ? row('Prossimo porto', v.destination) + row('ETA', eta && `${eta.date} (${eta.rel})`) + row('Pescaggio', draught)
+    : v.staticTs ? `<tr><td colspan="2" class="wait">${esc(notSent)}</td></tr>` : '')
+    + (hazard ? row('Carico', `pericoloso o inquinante, categoria ${hazard} (dichiarato)`) : '');
+  // ogni gruppo nel suo <tbody>, con il titolo in <th scope="rowgroup"> (le righe del primo, chi è la nave, sotto il titolo h2)
+  const group = (title, rows) => `<tbody><tr class="group"><th colspan="2" scope="rowgroup">${esc(title)}</th></tr>${rows}</tbody>`;
+  const anomalous = anomalousMmsi(mmsi);
+  return `<tbody>
       ${savedOwner(mmsi) ? `<tr class="owned"><td>Proprietario</td><td>${esc(savedOwner(mmsi))}</td></tr>` : ''}
       ${waiting ? '<tr><td colspan="2" class="wait">Tipo, IMO, dimensioni e porto di arrivo non sono ancora arrivati: le navi li trasmettono ogni 6 minuti, la scheda si completa da sola.</td></tr>' : ''}
       ${row('Tipo', typeName(v.shipType) || typeOf(v.shipType).label)}
-      ${row('Bandiera', MID[String(mmsi).slice(0, 3)])}
+      ${html('Dimensioni', !v.length ? ND_HTML : v.width ? esc(`${v.length} × ${v.width} m`) : `${esc(v.length)} m (larghezza ${ND_HTML})`)}
+      ${hasFlag(mmsi) || anomalous ? row('Bandiera', flagWords(mmsi)) : ''}
+      ${hasFlag(mmsi) ? '' : row('Tipo di MMSI', mmsiWords(mmsi))}
       ${row('IMO', imo)}
       ${row('MMSI', mmsi)}
-      ${row('Nominativo', v.callSign)}
-      ${row('Prossimo porto', v.destination)}
-      ${row('ETA', eta)}
-      ${row('Velocità / Rotta', sog || cog ? `${sog || '—'} / ${cog || '—'}` : null)}
+      ${row('Nominativo', v.callSign)}</tbody>
+      ${voyage ? group(voyageTitle(v.staticTs, now), voyage) : ''}
+      ${group('Movimento', `
+      ${html('Velocità / Rotta', sog || cog ? `${orNdHtml(sog)} / ${orNdHtml(cog)}` : ND_HTML)}
       ${row('Prua', hdg != null ? hdg + '°' : null)}
-      ${row('Stato', NAV_STATUS[p.navStat])}
-      ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
-      ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
+      ${row('Stato', statusWords(p.navStat, p.sog))}
       <tr><td>Posizione</td><td id="pos-mode">${esc(positionWords(mmsi))}</td></tr>
-      <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : '—'}</td></tr>
-      ${row('Fonte', SOURCE_LABEL[p.source])}`;
+      <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : ND_HTML}</td></tr>
+      ${row('Fonte', SOURCE_LABEL[p.source])}`)}`;
 }
 
+// dati che decidono sottotitolo, carico pericoloso e registri della scheda: se cambiano, render() la rifà tutta
+const knownKey = v => `${v?.imo > 0 ? v.imo : ''}|${Number.isInteger(v?.shipType) ? v.shipType : ''}`;
 function render(mmsi) {
   // Aggiornamento periodico della stessa nave: rinnovo solo i dati, senza toccare campo e sezioni aperte
   if ($('content').dataset.mmsi === String(mmsi) && $('facts')) {
-    const v = meta.get(mmsi) || {};
-    const known = v.imo > 0 ? 'imo' : '';
-    // se nel frattempo sono arrivati i dati statici (IMO, tipo) rifaccio la scheda, conservando il nome annotato
-    if ($('content').dataset.known === known) { $('facts').innerHTML = facts(mmsi); return; }
+    // se nel frattempo sono arrivati IMO o tipo (sottotitolo, carico pericoloso, registri) rifaccio la scheda,
+    // conservando il nome annotato; altrimenti solo la tabella
+    if ($('content').dataset.known === knownKey(meta.get(mmsi))) { $('facts').innerHTML = facts(mmsi); return; }
   }
   const v = meta.get(mmsi) || {};
-  const flag = MID[String(mmsi).slice(0, 3)] || '—';
+  // sottotitolo: bandiera per le navi (dal MID, con l'avviso, per gli MMSI anomali), tipo di MMSI per il resto
+  const flagText = flagWords(mmsi);
+  const flag = hasFlag(mmsi) || (anomalousMmsi(mmsi) && flagText) ? 'bandiera ' + orNdHtml(flagText) : esc(mmsiWords(mmsi));
+  // punto 46: carico pericoloso anche in testo, non solo con un colore
+  const hazard = hazardCategory(v.shipType) ? ` · ⚠ Carico pericoloso cat. ${hazardCategory(v.shipType)}` : '';
   const imo = v.imo && v.imo > 0 ? v.imo : null;
   const ids = { IMO: imo, MMSI: mmsi, Nome: v.name };
   const yacht = v.shipType === 36 || v.shipType === 37 || !imo;
-  const italian = String(mmsi).startsWith('247');
+  const italian = italianRegistries(mmsi);
   const group = (title, keys, open = false) => `<details${open ? ' open' : ''}><summary>${esc(title)}</summary>
       ${keys.map(k => registryButton(k, ids)).join('')}</details>`;
   $('content').dataset.mmsi = mmsi;
-  $('content').dataset.known = imo ? 'imo' : '';
+  $('content').dataset.known = knownKey(v);
   // titolo e sottotitolo in #panel-head, prima dei pulsanti «Segui» e «Condividi» (#panel-actions): per i lettori di
   // schermo prima il nome della nave, poi le azioni, poi i dati; #content si riscrive senza toccare i pulsanti
   $('panel-head').innerHTML = `<h2>${esc(v.name || 'Senza nome')}</h2>
-    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>`;
+    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · ${flag}${esc(hazard)}</div>`;
   $('content').innerHTML = `
     <table id="facts">${facts(mmsi)}</table>
     <a class="link vfmore" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">📷 Foto, stazza, anno di costruzione e porti
@@ -2128,7 +2131,7 @@ function renderResults() {
     const v = meta.get(h.mmsi) || {}, name = norm(v.name), id = esc('res-' + h.mmsi);
     // conteggio esatto solo se il nome stesso corrisponde (allora le omonime hanno lo stesso punteggio) e il tetto non c'è
     const twins = twinsText(counts.get(name) || 0, searchComplete && name.includes(q));
-    const line = resultLine({ typeName: typeName(v.shipType), flag: MID[String(h.mmsi).slice(0, 3)], length: v.length,
+    const line = resultLine({ typeName: typeName(v.shipType), flag: flagWords(h.mmsi), length: v.length,
       age: ageWords(h.props, now), destination: v.destination });
     // nome accessibile = solo il nome; descrizione = seconda riga, omonimi e MMSI (le parti che ci sono)
     const described = [line && `${id}-d`, twins && `${id}-t`, `${id}-m`].filter(Boolean).join(' ');

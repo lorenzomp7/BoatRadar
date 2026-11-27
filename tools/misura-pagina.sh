@@ -19,8 +19,9 @@
 # 2 ms più che spenta, più metà della somma degli scarti interquartili dei due gruppi.
 # Esce con 1 se una soglia non regge (le righe sono comunque stampate e, con --registra, registrate).
 # Variabili: MISURA_PORT (8930), MISURA_NAVI (30000), MISURA_SECONDI (10), MISURA_CPU (es. 4: CPU rallentata 4 volte
-# con Emulation.setCPUThrottlingRate via CDP; facoltativo), SMOKE_LEAFLET_LOCAL=1 (Leaflet dal registro npm),
-# AGENT_BROWSER_EXECUTABLE_PATH. Headless e senza GPU i numeri valgono per confrontare due versioni sulla stessa macchina.
+# con Emulation.setCPUThrottlingRate via CDP; facoltativo), AGENT_BROWSER_EXECUTABLE_PATH. Leaflet viene da
+# vendor/leaflet/ (punto 85): come in tools/smoke-browser.sh le richieste a unpkg.com sono bloccate.
+# Headless e senza GPU i numeri valgono per confrontare due versioni sulla stessa macchina.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -57,19 +58,9 @@ grep -q '^pronto ' "$TMP/server.log" || { cat "$TMP/server.log" >&2; fail "il se
 URL="http://127.0.0.1:$PORT/"
 echo "✓ $NAVI navi sintetiche su $URL"
 
-if [ "${SMOKE_LEAFLET_LOCAL:-0}" = 1 ]; then   # come tools/smoke-browser.sh
-  (cd "$TMP" && npm pack leaflet@1.9.4 --silent >/dev/null && tar xzf leaflet-1.9.4.tgz)
-  node -e '
-    const fs = require("fs"), d = process.argv[1] + "/package/dist/";
-    const js = fs.readFileSync(d + "leaflet.js", "utf8"), css = fs.readFileSync(d + "leaflet.css", "utf8");
-    fs.writeFileSync(process.argv[1] + "/leaflet-init.js", "(function(){if(window.top!==window)return;" +
-      "function run(){if(window.L)return;" + js + "\n;var s=document.createElement(\"style\");s.textContent=" +
-      JSON.stringify(css) + ";document.documentElement.appendChild(s);}" +
-      "if(document.documentElement)run();else new MutationObserver(function(_,o){if(document.documentElement)" +
-      "{o.disconnect();run();}}).observe(document,{childList:true});})();");
-  ' "$TMP"
-  AB+=(--init-script "$TMP/leaflet-init.js")
-fi
+# Leaflet 1.9.4 della repo (punto 85): richieste a unpkg.com annullate prima di aprire la pagina, come block_unpkg di
+# tools/smoke-browser.sh, così la misura fallisce se la pagina torna a dipendere dal CDN
+"${AB[@]}" network route "https://unpkg.com/**" --abort >/dev/null || fail "non riesco a bloccare unpkg.com"
 
 js() { "${AB[@]}" eval --json "$1" | node -e '
   const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
@@ -81,6 +72,8 @@ js() { "${AB[@]}" eval --json "$1" | node -e '
 "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 1000" >/dev/null || fail "nessuna nave in mappa · stato: $(js "document.getElementById('status')?.textContent")"
 # la legenda chiusa, come la vede chi guarda la mappa
 js "(document.getElementById('legend').open = false, true)" >/dev/null
+LF=$(js "L.version + ' ' + performance.getEntriesByType('resource').filter(e => /unpkg\\.com/.test(e.name)).length" | tr -d '"')
+[ "$LF" = "1.9.4 0" ] || fail "Leaflet locale non caricato (versione e richieste a unpkg.com: $LF)"
 
 if [ -n "$CPU" ]; then   # facoltativo: CPU rallentata via CDP sulla scheda della pagina
   # il rallentamento vale finché la sessione CDP resta collegata: il processo resta vivo fino alla fine della misura

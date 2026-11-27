@@ -8,8 +8,16 @@ services:
     environment:
       AISSTREAM_KEY: ${AISSTREAM_KEY:?manca il secret AISSTREAM_KEY}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # dati statici delle navi fra un riavvio e l'altro (punto 22): nel volume boatradar-data, che resta fra un
+      # deploy e l'altro (lo cancella solo «docker compose down -v»)
+      SNAPSHOT_FILE: /data/vessels.json.gz
+    volumes: [boatradar-data:/data]
+    # tempo per l'ultimo salvataggio a SIGTERM (SNAPSHOT_EXIT_MS, 8 s) prima che Docker fermi il processo
+    stop_grace_period: 20s
     mem_limit: 1g
     networks: [web]
 networks:
   web:
     external: true
+volumes:
+  boatradar-data: {}

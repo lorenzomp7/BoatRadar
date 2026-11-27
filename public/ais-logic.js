@@ -410,11 +410,12 @@
   // Arrotondamento a 1/scale; + 0 trasforma -0 in 0
   const roundTo = (n, scale) => Math.round(n * scale) / scale + 0;
 
-  // Filtro normalizzato dai parametri q = { types, status, minSog, maxSog, seen, moving } (stringhe, come da URL):
-  // { types, status, minSog, maxSog, seen, moving } con null = nessun vincolo, oppure null se nessun vincolo resta.
+  // Filtro normalizzato dai parametri q = { types, status, minSog, maxSog, seen, moving, hazard } (stringhe, come da URL):
+  // { types, status, minSog, maxSog, seen, moving, hazard } con null = nessun vincolo, oppure null se nessun vincolo resta.
   // types e status: chiavi di TYPES e NAV_GROUPS separate da virgola (sconosciute scartate, tutte = nessun vincolo);
   // minSog e maxSog in nodi fra 0 e 102,2 arrotondati a 0,1 (minimo 0 = nessuno; minimo oltre il massimo = entrambi
-  // ignorati); seen in minuti, > 0 e ≤ 1440, arrotondato a 0,01; moving '1' = in moto, '0' = ferme. Mai eccezioni.
+  // ignorati); seen in minuti, > 0 e ≤ 1440, arrotondato a 0,01; moving '1' = in moto, '0' = ferme; hazard '1' = solo
+  // carichi pericolosi o inquinanti (punto 46, hazardCategory), qualunque altro valore nessun vincolo. Mai eccezioni.
   function parseFilter(q) {
     if (!q || typeof q !== 'object') return null;
     const sog = x => { const n = decimal(x); if (n === null) return null; const r = roundTo(n, 10); return r >= 0 && r <= 102.2 ? r : null; };
@@ -424,12 +425,14 @@
     const seenN = decimal(q.seen), seenR = seenN === null ? null : roundTo(seenN, 100);
     const mv = paramText(q.moving);
     const f = { types: keysOf(q.types, TYPES), status: keysOf(q.status, NAV_GROUPS), minSog, maxSog,
-      seen: seenR > 0 && seenR <= 1440 ? seenR : null, moving: mv === '1' ? true : mv === '0' ? false : null };
+      seen: seenR > 0 && seenR <= 1440 ? seenR : null, moving: mv === '1' ? true : mv === '0' ? false : null,
+      hazard: paramText(q.hazard) === '1' ? true : null };
     return Object.values(f).some(v => v !== null) ? f : null;
   }
 
   // Forma canonica del filtro, solo i campi presenti in ordine fisso:
-  // 'types=cargo,tanker&status=moored&minSog=5&maxSog=20&seen=15&moving=1'; '' senza filtro.
+  // 'types=cargo,tanker&status=moored&minSog=5&maxSog=20&seen=15&moving=1&hazard=1'; '' senza filtro (hazard in coda:
+  // le chiavi di prima del punto 46 non cambiano).
   // parseFilter dei suoi parametri restituisce lo stesso filtro (la usano la chiave della cache e localStorage).
   function filterKey(f) {
     if (!f) return '';
@@ -438,12 +441,14 @@
     if (f.status) parts.push('status=' + f.status.join(','));
     for (const k of ['minSog', 'maxSog', 'seen']) if (f[k] != null) parts.push(`${k}=${f[k]}`);
     if (f.moving != null) parts.push('moving=' + (f.moving ? 1 : 0));
+    if (f.hazard) parts.push('hazard=1');
     return parts.join('&');
   }
 
   // true se la posizione p = { sog, navStat, ts } della nave v = { shipType } passa il filtro f all'ora now (ms).
   // Velocità non nota (mancante o 102,3) non passa né minimo né massimo; seen: età ≤ seen minuti, ora non valida no;
-  // moving: in moto = non ferma (isStill del punto 8), così in moto e ferme dividono tutte le navi. f null = passa.
+  // moving: in moto = non ferma (isStill del punto 8), così in moto e ferme dividono tutte le navi; hazard: tipo con
+  // categoria di carico pericoloso (punto 46). f null = passa.
   function passesFilter(p, v, f, now) {
     if (!f) return true;
     if (f.types && !f.types.includes(typeOf(v?.shipType).key)) return false;
@@ -452,11 +457,192 @@
     if (f.maxSog != null && !(validSog(p.sog) && p.sog <= f.maxSog)) return false;
     if (f.seen != null && !(now - toMs(p.ts) <= f.seen * MIN_MS)) return false;
     if (f.moving != null && isStill(p) === f.moving) return false;
+    if (f.hazard && !hazardCategory(v?.shipType)) return false;
     return true;
   }
 
-  // Quanti criteri sono attivi (per «· 2 attivi»): tipi, stato, velocità (da e a contano una volta), ricezione, movimento
-  const filterCount = f => !f ? 0 : [f.types, f.status, f.minSog ?? f.maxSog, f.seen, f.moving].filter(x => x != null).length;
+  // Quanti criteri sono attivi (per «· 2 attivi»): tipi, stato, velocità (da e a contano una volta), ricezione, movimento,
+  // carico pericoloso
+  const filterCount = f => !f ? 0 : [f.types, f.status, f.minSog ?? f.maxSog, f.seen, f.moving, f.hazard].filter(x => x != null).length;
+
+  // Lotto B (punti 27, 44, 46, 23): dati della scheda nave. Test in test/scheda-logica.test.js e test/pagina-scheda.test.js.
+  // Punto 27: tipo di MMSI (ITU-R M.585). Prime 3 cifre dell'identità (MID) = paese. Tabella parziale.
+  const MID_NAMES = Object.freeze({201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',212:'Cipro',215:'Malta',218:'Germania',219:'Danimarca',
+    220:'Danimarca',224:'Spagna',225:'Spagna',226:'Francia',227:'Francia',228:'Francia',229:'Malta',230:'Finlandia',231:'Isole Faroe',
+    232:'Regno Unito',233:'Regno Unito',234:'Regno Unito',235:'Regno Unito',236:'Gibilterra',237:'Grecia',238:'Croazia',239:'Grecia',
+    240:'Grecia',241:'Grecia',244:'Paesi Bassi',245:'Paesi Bassi',246:'Paesi Bassi',247:'Italia',248:'Malta',249:'Malta',250:'Irlanda',
+    251:'Islanda',253:'Lussemburgo',255:'Madeira',256:'Malta',257:'Norvegia',258:'Norvegia',259:'Norvegia',261:'Polonia',263:'Portogallo',
+    265:'Svezia',266:'Svezia',269:'Svizzera',271:'Turchia',272:'Ucraina',273:'Russia',275:'Lettonia',276:'Estonia',277:'Lituania',
+    303:'USA (Alaska)',304:'Antigua e Barbuda',305:'Antigua e Barbuda',308:'Bahamas',309:'Bahamas',310:'Bermuda',311:'Bahamas',
+    316:'Canada',319:'Isole Cayman',338:'USA',351:'Panama',352:'Panama',353:'Panama',354:'Panama',355:'Panama',356:'Panama',357:'Panama',
+    366:'USA',367:'USA',368:'USA',369:'USA',370:'Panama',371:'Panama',372:'Panama',373:'Panama',374:'Panama',375:'St. Vincent e Grenadine',
+    376:'St. Vincent e Grenadine',377:'St. Vincent e Grenadine',378:'Isole Vergini Brit.',412:'Cina',413:'Cina',414:'Cina',431:'Giappone',
+    432:'Giappone',440:'Corea del Sud',441:'Corea del Sud',477:'Hong Kong',518:'Isole Cook',538:'Isole Marshall',563:'Singapore',
+    564:'Singapore',565:'Singapore',566:'Singapore',636:'Liberia',637:'Liberia',
+    242:'Marocco',252:'Liechtenstein',254:'Monaco',262:'Montenegro',264:'Romania',267:'Slovacchia',270:'Rep. Ceca',274:'Macedonia del Nord',
+    278:'Slovenia',279:'Serbia',207:'Bulgaria',208:'Vaticano',203:'Austria',204:'Azzorre',206:'Bielorussia',213:'Georgia',214:'Moldavia',
+    216:'Armenia',243:'Ungheria',
+    312:'Belize',314:'Barbados',323:'Cuba',325:'Dominica',327:'Rep. Dominicana',330:'Grenada',332:'Guatemala',334:'Honduras',
+    336:'Haiti',339:'Giamaica',341:'St. Kitts e Nevis',343:'St. Lucia',345:'Messico',350:'Nicaragua',362:'Trinidad e Tobago',
+    401:'Afghanistan',403:'Arabia Saudita',405:'Bangladesh',408:'Bahrein',410:'Bhutan',416:'Taiwan',417:'Sri Lanka',419:'India',
+    422:'Iran',423:'Azerbaigian',425:'Iraq',428:'Israele',436:'Kazakistan',438:'Giordania',445:'Corea del Nord',447:'Kuwait',
+    450:'Libano',455:'Maldive',457:'Mongolia',459:'Nepal',461:'Oman',463:'Pakistan',466:'Qatar',468:'Siria',470:'Emirati Arabi',
+    471:'Emirati Arabi',472:'Tagikistan',473:'Yemen',475:'Yemen',503:'Australia',506:'Myanmar',508:'Brunei',510:'Micronesia',
+    511:'Palau',512:'Nuova Zelanda',514:'Cambogia',515:'Cambogia',520:'Figi',523:'Isole Cocos',525:'Indonesia',529:'Kiribati',
+    533:'Malesia',536:'Isole Marianne',544:'Nauru',546:'Polinesia Francese',548:'Filippine',553:'Papua Nuova Guinea',557:'Isole Salomone',
+    559:'Samoa Americane',561:'Samoa',567:'Thailandia',570:'Tonga',572:'Tuvalu',574:'Vietnam',576:'Vanuatu',577:'Vanuatu',
+    601:'Sudafrica',603:'Angola',605:'Algeria',609:'Burundi',610:'Benin',613:'Camerun',616:'Comore',618:'Crozet',619:'Costa d\'Avorio',
+    620:'Comore',621:'Gibuti',622:'Egitto',624:'Etiopia',625:'Eritrea',626:'Gabon',627:'Ghana',629:'Gambia',630:'Guinea-Bissau',
+    631:'Guinea Equatoriale',632:'Guinea',634:'Kenya',642:'Libia',644:'Lesotho',645:'Mauritius',647:'Madagascar',649:'Mali',
+    650:'Mozambico',654:'Mauritania',655:'Malawi',656:'Niger',657:'Nigeria',659:'Namibia',660:'Riunione',661:'Ruanda',662:'Sudan',
+    663:'Senegal',664:'Seychelles',666:'Somalia',667:'Sierra Leone',668:'São Tomé',669:'Eswatini',671:'Togo',672:'Tunisia',
+    674:'Tanzania',675:'Uganda',676:'Congo (RD)',677:'Tanzania',678:'Zambia',679:'Zimbabwe',
+    701:'Argentina',710:'Brasile',720:'Bolivia',725:'Cile',730:'Colombia',735:'Ecuador',740:'Falkland',745:'Guyana francese',
+    750:'Guyana',755:'Paraguay',760:'Perù',765:'Suriname',770:'Uruguay',775:'Venezuela'});
+
+  // Tipo di MMSI: { kind, mid } (mid numero, o null per i dispositivi di soccorso). Non intero da 1 a 999999999 =
+  // invalid; si completa a 9 cifre con zeri davanti; MID fuori da 201-775 = invalid.
+  const MMSI_KIND_LABEL = Object.freeze({ ship: 'Nave', coast: 'Stazione costiera', group: 'Gruppo di navi',
+    sar: 'Aeromobile SAR', aton: 'Aiuto alla navigazione (AtoN)', auxiliary: 'Imbarcazione ausiliaria',
+    handheld: 'Radio VHF portatile', sart: 'Trasponditore di soccorso (AIS-SART)', mob: 'Dispositivo uomo a mare (MOB)',
+    epirb: 'Radiofaro di emergenza (EPIRB)', invalid: 'MMSI non valido' });
+  const MMSI_PREFIX = [['970', 'sart', null], ['972', 'mob', null], ['974', 'epirb', null], ['111', 'sar', 3], ['99', 'aton', 2],
+    ['98', 'auxiliary', 2], ['00', 'coast', 2], ['0', 'group', 1], ['8', 'handheld', 1]];
+  function mmsiKind(mmsi) {
+    const invalid = { kind: 'invalid', mid: null };
+    if (!Number.isInteger(mmsi) || mmsi < 1 || mmsi > 999999999) return invalid;
+    const s = String(mmsi).padStart(9, '0');
+    let kind = null, at = 0;
+    for (const [prefix, k, pos] of MMSI_PREFIX) if (s.startsWith(prefix)) { kind = k; at = pos; break; }
+    if (!kind) { if (s[0] < '2' || s[0] > '7') return invalid; kind = 'ship'; }
+    if (at === null) return { kind, mid: null };
+    const mid = Number(s.slice(at, at + 3));
+    return mid >= 201 && mid <= 775 ? { kind, mid } : invalid;
+  }
+  // Bandiera: solo per navi e loro imbarcazioni ausiliarie (le stazioni non battono bandiera); null se il MID non è in tabella
+  function flagOf(mmsi) {
+    const { kind, mid } = mmsiKind(mmsi);
+    return (kind === 'ship' || kind === 'auxiliary') && Object.hasOwn(MID_NAMES, mid) ? MID_NAMES[mid] : null;
+  }
+  const countryOf = mid => mid != null && Object.hasOwn(MID_NAMES, mid) ? MID_NAMES[mid] : null;
+  // Il server riceve solo messaggi di navi (posizione e dati statici): un MMSI con la forma di una stazione costiera, di un
+  // gruppo, di un aeromobile SAR o di un AtoN su una nave è programmato male a bordo (MMSI anomalo). Forma in minuscolo.
+  const STATION_FORMS = Object.freeze({ coast: 'stazione costiera', group: 'gruppo di navi', sar: 'aeromobile SAR',
+    aton: 'AtoN, aiuto alla navigazione' });
+  const anomalousMmsi = mmsi => Object.hasOwn(STATION_FORMS, mmsiKind(mmsi).kind);
+  // Riga «Tipo di MMSI»: null per le navi; «MMSI anomalo per una nave (forma di stazione costiera · Italia)» per le forme
+  // di stazione; altrimenti il tipo e, se noto, il paese («Radio VHF portatile · Italia»)
+  function mmsiWords(mmsi) {
+    const { kind, mid } = mmsiKind(mmsi);
+    if (kind === 'ship') return null;
+    const country = countryOf(mid);
+    if (Object.hasOwn(STATION_FORMS, kind))
+      return `MMSI anomalo per una nave (forma di ${[STATION_FORMS[kind], country].filter(Boolean).join(' · ')})`;
+    return [MMSI_KIND_LABEL[kind], country].filter(Boolean).join(' · ');
+  }
+  // Riga «Bandiera»: flagOf per navi e ausiliari; per gli MMSI anomali il paese del MID con l'avviso
+  // («Italia (dal MID, MMSI anomalo)»); null per il resto o se il MID non è in tabella
+  function flagWords(mmsi) {
+    if (!anomalousMmsi(mmsi)) return flagOf(mmsi);
+    const country = countryOf(mmsiKind(mmsi).mid);
+    return country ? `${country} (dal MID, MMSI anomalo)` : null;
+  }
+  // Registri italiani (Barca italiana…) in scheda: MID 247 per navi, ausiliari e MMSI anomali
+  function italianRegistries(mmsi) {
+    const { kind, mid } = mmsiKind(mmsi);
+    return mid === 247 && (kind === 'ship' || kind === 'auxiliary' || Object.hasOwn(STATION_FORMS, kind));
+  }
+
+  // Punto 44: stato di navigazione dichiarato (impostato a mano dall'equipaggio, spesso non aggiornato) e cosa fa la nave.
+  const NAV_STATUS_LABEL = Object.freeze(['In navigazione a motore', 'All\'ancora', 'Non governabile', 'Manovrabilità limitata',
+    'Limitata dal pescaggio', 'Ormeggiata', 'Incagliata', 'In pesca', 'In navigazione a vela']);
+  // { declared: etichetta o null, still: isStill (punto 8), mismatch }: 'moving' se dichiara all'ancora, ormeggiata o
+  // incagliata (1, 5, 6) ma per isStill non è ferma (velocità nota da 3 kn); 'still' se dichiara in navigazione (0, 8) con
+  // velocità nota fino a 0,5 kn; altrimenti null. Il filtro «Stato di navigazione» resta sul dichiarato.
+  function effectiveStatus(navStat, sog) {
+    const declared = Number.isInteger(navStat) && navStat >= 0 && navStat < NAV_STATUS_LABEL.length ? NAV_STATUS_LABEL[navStat] : null;
+    const still = isStill({ navStat, sog });
+    const mismatch = STILL_STATUS.includes(navStat) && !still ? 'moving'
+      : (navStat === 0 || navStat === 8) && validSog(sog) && sog <= 0.5 ? 'still' : null;
+    return { declared, still, mismatch };
+  }
+  // una cifra decimale con la virgola, come in tutta la scheda («7,4 m», «90,0°», «8,0 kn»)
+  const oneDecimal = n => n.toFixed(1).replace('.', ',');
+  const knots = n => oneDecimal(n) + ' kn';
+  const lowerFirst = t => t.charAt(0).toLowerCase() + t.slice(1);
+  // Riga «Stato»: il dichiarato; se contrasta «Dichiara: ormeggiata · in realtà in moto a 8,0 kn» (o «ferma (0,0 kn)»)
+  function statusWords(navStat, sog) {
+    const { declared, mismatch } = effectiveStatus(navStat, sog);
+    if (!declared) return null;
+    if (!mismatch) return declared;
+    return `Dichiara: ${lowerFirst(declared)} · in realtà ${mismatch === 'moving' ? 'in moto a ' + knots(sog) : `ferma (${knots(sog)})`}`;
+  }
+
+  // Punto 46: categoria del carico pericoloso o inquinante dal tipo di nave AIS (IMO: X, Y, Z, OS = unità 1-4 delle decine
+  // 2 WIG, 4 unità veloci, 6 passeggeri, 7 cargo, 8 petroliere, 9 altro); altrimenti null. Usata anche dal filtro hazard.
+  const HAZARD = ['X', 'Y', 'Z', 'OS'];
+  function hazardCategory(t) {
+    if (!Number.isInteger(t) || t < 0 || t > 99) return null;
+    const tens = Math.floor(t / 10), unit = t % 10;
+    return [2, 4, 6, 7, 8, 9].includes(tens) && unit >= 1 && unit <= 4 ? HAZARD[unit - 1] : null;
+  }
+
+  // Punto 23: ETA con l'anno. L'AIS manda mese, giorno, ora e minuto UTC senza anno (decodeEta, etaOf di server.js):
+  // fra gli anni y−1, y e y+1 (y = anno UTC di now) vale la prima data esistente (niente 29/2 negli anni non bisestili
+  // né 31/4) da now − 300 giorni in poi, se è prima di now + 65 giorni: un'ETA vecchia (non aggiornata dall'equipaggio)
+  // resta passata invece di diventare un viaggio di 11 mesi. Fra due ricorrenze che scavalcano un 29 febbraio ci sono
+  // 366 giorni: allora vale fino a now + 66 giorni, così ogni data che non sia il 29/2 ha sempre un anno. Ora mancante
+  // = inizio del giorno, minuto mancante = 0. → ms UTC, o null.
+  const DAY_MS = 24 * HOUR_MS, ETA_PAST_DAYS = 300, ETA_AHEAD_DAYS = 65;
+  function etaTime(eta, now) {
+    if (!eta || !finite(now)) return null;
+    const { month, day } = eta;
+    if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+    const hour = Number.isInteger(eta.hour) && eta.hour >= 0 && eta.hour <= 23 ? eta.hour : 0;
+    const minute = Number.isInteger(eta.hour) && Number.isInteger(eta.minute) && eta.minute >= 0 && eta.minute <= 59 ? eta.minute : 0;
+    const y = new Date(now).getUTCFullYear(), from = now - ETA_PAST_DAYS * DAY_MS;
+    for (const year of [y - 1, y, y + 1]) {
+      const t = Date.UTC(year, month - 1, day, hour, minute), d = new Date(t);
+      if (d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day || t < from) continue;
+      // la prima da now − 300 giorni: entro 65 giorni avanti, o 66 se l'anno prima esiste ed è a 366 giorni
+      const prev = Date.UTC(year - 1, month - 1, day, hour, minute), leapGap = new Date(prev).getUTCDate() === day && t - prev > 365 * DAY_MS;
+      return t < now + (ETA_AHEAD_DAYS + (leapGap ? 1 : 0)) * DAY_MS ? t : null;
+    }
+    return null;
+  }
+  const MONTHS = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+  const two = n => String(n).padStart(2, '0');
+  // Riga «ETA»: { date: '2 gen 2027, 08:00 UTC', rel } con rel «tra 5 h 20 min» sotto le 48 h, poi «tra N giorni»; passata
+  // «già passata» sotto un giorno, poi «già passata (N giorni fa): forse non aggiornata»; senza ora solo la data e i giorni
+  // di calendario («oggi», «domani», «tra N giorni», «già passata (1 giorno fa)…»). null se etaTime è null.
+  const pastWords = days => days < 1 ? 'già passata'
+    : `già passata (${days === 1 ? '1 giorno' : days + ' giorni'} fa): forse non aggiornata`;
+  function etaWords(eta, now) {
+    const t = etaTime(eta, now);
+    if (t == null) return null;
+    const d = new Date(t), hasHour = Number.isInteger(eta.hour) && eta.hour >= 0 && eta.hour <= 23;
+    const date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+      + (hasHour ? `, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC` : '');
+    let rel;
+    if (!hasHour) {
+      const today = new Date(now), days = Math.round((t - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / DAY_MS);
+      rel = days < 0 ? pastWords(-days) : days === 0 ? 'oggi' : days === 1 ? 'domani' : `tra ${days} giorni`;
+    } else {
+      const diff = t - now;
+      if (diff < 0) rel = pastWords(Math.floor(-diff / DAY_MS));
+      else if (diff < MIN_MS) rel = 'tra meno di 1 min';
+      else if (diff < 48 * HOUR_MS) {
+        const min = Math.floor(diff / MIN_MS), h = Math.floor(min / 60), m = min % 60;
+        rel = 'tra ' + [h && `${h} h`, m && `${m} min`].filter(Boolean).join(' ');
+      } else rel = `tra ${Math.floor(diff / DAY_MS)} giorni`;
+    }
+    return { date, rel };
+  }
+  // Titolo del gruppo «Viaggio» della scheda: dati dichiarati dalla nave (messaggio statico), con la loro età se nota
+  function voyageTitle(staticTs, now) {
+    const age = formatAge(ageMs(staticTs, now));
+    return `Viaggio (dichiarato dalla nave${age ? ', ' + age : ''})`;
+  }
 
   // Punto 86: server della pagina da config.js (cfg = window). BOATRADAR_APIS = [{url, name, sleeps}] o stringhe, nell'ordine
   // di preferenza (prima la VM, poi Render che si addormenta); se non dà nessun indirizzo valido BOATRADAR_API, poi '/api'
@@ -659,6 +845,19 @@
   function pickMaxHeight({ top, bottom, margin = 10, tip = 40, chrome = 20, min = PICK_MIN_HEIGHT } = {}) {
     const h = Math.floor(bottom - top - 2 * margin - tip - chrome);
     return Number.isFinite(h) ? Math.max(min, h) : min;
+  }
+
+  // Dati statici AIS (server.js all'arrivo e snapshot.js al ripristino, punto 22: stesse regole, test in test/snapshot.test.js).
+  // Testo AIS: senza il riempimento (@) e i caratteri di controllo, spazi (anche interni) compattati e tolti ai lati; non
+  // stringa = ''. I nomi AIS sono già maiuscoli: così di solito coincidono con norm() della ricerca (punto 12).
+  const cleanText = s => typeof s === 'string' ? s.replace(/@/g, '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  // IMO: 7 cifre, l'ultima è la cifra di controllo (somma delle prime sei per 7, 6, 5, 4, 3, 2, modulo 10)
+  function isIMO(n) {
+    if (!Number.isInteger(n) || n < 1000000 || n > 9999999) return false;
+    const d = String(n).split('').map(Number);
+    let sum = 0;
+    for (let i = 0; i < 6; i++) sum += d[i] * (7 - i);
+    return sum % 10 === d[6];
   }
 
   // Punto 12: ricerca ordinata e riconoscibile (test in test/ricerca-logica.test.js). La usano server.js (/api/search) e la
@@ -868,9 +1067,11 @@
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
+    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, anomalousMmsi, flagWords, italianRegistries, oneDecimal, knots, NAV_STATUS_LABEL, effectiveStatus, statusWords, hazardCategory,
+    etaTime, etaWords, voyageTitle,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
-    norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
+    cleanText, isIMO, norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
     sheetStops, snapStop, listRows, panToKeepVisible,
     parseLink, viewHash, linkUrl, followPan };
 });

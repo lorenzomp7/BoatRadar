@@ -42,6 +42,32 @@ Lavora su `main_claude` salvo indicazione diversa.
 - `position-check.js`: funzioni pure usate da `server.js` per scartare posizioni non valide e
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
+- `snapshot.js` (punto 22): dati statici delle navi fra un riavvio e l'altro, solo con `SNAPSHOT_FILE` (sulla VM
+  `/data/vessels.json.gz`, volume `boatradar-data` di `deploy/compose.yml`; su Render Free nessuna persistenza, parte
+  vuoto). `serialize` (navi con `staticTs` di meno di 48 h, dalla più recente, un blocco di 1000 per riga con un
+  `setImmediate` fra i blocchi) → `encode` (gzip a stream) → `fileStore.save` (`.tmp` con open → write → sync, poi
+  rinomina); all'avvio `fileStore.load` (`stat` prima: oltre 16 MB non si legge) → `restoreBuffer` (gunzip con tetto di
+  64 MB, poi `restoreInflated`: righe cercate con `indexOf('\n')`, al massimo `ceil(max / batch) + 2` righe di al
+  massimo `batch × 2048` byte, riga vuota = errore, lettura ferma oltre `max` = 250.000 voci, JSON non a righe solo fino
+  a 4 MB, `setImmediate` fra le righe; validazione di `restore`: formato e versione, MMSI, `staticTs` fra 48 h fa e
+  5 min nel futuro, testi ≤ 64 ripuliti con `cleanText`, `isIMO`, pescaggio > 0, numeri nei loro intervalli, ETA come
+  `etaOf`) e `mergeBatched` (una nave entra solo se in memoria non ha dati statici più recenti; di una nave già in
+  memoria si prendono solo i campi mancanti), poi `indexNames` e `dataVersion++`. File non valido = `SnapshotFormatError`
+  (`isFormatError`): `server.js` lo rinomina `.bad` (`fileStore.quarantine`) e parte vuoto; un errore di I/O lascia il
+  file com'è e blocca i salvataggi fino al riavvio (`saveBlocked`). `cleanText` e `isIMO` sono in `public/ais-logic.js`,
+  usati anche da `handle()`. `server.js`: ripristino nella callback di `listen` con tetto `SNAPSHOT_RESTORE_MS` (5 s), poi
+  `connect()` e un salvataggio ogni `SNAPSHOT_INTERVAL_MS` (10 min, mai due insieme, mai prima della fine del
+  ripristino); SIGTERM/SIGINT: senza destinazione, durante il ripristino o con i salvataggi bloccati `process.exit(0)`
+  subito, altrimenti ultimo salvataggio con tetto `SNAPSHOT_EXIT_MS` (8 s; `stop_grace_period` 20 s), un secondo segnale
+  esce subito. `snapshot` in `/api/status` (`store`, `restored`, `restoreError` che resta fino al riavvio, `savedAt`,
+  `bytes`, `vessels`, `ms`, `error` dell'ultimo salvataggio; solo codici o motivi, mai percorsi). Va nella `COPY` del
+  `Dockerfile` (con `/data` dell'utente `node`), nei `paths` di `deploy-backend.yml` e `browser.yml`, nel `buildFilter`
+  di `render.yaml` e in `node --check` di `test.yml` (lo controlla un test). Test in `test/snapshot.test.js` e
+  `test/snapshot-server.test.js` (lettura e salvataggio rallentati o in errore con `test/snapshot-lento.js`, precaricato
+  con `NODE_OPTIONS=--require`); `test/helpers.js` (`startServer`) e `tools/smoke-server.js` tolgono le `SNAPSHOT_*`
+  dell'ambiente, come `tools/carico.js`: chi le vuole le passa esplicitamente. Misura con `tools/carico.js --snapshot`
+  (`docs/prestazioni.md`); costi delle alternative e comportamento con file non validi in `deploy/README.md`, «Dati
+  statici dopo un riavvio». In locale: `SNAPSHOT_FILE=diagnosi/vessels.json.gz node server.js`.
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
 - `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale, età della posizione, filtri…), modulo UMD
   (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js` (filtri: `test/filtri-logica.test.js`).
@@ -108,6 +134,54 @@ Lavora su `main_claude` salvo indicazione diversa.
   `prefers-reduced-motion`): sotto l'header, su telefono sopra la cima più alta di pannello, legenda e attribuzione, su
   computer a sinistra della scheda o dell'elenco (`rightInset`). Esc: popup, risultati, scheda, pannello. Test in
   `test/pannello-logica.test.js` e `test/pagina-pannello.test.js` (anche il trascinamento con pointer event finti).
+- `vendor/leaflet/` (punto 85): Leaflet 1.9.4 preso da `npm pack leaflet@1.9.4` (integrità controllata con
+  `npm view leaflet@1.9.4 dist.integrity`; licenza BSD-2-Clause in `LICENSE`): `leaflet.js`, `leaflet.css` e le 5
+  immagini di `images/`, file identici al pacchetto (SHA-256 di js e css fissati in `test/leaflet-locale.test.js`). La
+  pagina non carica niente da CDN (nessun `https://` in `<script src>`/`<link href>`); senza `window.L` la riga di stato
+  lo dice, come per `AisLogic`. `server.js` serve solo i file dell'elenco fisso `ASSETS` (`{url: [file, tipo, cache]}`;
+  `vendor/` con `public, max-age=86400`, il resto `no-store`; ogni altro percorso 404). Js e css nella `COPY` del
+  `Dockerfile`, le immagini con `COPY vendor/leaflet/images/`; `vendor/**` nei `paths` di `deploy-backend.yml`,
+  `browser.yml`, `pages.yml` e nel `buildFilter` di `render.yaml`; `pages.yml` li copia in `_site/vendor/leaflet/` e
+  aggiunge `?v=<commit>` a js e css; `LICENSE` va nell'immagine Docker e su Pages (server.js non la serve: 404).
+  Per aggiornare Leaflet: stessi passi con la nuova versione, nuovi SHA-256 in `test/leaflet-locale.test.js` e, dato che
+  la VM serve `vendor/` con un giorno di cache (`max-age=86400`, senza `?v=`), chi apre la pagina dalla VM può tenere i
+  file vecchi fino a un giorno dopo il deploy (Pages no: `?v=<commit>`).
+- Scheda nave (lotto B, punti 27, 44, 46, 23; funzioni pure dopo `filterCount` in `public/ais-logic.js`, test in
+  `test/scheda-logica.test.js` e `test/pagina-scheda.test.js`). Punto 27: `mmsiKind` (ITU-R M.585: nave, stazione
+  costiera `00`, gruppo `0`, SAR `111`, AtoN `99`, ausiliaria `98`, portatile `8`, SART/MOB/EPIRB `970`/`972`/`974`, MID
+  fuori da 201-775 = non valido), `MID_NAMES` (tabella spostata dalla pagina), `flagOf` (paese solo per navi e ausiliarie)
+  e `mmsiWords`; in scheda riga «Bandiera» per le navi, «Tipo di MMSI» per le altre (anche nel sottotitolo). Il server
+  riceve solo messaggi di navi: le forme di stazione costiera, gruppo, SAR e AtoN (`anomalousMmsi`) sono navi con l'MMSI
+  programmato male, «MMSI anomalo per una nave (forma di stazione costiera · Italia)», con «Bandiera» dal MID
+  («Italia (dal MID, MMSI anomalo)», `flagWords`, anche nel sottotitolo e nei risultati della ricerca); registri italiani
+  con MID 247 per navi, ausiliarie e MMSI anomali (`italianRegistries`). SART, MOB, EPIRB e portatili restano «Tipo di
+  MMSI» senza bandiera. Il server non scarta gli MMSI non validi: la scheda li marca.
+  Punto 44: `NAV_STATUS_LABEL` (spostato dalla pagina), `effectiveStatus(navStat, sog)` (`mismatch` 'moving' se dichiara
+  all'ancora, ormeggiata o incagliata ma per `isStill` non è ferma, cioè va da 3 kn; 'still' se dichiara in navigazione
+  con velocità nota fino a 0,5 kn) e `statusWords` per la riga «Stato» («Dichiara: ormeggiata · in realtà in moto a
+  8,0 kn»). Conservazione (punto 8) e filtro `moving` usano già `isStill`, cioè lo stato reale; il filtro «Stato di
+  navigazione» (`status`) resta sullo stato dichiarato.
+  Punto 46: `hazardCategory(shipType)` (X, Y, Z, OS per le unità 1-4 delle decine 2, 4, 6, 7, 8, 9), riga «Carico:
+  pericoloso o inquinante, categoria X (dichiarato)» e «⚠ Carico pericoloso cat. X» nel sottotitolo (in testo); filtro
+  `hazard=1` di `/api/locations` (`parseFilter`/`passesFilter`, in coda a `filterKey`: le chiavi di prima non cambiano;
+  altri valori = nessun filtro) e casella `#f-hazard` «Solo carichi pericolosi o inquinanti» nel pannello «Filtri».
+  `tools/carico.js` ha i tipi 71 e 84 per misurare `--filtro "hazard=1"`.
+  Punto 23: `etaTime(eta, now)` (fra y−1, y, y+1 la prima data esistente da now − 300 giorni, se è prima di now + 65
+  giorni, o + 66 quando fra le due ricorrenze c'è un 29 febbraio: ogni data che non sia il 29/2 ha sempre un anno e
+  un'ETA vecchia resta passata), `etaWords` («2 gen 2027, 08:00 UTC (tra 5 h 20 min)», «tra N giorni», «già passata»
+  sotto un giorno, poi «già passata (N giorni fa): forse non aggiornata»; senza ora solo la data) e `voyageTitle`.
+  Tabella della scheda in `<tbody>`: chi è la nave (Tipo, Dimensioni «150 × 22 m» o «150 m (larghezza n.d.)», Bandiera
+  e/o Tipo di MMSI, IMO, MMSI, Nominativo), poi «Viaggio (dichiarato dalla nave, 2 h fa)» (Prossimo porto, ETA,
+  Pescaggio, Carico; o «Dati di viaggio non trasmessi dalla nave», con «(le navi di classe B non li trasmettono)» se
+  `aisClass` di `/api/vessel` è 'B': classe dall'ultimo messaggio, A da `PositionReport`/`ShipStaticData`, B dalle
+  posizioni di classe B e da `StaticDataReport`), poi «Movimento» (Velocità / Rotta, Prua, Stato, Posizione, Ultimo
+  segnale, Fonte); titoli in `<th colspan="2" scope="rowgroup">`. Decimali con la virgola (`oneDecimal`, `knots`).
+  «n.d.» per ogni valore mancante (mai «—», anche nel sottotitolo) come `ND_HTML`: `<abbr title="non disponibile">` con
+  «non disponibile» per i lettori di schermo; i dati AIS passano sempre da `esc()`. `render()` rifà tutta la scheda
+  quando cambiano IMO o tipo (`knownKey`: sottotitolo, carico pericoloso, registri), altrimenti solo la tabella.
+  Nel browser: passo 2 bis di `tools/smoke-browser.sh` (scheda di LAGUNA PRIMA: ordine dei gruppi, `scope`, virgola e
+  prossimo porto in vista senza scorrere, anche a 390 con la scheda a metà; screenshot
+  `diagnosi/smoke/<desktop|telefono>-scheda.png`).
 - Link condivisibili (punto 25): `?mmsi=…&segui=1#lat,lon,zoom` (`parseLink`, `viewHash`, `linkUrl` di
   `public/ais-logic.js`: numeri senza esponente, al più 4 cifre intere e 10 decimali (zoom 2 intere), lat, lon e zoom
   finiti; lat oltre ±90 = vista non valida, altrimenti entro ±85,0511; lon normalizzata; zoom intero 1–18; MMSI 1–9 cifre
@@ -266,8 +340,10 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   primo buono non chieda nulla al secondo; e che dal secondo, con il primo tornato e l'orologio 5 min avanti, la
   pagina provi il primo con la stessa vista e ci torni (punto 86). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
 - Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
-- Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
-  registro npm. Senza tile la mappa resta scura: è normale.
+- Leaflet (punto 85): in ogni sessione del browser le richieste a `https://unpkg.com/**` sono bloccate
+  (`agent-browser network route … --abort`, `block_unpkg`) e la verifica controlla `L.version === '1.9.4'`, il CSS
+  applicato (`.leaflet-pane` con `position: absolute`) e nessuna richiesta a unpkg.com: la pagina usa solo
+  `vendor/leaflet/` (anche `tools/misura-pagina.sh`). Senza tile (rete limitata) la mappa resta scura: è normale.
 - In CI il workflow `Browser` la esegue quando cambiano pagina, server, fixture o la verifica.
 
 ## Prestazioni (flameox)

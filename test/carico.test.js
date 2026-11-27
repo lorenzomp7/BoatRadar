@@ -48,8 +48,16 @@ test('con --filtro stampa anche la vista mondo filtrata (punto 9)', async () => 
     [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--filtro', 'types=tanker'],
     { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
   assert.match(out, /Vista mondo: 300 navi su 300/);
-  // TYPES di carico.js: 2 petroliere (tipo 80) ogni 10 navi
+  // TYPES di carico.js: 2 petroliere (tipi 84 e 80) ogni 10 navi
   assert.match(out, /Vista mondo filtrata \(types=tanker\): 60 navi su 60,/);
+});
+
+test('con --filtro hazard=1 la vista mondo filtrata ha solo i carichi pericolosi (punto 46)', async () => {
+  const out = await new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--filtro', 'hazard=1'],
+    { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
+  // TYPES di carico.js: un tipo 71 (X) e un 84 (OS) ogni 10 navi
+  assert.match(out, /Vista mondo filtrata \(hazard=1\): 60 navi su 60,/);
 });
 
 test('con --cerca misura anche /api/search (punto 12)', async () => {
@@ -57,4 +65,14 @@ test('con --cerca misura anche /api/search (punto 12)', async () => {
     [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--cerca', 'NAVE 1'],
     { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
   assert.match(out, /Ricerca «NAVE 1»: 25 risultati, [\d.]+ KB gzip, [\d.]+ ms mediana, [\d.]+ ms p95/);
+});
+
+test('con --snapshot misura salvataggio e ripristino dei dati statici (punto 22)', async () => {
+  assert.equal(args(['--snapshot']).snapshot, true);
+  assert.equal(args([]).snapshot, false);
+  assert.equal(args(['--snapshot', '--navi', '5']).navi, 5, '--snapshot non prende un valore');
+  const out = await new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--snapshot'],
+    { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
+  assert.match(out, /Snapshot: 300 navi, [\d.]+ KB gzip · salvataggio [\d.]+ ms \(blocco massimo [\d.]+ ms\) · ripristino [\d.]+ ms \(blocco massimo [\d.]+ ms\)/);
 });
