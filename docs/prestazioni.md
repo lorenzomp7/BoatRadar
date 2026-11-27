@@ -182,6 +182,13 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
   154-172 ms (blocco 2 ms), ripristino 305-340 ms (blocco 14-17 ms). Entro le soglie; il `fsync` non si vede nei tempi
   (disco della sessione cloud). Navi sintetiche con tutti i campi lunghi: 50.000 navi = 12,1 MB decompressi (243 byte
   per nave), da cui il tetto di 64 MB del decompresso e di 250.000 navi di `snapshot.js`.
+- Punto 46, filtro `hazard=1` (27/11/2026): `tools/carico.js` ha ora i tipi 71 e 84 al posto di un 70 e di un 80
+  (stesse categorie della legenda e stesso punteggio del campione: le righe senza filtro restano in linea, vedi «prima
+  punto 46»), così 6000 navi su 30.000 hanno un carico pericoloso. `passesFilter` controlla `hazardCategory` solo con il
+  filtro attivo: senza filtro nessun costo in più («dopo punto 46»: 1,3 / 1,8 ms mondo, 0,8 / 1,0 ms porto, rumore).
+  Vista mondo `--filtro "hazard=1"`: 6000 navi su 6000, 248 KB gzip, 0,9 / 1,7 ms con la cache; a cache spenta
+  (`LOCATIONS_CACHE_SIZE=0`, stessa sessione) 54,0 / 97,8 ms contro 51,4 / 65,2 ms di `types=tanker` e 60,6 / 73,2 ms
+  della vista senza filtro.
 
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -216,6 +223,8 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-27 | prima punto 22 | 30000 | 0.55 | 172.9 | 6000 | 255.9 (1550.5) | 1.4 / 1.9 | 1427 | 58.1 (366) | 0.8 / 1.4 | v22.23.5 |
 | 2026-11-27 | dopo punto 22 | 30000 | 0.55 | 174 | 6000 | 255 (1550.5) | 0.9 / 1.3 | 1427 | 57.8 (366) | 0.5 / 0.7 | v22.23.5 |
 | 2026-11-27 | dopo correzioni revisione punto 22 (tetti del ripristino, fsync) | 30000 | 0.55 | 173.8 | 6000 | 254.6 (1550.5) | 0.8 / 1.2 | 1427 | 57.8 (366) | 0.5 / 0.9 | v22.23.5 |
+| 2026-11-27 | prima punto 46 (carico.js con tipi 71 e 84) | 30000 | 0.55 | 172.7 | 6000 | 255.1 (1550.5) | 1 / 1.6 | 1427 | 57.9 (366) | 0.7 / 0.9 | v22.23.5 |
+| 2026-11-27 | dopo punto 46 | 30000 | 0.55 | 172.9 | 6000 | 255.8 (1550.5) | 1.3 / 1.8 | 1427 | 58.1 (366) | 0.8 / 1 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
 
 ## Pagina

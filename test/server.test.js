@@ -187,6 +187,22 @@ test('StaticDataReport (classe B) non tocca IMO ed ETA', async () => {
   assert.deepEqual(v.eta, { month: 5, day: 6, hour: 7, minute: 8 });
 });
 
+test('/api/vessel: aisClass «A» o «B» dall\'ultimo messaggio della nave (punto 23: i dati di viaggio sono solo di classe A)', async () => {
+  const cls = async mmsi => (await getJson('/api/vessel?mmsi=' + mmsi)).aisClass;
+  await send({ MetaData: { MMSI: 248000050 }, Message: { StaticDataReport: { ReportA: { Name: 'DIPORTO B' } } } });
+  assert.equal(await cls(248000050), 'B', 'StaticDataReport (messaggio 24)');
+  await send({ MetaData: { MMSI: 248000051 }, Message: { StandardClassBPositionReport: { Latitude: 43.1, Longitude: 10.1, Sog: 5, Cog: 10 } } });
+  assert.equal(await cls(248000051), 'B', 'posizione di classe B');
+  await send({ MetaData: { MMSI: 248000052 }, Message: { ExtendedClassBPositionReport: { Latitude: 43.2, Longitude: 10.2, Sog: 5, Cog: 10, Type: 37 } } });
+  assert.equal(await cls(248000052), 'B', 'posizione estesa di classe B');
+  await send(position(248000053, 43.3, 10.3));
+  assert.equal(await cls(248000053), 'A', 'PositionReport');
+  await send({ MetaData: { MMSI: 248000054 }, Message: { ShipStaticData: { Name: 'CARGO A', Type: 70 } } });
+  assert.equal(await cls(248000054), 'A', 'ShipStaticData (messaggio 5)');
+  await send(position(248000050, 43.4, 10.4));
+  assert.equal(await cls(248000050), 'A', 'vale l\'ultimo messaggio');
+});
+
 test('il filtro bbox gestisce anche l\'antimeridiano', async () => {
   await send(position(311000001, -17.5, 179.5));   // Figi, a est dell'antimeridiano
   await send(position(311000002, -17.5, -179.5));  // a ovest dell'antimeridiano

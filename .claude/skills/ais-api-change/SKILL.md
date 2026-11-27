@@ -33,7 +33,9 @@ Leggi `server.js` e `test/server.test.js` prima di cambiare qualcosa.
   non `include`. Senza filtro la chiave resta `bbox=…&limit=…`.
 - Filtri (punto 9): `types` e `status` (chiavi di `TYPES` e `NAV_GROUPS` separate da virgola, anche ripetuti), `minSog`,
   `maxSog` (nodi, 0-102,2), `seen` (minuti dall'ultima posizione, fino a 1440), `moving` (`1` = «non ferma», cioè
-  `!isStill`: comprende anche le navi con velocità non disponibile; `0` ferme = `isStill`), letti con `parseFilter` di
+  `!isStill`: comprende anche le navi con velocità non disponibile; `0` ferme = `isStill`), `hazard` (punto 46: `1` = solo
+  tipi con categoria di carico pericoloso o inquinante, `hazardCategory`; altri valori = nessun vincolo; in coda alla
+  chiave, così quelle senza `hazard` non cambiano), letti con `parseFilter` di
   `public/ais-logic.js` (non validi, ripetuti se scalari, o tutti i tipi = nessun vincolo). I valori sono sensibili alle
   maiuscole: `types=Tanker` non è una chiave nota e vale come nessun filtro (solo `types=tanker`); anche `minSog=5,5`
   (virgola decimale) non è valido. `locations()` li applica con `passesFilter` nello stesso ciclo della conservazione,
