@@ -716,11 +716,74 @@
       .filter(Boolean).join(' · ');
   }
 
+  // Punto 71: pannello trascinabile a tre altezze (telefono) con l'elenco delle navi in quest'area (test in
+  // test/pannello-logica.test.js). Altezze in px del pannello: [chiuso, metà, aperto], sempre crescenti e intere; chiuso
+  // = peek ma mai sotto 56 (maniglia da 44 px più il bordo), metà = metà dello schermo, aperto = fino a 8 px sotto
+  // l'header (headerBottom: fondo dell'header dalla cima dello schermo). Su schermi molto bassi metà e aperto restano
+  // almeno 1 e 2 px sopra il chiuso.
+  function sheetStops(viewportH, headerBottom, { peek = 72 } = {}) {
+    const vh = finite(viewportH) ? viewportH : 0, top = finite(headerBottom) ? headerBottom : 0;
+    const closed = Math.max(56, Math.round(finite(peek) ? peek : 72));
+    const open = Math.max(closed + 2, Math.round(vh - top - 8));
+    const half = Math.min(open - 1, Math.max(closed + 1, Math.round(vh * 0.5)));
+    return [closed, half, open];
+  }
+  // Indice dell'altezza a cui si ferma il pannello lasciato a h px con velocità v (px/ms, positiva = cresce): la più vicina
+  // a h (a parità la più bassa), o quella più vicina a dove arriverebbe in 200 ms, ma al massimo una più in là
+  function snapStop(h, v, stops) {
+    const nearest = x => stops.reduce((best, s, i) => (Math.abs(s - x) < Math.abs(stops[best] - x) ? i : best), 0);
+    const base = nearest(h), target = nearest(h + (finite(v) ? v : 0) * 200);
+    return Math.max(base - 1, Math.min(base + 1, target));
+  }
+  // Righe dell'elenco: items = [{ mmsi, name, sog, ts, type }] (type = etichetta del tipo), sort 'name' (alfabetico
+  // italiano, maiuscole e accenti come le lettere, numeri in ordine numerico; senza nome in fondo), 'speed' (decrescente,
+  // sconosciuta o non valida in fondo), 'age' (ultimo segnale più recente prima, orario mancante in fondo: toMs) o 'type'
+  // (etichetta, poi nome; senza tipo in fondo); a parità MMSI crescente. Al massimo limit righe, senza ordinare tutto:
+  // con l'elenco pieno basta un confronto con l'ultima (come insertTop). more = quante restano fuori.
+  const collator = typeof Intl === 'object' && Intl.Collator ? new Intl.Collator('it', { sensitivity: 'base', numeric: true }) : null;
+  const textCmp = (a, b) => {
+    const ea = typeof a !== 'string' || !a.trim(), eb = typeof b !== 'string' || !b.trim();
+    if (ea || eb) return ea === eb ? 0 : ea ? 1 : -1;
+    return collator ? collator.compare(a, b) : a < b ? -1 : a > b ? 1 : 0;
+  };
+  const LIST_CMP = {
+    name: (a, b) => textCmp(a.name, b.name),
+    speed: (a, b) => { const va = validSog(a.sog), vb = validSog(b.sog); return va && vb ? b.sog - a.sog : va === vb ? 0 : va ? -1 : 1; },
+    age: (a, b) => { const ta = toMs(a.ts), tb = toMs(b.ts); return ta === tb ? 0 : ta > tb ? -1 : 1; },
+    type: (a, b) => textCmp(a.type, b.type) || textCmp(a.name, b.name),
+  };
+  function listRows(items, sort, limit = 100) {
+    const by = LIST_CMP[sort] || LIST_CMP.name, max = Math.max(0, limit);
+    const cmp = (a, b) => by(a, b) || (a.mmsi < b.mmsi ? -1 : a.mmsi > b.mmsi ? 1 : 0);
+    const list = Array.isArray(items) ? items : [], rows = [];
+    for (const x of list) {
+      let k = rows.length;
+      if (k >= max) {
+        if (!max || cmp(x, rows[max - 1]) >= 0) continue;
+        k = max - 1;
+      }
+      while (k > 0 && cmp(x, rows[k - 1]) < 0) { rows[k] = rows[k - 1]; k--; }
+      rows[k] = x;
+    }
+    return { rows, more: list.length - rows.length };
+  }
+  // Spostamento minimo { dx, dy } (px interi, per map.panBy: il punto finisce in pt − d) perché pt (punto del contenitore
+  // della mappa) resti a margin px dai bordi, sotto l'header (headerBottom) e sopra il pannello alto sheetH. Se fra header
+  // e pannello non c'è spazio, la nave va a metà di quello che resta. Dati non validi: nessuno spostamento.
+  function panToKeepVisible(pt, size, sheetH, headerBottom, margin = 24) {
+    if (!pt || !size || ![pt.x, pt.y, size.x, size.y].every(finite)) return { dx: 0, dy: 0 };
+    const sh = finite(sheetH) ? sheetH : 0, top = finite(headerBottom) ? headerBottom : 0;
+    const axis = (v, lo, hi) => (lo > hi ? v - (lo + hi) / 2 : v < lo ? v - lo : v > hi ? v - hi : 0);
+    const dx = Math.round(axis(pt.x, margin, size.x - margin)), dy = Math.round(axis(pt.y, top + margin, size.y - sh - margin));
+    return { dx: dx || 0, dy: dy || 0 };
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
-    norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine };
+    norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
+    sheetStops, snapStop, listRows, panToKeepVisible };
 });

@@ -248,6 +248,12 @@ nuovo la misura. Headless e senza GPU i numeri servono a confrontare due version
 | 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60 | 0.5 | 1 / 14.2 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 1.1 | 2.6 | 7.1 |
 | 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 0.7 / 0.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.4 | 5.1 |
 | 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 0.4 / 0.8 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.1 | 0.4 | 0.2 | 4 |
+| 2026-11-27 | punto 71 (pannello chiuso) (51cac37+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.7 | 0.1 | 12.4 / 12.4 | 0 (max 0) · 1 (max 62), 2 risposte | 0 / 0 | 0 | 3 | 53.2 |
+| 2026-11-27 | punto 71 (pannello chiuso) (51cac37+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.8 | 0.1 | 12.5 / 12.5 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 2 | 3.2 | 47.5 |
+| 2026-11-27 | punto 71 (pannello chiuso) (51cac37+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 2.9 / 2.9 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.5 | 12.9 |
+| 2026-11-27 | punto 71 (pannello chiuso) (51cac37+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60.1 | 0.5 | 1.7 / 4.8 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 3.3 | 1.1 | 8.1 |
+| 2026-11-27 | punto 71 (pannello chiuso) (51cac37+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.1 | 0.1 | 0.7 / 0.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.7 | 2.4 |
+| 2026-11-27 | punto 71 (pannello chiuso) (51cac37+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 1.6 | 0.5 / 1 | 0 (max 0) · 0 (max 0), 2 risposte | 1.8 / 39.9 | 0.5 | 0.2 | 3.3 |
 <!-- nuove righe della pagina sopra questa linea -->
 
 Nota (2026-11-27, dopo l'unione con il punto 12): a zoom 3 l'animatore non sposta nessun marker (meno di 0,5 px,
@@ -255,3 +261,29 @@ Nota (2026-11-27, dopo l'unione con il punto 12): a zoom 3 l'animatore non spost
 spenta (19-24 ms, più lento che accesa): la soglia «mondo p95 ≤ 12 ms» (12,2 e 13,6 ms) misura quel ridisegno, non il
 movimento. Anche la differenza di `loadLocations` a Rotterdam z9 cambia segno da una misura all'altra (+4,0, −2,4 ms).
 Una prova con `ANIM_MAX` 200 e `ANIM_MIN_MS` 50 dà gli stessi due scostamenti (12,8 ms; +2,3 ms): restano 500 e 16.
+
+Nota (2026-11-27, punto 71): le righe «punto 71 (pannello chiuso)» sono la pagina con il pannello dell'elenco chiuso
+(a 1280×800 l'elenco resta spento: a ogni giro si conta solo quante navi ci sono nella vista). Unico scostamento dalle
+soglie quello già noto del ridisegno dei dati arrivati a zoom 3 (12,5 ms, come 12,2 e 13,6 delle misure di prima).
+
+### Pannello con l'elenco (punto 71)
+
+Misura a mano (non c'è uno script) con le stesse navi sintetiche: `node tools/smoke-server.js 8942 --navi 30000` e
+agent-browser (Leaflet locale come in `tools/smoke-browser.sh`), vista mondo a zoom 3 (6000 marker, 3578 nella vista).
+
+- Ridisegno dell'elenco (`renderList`, durata in `sheet.stats.renderMs`): a 1280×800 con «Elenco» acceso, 30 chiamate
+  per ordinamento con l'elenco invariato (si calcola tutto ma non si riscrive il DOM) e 30 con il DOM riscritto
+  (`sheet.html = ''` prima di ogni chiamata). Soglia: < 8 ms.
+- Trascinamento: a 390×844, mouse giù sulla maniglia, 500 px in su in 60 passi (1 s) e 150 px in giù in 30 passi
+  (0,5 s), poi su; long task (`PerformanceObserver` «longtask») e intervalli fra i fotogrammi `requestAnimationFrame`.
+  Soglia: nessun long task > 50 ms. Lo smoke (`tools/smoke-browser.sh`, telefono) controlla di nuovo i long task durante
+  i suoi tre trascinamenti veri.
+
+| Data | Versione | Misura | Risultato |
+|---|---|---|---|
+| 2026-11-27 | punto 71 (51cac37+modifiche) | elenco per nome, 6000 marker | invariato p50 3,3 / p95 5,4 ms · riscritto p50 4,0 / p95 4,5 / max 4,6 ms |
+| 2026-11-27 | punto 71 (51cac37+modifiche) | elenco per velocità | invariato 1,7 / 2,4 ms · riscritto 2,7 / 5,4 / max 5,9 ms |
+| 2026-11-27 | punto 71 (51cac37+modifiche) | elenco per ultimo segnale | invariato 5,6 / 6,2 ms · riscritto 4,9 / 6,5 / max 7,3 ms |
+| 2026-11-27 | punto 71 (51cac37+modifiche) | elenco per tipo | invariato 3,4 / 4,5 ms · riscritto 2,7 / 3,2 / max 3,4 ms |
+| 2026-11-27 | punto 71 (51cac37+modifiche) | trascinamento 1,5 s a 390×844, 6000 marker | 59 fps, fotogramma p95 16,8 / max 16,8 ms, nessun long task (tre prove) |
+| 2026-11-27 | punto 71 (51cac37+modifiche) | smoke, tre trascinamenti veri (3,2 s) | nessun long task |

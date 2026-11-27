@@ -34,13 +34,17 @@ function startPage({ skewMs = 0, routes }) {
   const classes = new Set();
   const keydown = [];
   // elemento visibile = senza display:none (basta per la × e per il focus dopo la chiusura)
-  const document = { activeElement: null, getElementById: id => el(id),
+  // punto 71: querySelector('header'), documentElement (variabile --sheet-h) e getBoundingClientRect per il pannello
+  const document = { activeElement: null, getElementById: id => el(id), querySelector: sel => el(sel),
+    get documentElement() { return el('html'); },
     body: { classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c),
       toggle: (c, on = !classes.has(c)) => (on ? classes.add(c) : classes.delete(c), on) } },
     addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); } };
   document.activeElement = document.body;
   const el = id => {
-    if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
+    if (!elements.has(id)) elements.set(id, { id, style: Object.defineProperty({}, 'setProperty', { value(k, v) { this[k] = String(v); } }),
+      dataset: {}, textContent: '', innerHTML: '', open: true,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }),
       isConnected: true, addEventListener() {}, focus() { document.activeElement = this; },
       contains(x) { return x === this; },   // Esc nella legenda (punto 9): il focus è dentro #legend?
       // attributi ARIA della ricerca (punto 12: aria-expanded, aria-activedescendant)
@@ -69,7 +73,8 @@ function startPage({ skewMs = 0, routes }) {
   }
   const map = { setView() { return this; }, on() { return this; }, invalidateSize() {}, getZoom: () => 6,
     getCenter: () => ({ lat: 44, lng: 11 }),
-    getBounds: () => ({ pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }) };
+    getBounds: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45,
+      pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }) };
   const L = { map: () => map, tileLayer: () => ({ addTo() {} }), canvas: () => ({}), Util: { wrapNum: x => x },
     control: { zoom: () => ({ addTo() { return this; } }) },
     CircleMarker: { extend(proto) { class M extends FakeMarker {} Object.assign(M.prototype, proto); return M; } } };

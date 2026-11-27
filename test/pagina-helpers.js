@@ -39,9 +39,15 @@ async function until(fn, what, ms = 5000) {
 // non ha requestAnimationFrame e l'animazione resta spenta (marker all'ultimo segnale, come prima dei punti 13 e 42).
 // zoom: zoom iniziale della mappa finta (page.setZoom); bounds: area visibile {w, s, e, n} (getBounds, anche pad());
 // canvas: oggetto restituito da L.canvas() (default {}, senza _redraw). page.moves() conta le setLatLng dei marker.
+// Punto 71 (pannello con l'elenco): viewport = window.innerWidth/innerHeight (default: size); rects = getBoundingClientRect
+// iniziali per id (es. { header: { bottom: 96 } }), prima che parta la pagina; document.body.classList vero
+// (page.bodyClasses); document.documentElement e style.setProperty (variabili CSS, page.cssVar); el.querySelector e
+// el.contains per i figli [data-mmsi="N"] scritti in innerHTML (page.child; un innerHTML nuovo li scollega:
+// isConnected false); map.panBy registrato in page.map.pans; page.dispatch passa anche key e altri campi dell'evento.
 function startPage({ routes, config = {}, session = {}, local = {}, timeScale = TIME_SCALE, media = {},
   size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }),
-  manualTime = null, raf = manualTime != null, zoom = 6, bounds = { w: 10, s: 43, e: 12, n: 45 }, canvas = () => ({}) }) {
+  manualTime = null, raf = manualTime != null, zoom = 6, bounds = { w: 10, s: 43, e: 12, n: 45 }, canvas = () => ({}),
+  viewport = { w: size.x, h: size.y }, rects = {} }) {
   const realStart = Date.now();
   let manual = manualTime;
   const pageNow = () => (manual != null ? manual : realStart + (Date.now() - realStart) * timeScale);
@@ -51,21 +57,41 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const winListeners = new Map();   // eventi di window (per online)
   // listener di document (keydown di Esc): docListeners in ordine di registrazione, con capture
   const docListeners = [];
+  const bodyClasses = new Set();
   const document = { activeElement: null, hidden: false, getElementById: id => el(id), querySelector: sel => el(sel),
-    body: { classList: { add() {}, remove() {}, contains: () => false, toggle() {} } },
+    body: { classList: { add: c => bodyClasses.add(c), remove: c => bodyClasses.delete(c), contains: c => bodyClasses.has(c),
+      toggle: (c, on = !bodyClasses.has(c)) => (on ? bodyClasses.add(c) : bodyClasses.delete(c), on) } },
+    get documentElement() { return el('html'); },
     addEventListener(type, fn, opts) {
       if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn);
       docListeners.push({ type, fn, capture: opts === true || !!opts?.capture });
     } };
+  // style con setProperty/getPropertyValue (variabili CSS), metodi non enumerabili
+  const newStyle = () => Object.defineProperties({}, {
+    setProperty: { value(k, v) { this[k] = String(v); } }, getPropertyValue: { value(k) { return this[k] ?? ''; } },
+    removeProperty: { value(k) { delete this[k]; } } });
+  // figlio [data-mmsi="N"] di un elemento (riga dell'elenco del punto 71): uno per innerHTML scritto
+  const childOf = (parent, mmsi) => {
+    const key = parent.gen + ':' + mmsi;
+    if (!parent.children.has(key)) {
+      const gen = parent.gen;
+      parent.children.set(key, { parentEl: parent, dataset: { mmsi: String(mmsi) }, get isConnected() { return parent.gen === gen; },
+        getClientRects: () => [{}], focus() { document.activeElement = this; }, closest(sel) { return sel.includes('data-mmsi') ? this : null; } });
+    }
+    return parent.children.get(key);
+  };
   const el = id => {
     // listeners: gestori registrati con addEventListener (dispatch li chiama); attributes: setAttribute/getAttribute
-    if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true, value: '',
+    if (!elements.has(id)) elements.set(id, { id, style: newStyle(), dataset: {}, textContent: '', html: '', gen: 0, children: new Map(),
+      get innerHTML() { return this.html; }, set innerHTML(v) { this.html = String(v); this.gen++; this.children.clear(); },
+      open: true, value: '', hidden: false,
       isConnected: true, listeners: [], addEventListener(type, fn) { this.listeners.push({ type, fn }); },
       attributes: {}, setAttribute(k, v) { this.attributes[k] = String(v); }, getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; },
       removeAttribute(k) { delete this.attributes[k]; }, scrollIntoView() {},
       focus() { document.activeElement = this; }, getClientRects: () => [{}],
-      contains(x) { return x === this; },
-      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }) });
+      contains(x) { return x === this || (!!x && x.parentEl === this && x.isConnected); },
+      querySelector(sel) { const m = /\[data-mmsi="(\d+)"\]/.exec(sel); return m && this.html.includes(`data-mmsi="${m[1]}"`) ? childOf(this, m[1]) : null; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, ...rects[id] }) });
     return elements.get(id);
   };
   // tasto premuto con il focus su target (default document.activeElement): prima i listener con capture, poi gli altri,
@@ -94,7 +120,8 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const views = [];
   let zoomNow = zoom;
   const box = { getEast: () => bounds.e, getWest: () => bounds.w, getSouth: () => bounds.s, getNorth: () => bounds.n };
-  const map = { views, setView(...a) { views.push(a); return this; }, invalidateSize() {}, getZoom: () => zoomNow,
+  const map = { views, pans: [], setView(...a) { views.push(a); return this; }, panBy(...a) { this.pans.push(a); return this; },
+    invalidateSize() {}, getZoom: () => zoomNow,
     on(ev, fn) { for (const e of ev.split(' ')) mapHandlers.set(e, [...(mapHandlers.get(e) || []), fn]); return this; },
     fire(ev, data = {}) { for (const fn of mapHandlers.get(ev) || []) fn({ type: ev, target: map, ...data }); return this; },
     getCenter: () => ({ lat: 44, lng: 11 }),
@@ -195,7 +222,7 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     clearTimeout: id => { retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
     ResizeObserver: class { observe() {} }, matchMedia: q => ({ matches: !!media[q] }),
-    localStorage, navigator: {},
+    localStorage, navigator: {}, innerWidth: viewport.w, innerHeight: viewport.h,
     addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
   ctx.window = ctx;
@@ -213,7 +240,7 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
   const fire = type => { for (const fn of winListeners.get(type) || []) fn({ type }); };
   // evento sull'elemento id (es. 'click' o 'change' delegati su #legend): event è il resto dell'evento (target…)
-  const fireEl = (id, type, event = {}) => { for (const l of el(id).listeners) if (l.type === type) l.fn({ type, ...event }); };
+  const fireEl = (id, type, event = {}) => { for (const l of el(id).listeners) if (l.type === type) l.fn({ type, preventDefault() {}, ...event }); };
   // evento su un elemento (es. 'input' o 'keydown' sul campo di ricerca): chiama i gestori registrati, restituisce
   // l'evento (defaultPrevented) e i valori restituiti dai gestori (results, per aspettare quelli asincroni)
   const dispatch = (id, type, extra = {}) => {
@@ -221,7 +248,8 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     e.results = el(id).listeners.filter(l => l.type === type).map(l => l.fn(e));
     return e;
   };
-  return { ctx, el, get, requests, dispatch, stop, frame, rafPending: () => rafQueue.size, moves: () => moves,
+  const cssVar = name => el('html').style[name];
+  return { ctx, el, get, requests, dispatch, stop, bodyClasses, cssVar, child: childOf, frame, rafPending: () => rafQueue.size, moves: () => moves,
     setNow: t => { manual = t; }, advance: ms => { manual += ms; }, setZoom: z => { zoomNow = z; }, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };

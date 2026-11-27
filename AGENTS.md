@@ -81,6 +81,16 @@ Lavora su `main_claude` salvo indicazione diversa.
   `tools/smoke-server.js` fa avanzare le navi lungo la rotta a ogni ripetizione (`--navi N`: navi di `tools/carico.js`;
   test in `test/smoke-server.test.js`); misura nel browser con `tools/misura-pagina.sh` (tabella «Pagina» in
   `docs/prestazioni.md`; se le soglie non reggono `ANIM_MAX` 200 e `ANIM_MIN_MS` 50).
+- Pannello con l'elenco (punto 71): `#sheet` «Navi in quest'area». Telefono (≤ 640 px): sempre in basso a tre altezze
+  (`sheetStops`: chiuso 72 px con il conteggio, metà, aperto fin sotto l'header; `sheet.stop`, `--sheet-h` su `:root` per
+  scheda, attribuzione, toast e legenda); maniglia (`#sheet-handle`, e `#panel-handle` della scheda, che ha la stessa
+  altezza e si apre a metà): tocco/Invio/Spazio, frecce, trascinamento con pointer event e solo `transform` (`snapStop` sulla
+  velocità degli ultimi 100 ms). Chiudendo la scheda il pannello torna all'altezza di prima, con il focus sulla riga.
+  Computer: `#listbtn` «☰ Elenco» (`aria-pressed`, `body.list-open`) lo apre a destra, sotto la scheda. Righe (`listRows`,
+  al massimo 100, «e altre N») delle navi in mappa già filtrate nella vista, ordinate per nome/velocità/ultimo segnale/tipo
+  (`localStorage['boatradar:ordine']`), ridisegnate a ogni giro e `moveend` solo se visibili e cambiate. Riga scelta su
+  telefono: zoom almeno 11 e `panBy(panToKeepVisible(…))` (nave fra header e scheda, sopra l'attribuzione). Esc: popup,
+  risultati, scheda, pannello. Test in `test/pannello-logica.test.js` e `test/pagina-pannello.test.js`.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -186,7 +196,10 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   raggiungibili; punto 10), un clic vero su «Cargo» nella legenda che toglie LAGUNA PRIMA (247123450) e salva il filtro, che
   resta ricaricando, e un secondo clic che la riporta (riga ≥ 44 px a 390; punto 9), la ricerca «GEMELLA» scritta con tasti veri (2 righe con «2 navi con questo nome», freccia
   giù + Invio apre la scheda, Esc la chiude; punto 12), a zoom 14 che LAGUNA PRIMA avanzi senza mai tornare indietro e con
-  `#smooth` spento resti sull'ultimo fix (punti 13, 63, 42) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
+  `#smooth` spento resti sull'ultimo fix (punti 13, 63, 42), il pannello con l'elenco (punto 71: a 390 chiuso con il numero e
+  l'attribuzione visibile, trascinamenti veri chiuso → metà → aperto → chiuso senza long task, tocco, clic su una riga →
+  scheda a metà con la nave fra header e scheda, Esc; a 1280 «Elenco» non coperto dall'header, riga → scheda, Esc) e assenza
+  di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
   passi al secondo dopo due tentativi al primo, con «server di riserva (Render)» nella riga di stato, e che con il

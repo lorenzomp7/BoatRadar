@@ -6,7 +6,8 @@
 <title>BoatRadar</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  :root { --bg:#0f1720; --panel:#17212d; --line:#263444; --text:#e6edf3; --muted:#8b9bb0; --accent:#ffc83d; }
+  :root { --bg:#0f1720; --panel:#17212d; --line:#263444; --text:#e6edf3; --muted:#8b9bb0; --accent:#ffc83d;
+    --sheet-h:0px; }   /* --sheet-h: altezza del pannello in basso (punto 71, solo telefono; 0 su computer) */
   * { box-sizing:border-box; }
   html, body { height:100%; margin:0; font-family:system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
   #map { position:absolute; inset:0; background:#0b1118; }
@@ -93,16 +94,23 @@
   /* scheda aperta (desktop): l'header (z-index 1100) non si allarga sopra la scheda (destra 12 px + 340 px) e va
      a capo; prima con una riga di stato lunga copriva la × e il clic arrivava al pulsante VesselFinder */
   @media (min-width: 641px) {
-    body.panel-open:not(.vf) header { max-width:calc(100% - 56px - 352px - 8px); flex-wrap:wrap; }
-    body.panel-open:not(.vf) #status { flex-basis:100%; order:5; }   /* riga di stato sotto, come su telefono */
-    body.panel-open:not(.vf) #status-reset { order:6; }
-    body.panel-open:not(.vf) #status:has(+ #status-reset:not([hidden])) { flex-basis:calc(100% - 100px); }
+    /* punto 71: lo stesso con l'elenco aperto, che sta dove sta la scheda */
+    body.panel-open:not(.vf) header, body.list-open:not(.vf) header { max-width:calc(100% - 56px - 352px - 8px); flex-wrap:wrap; }
+    body.panel-open:not(.vf) #status, body.list-open:not(.vf) #status { flex-basis:100%; order:5; }   /* riga di stato sotto, come su telefono */
+    body.panel-open:not(.vf) #status-reset, body.list-open:not(.vf) #status-reset { order:6; }
+    body.panel-open:not(.vf) #status:has(+ #status-reset:not([hidden])),
+    body.list-open:not(.vf) #status:has(+ #status-reset:not([hidden])) { flex-basis:calc(100% - 100px); }
+    /* elenco delle navi in quest'area a destra, sotto la scheda (z-index 990 < 1000): chiudendo la scheda si torna lì */
+    body.list-open:not(.vf) #sheet { display:flex; position:absolute; top:12px; right:12px; bottom:12px; width:340px;
+      max-width:calc(100% - 24px); border-radius:12px; }
+    body.list-open:not(.vf) #sheet-body { padding-top:4px; }
   }
   .hbtn { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; white-space:nowrap; }
   .hbtn:hover { border-color:var(--accent); }
   #vf { position:absolute; inset:0; width:100%; height:100%; border:0; z-index:900; display:none; background:#0b1118; }
   body.vf #vf { display:block; }
-  body.vf #legend, body.vf #panel, body.vf #status, body.vf #status-reset, body.vf #q, body.vf #results { display:none !important; }
+  body.vf #legend, body.vf #panel, body.vf #status, body.vf #status-reset, body.vf #q, body.vf #results,
+  body.vf #sheet, body.vf #listbtn { display:none !important; }
   #panel .owner { display:block; width:100%; padding:12px; margin:8px 0 4px; border:0; border-radius:8px; cursor:pointer;
     background:var(--accent); color:#0f1720; font:600 14px system-ui, sans-serif; }
   #panel .owner:hover { filter:brightness(1.08); }
@@ -145,6 +153,28 @@
     background:var(--panel); border:1px solid var(--accent); border-radius:10px; padding:12px 16px; font-size:14px; display:none;
     box-shadow:0 6px 24px rgba(0,0,0,.4); }
   #toast b { color:var(--accent); font-size:18px; letter-spacing:.5px; user-select:all; }
+  /* punto 71: pannello con l'elenco delle navi in quest'area. Telefono: sempre in basso a tre altezze (--sheet-h; si
+     trascina dalla maniglia, solo con transform). Computer: a destra con il pulsante «Elenco» dell'header. */
+  #sheet { display:none; flex-direction:column; z-index:990; background:var(--panel); border:1px solid var(--line); }
+  #sheet-handle, #panel-handle { display:none; }
+  /* lineetta della maniglia: #8b9bb0 sul pannello 5,8:1 (≥ 3:1 per un componente) */
+  .grip { display:block; width:40px; height:4px; border-radius:2px; background:var(--muted); margin:0 auto; flex:none; }
+  #sheet-body { flex:1 1 auto; min-height:0; overflow:auto; padding:0 12px 12px; }
+  #list-count { margin:8px 0 0; font-size:13px; color:var(--text); }
+  .sheet-tools { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; padding:8px 0; font-size:13px; color:var(--muted); }
+  #list-sort { background:#0f1720; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:4px 6px; font:inherit; min-height:32px; }
+  #list-legend { margin-left:auto; font-size:13px; min-height:32px; }
+  #list { list-style:none; margin:0; padding:0; }
+  #list .row { display:block; width:100%; min-height:44px; margin:0 0 4px; padding:6px 10px; text-align:left; cursor:pointer;
+    background:#0f1720; border:1px solid var(--line); border-radius:8px; color:var(--text); font:inherit; font-size:13px; }
+  #list .row:hover { background:#1f2c3b; }
+  #list .row[aria-current="true"] { border-color:var(--accent); }   /* nave della scheda aperta */
+  #list .row small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+  #list .empty, #list-more { color:var(--muted); font-size:12.5px; padding:6px 2px; margin:0; line-height:1.4; }
+  #list .row:focus-visible, #sheet-handle:focus-visible, #panel-handle:focus-visible, #list-sort:focus-visible,
+  #listbtn:focus-visible, #list-legend:focus-visible {
+    outline:2px solid #7cc4ff; outline-offset:-2px; }
+  #listbtn[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
   @media (max-width: 640px) {
     header { left:56px; right:8px; flex-wrap:wrap; padding:6px 8px; gap:6px; }
     header b { font-size:15px; }
@@ -156,14 +186,34 @@
     .hbtn { padding:5px 8px; font-size:13px; }
     #results { width:100%; max-width:none; }
     #results div { min-height:44px; padding:8px 12px; }   /* righe toccabili da almeno 44 px */
-    #panel { top:auto; left:8px; right:8px; bottom:8px; width:auto; max-width:none; max-height:58vh; padding:14px; }
-    #legend { left:8px; bottom:36px; max-width:calc(100% - 16px); max-height:50vh; overflow:auto; padding:0 12px; }
+    /* punto 71: la scheda si sovrappone al pannello in basso con la stessa altezza (si apre a metà); la sua maniglia lascia
+       liberi i 52 px a destra della × */
+    #panel { top:auto; left:0; right:0; bottom:0; width:auto; max-width:none; height:var(--sheet-h); max-height:none;
+      padding:0 14px 14px; border-width:1px 0 0; border-radius:14px 14px 0 0; }
+    #close { top:0; right:4px; }
+    #sheet { display:flex; position:fixed; left:0; right:0; bottom:0; height:var(--sheet-h); border-width:1px 0 0;
+      border-radius:14px 14px 0 0; padding-bottom:env(safe-area-inset-bottom); box-shadow:0 -4px 18px rgba(0,0,0,.35); }
+    #sheet-handle, #panel-handle { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+      background:none; border:0; color:var(--text); font:inherit; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+    #sheet-handle { flex:none; width:100%; min-height:56px; padding:8px 12px; font-size:14px; }
+    #panel-handle { position:sticky; top:0; z-index:1; height:44px; width:calc(100% + 28px - 52px); margin:0 0 0 -14px;
+      padding:0 0 0 52px; background:var(--panel); }
+    #listbtn, #list-count { display:none; }
+    #list-sort, #list-legend { min-height:44px; }
+    /* attribuzione di OpenStreetMap e controlli in basso sopra il pannello (.leaflet-container davanti: più specifico del
+       CSS di Leaflet, che può arrivare dopo questo) */
+    .leaflet-container .leaflet-bottom { bottom:var(--sheet-h); }
+    /* sopra il pannello e sopra l'attribuzione (due righe, come prima a 36 px dal fondo); in altezza fino a 8 px sotto
+       l'header (alto fino a ~140 px: 36 + 140 + 8 = 184) */
+    #legend { left:8px; bottom:calc(var(--sheet-h) + 36px); max-width:calc(100% - 16px); max-height:calc(100% - var(--sheet-h) - 184px);
+      overflow:auto; padding:0 12px; }
+    body.sheet-full #legend { visibility:hidden; }   /* pannello aperto: la legenda non ha spazio (si riapre da «Legenda e filtri») */
     #legend summary { min-height:44px; line-height:44px; padding:0; }   /* bersaglio da almeno 44 px */
     /* titolo «Legenda e filtri» fisso in cima mentre la legenda scorre (copre anche il padding laterale) */
     #legend > summary { position:sticky; top:0; z-index:1; margin:0 -12px; padding:0 12px; background:var(--panel); }
     #legend[open] { padding-bottom:8px; }
     #legend .ltype, #legend .smooth, #filters label, #filters select, #f-reset { min-height:44px; }   /* righe e controlli da 44 px */
-    #toast { bottom:calc(58vh + 20px); }
+    #toast { bottom:calc(var(--sheet-h) + 12px); }
   }
 </style>
 </head>
@@ -179,6 +229,8 @@
   <span id="status">Caricamento…</span>
   <!-- punto 9: filtri che svuotano la mappa (« · nessuna nave con questi filtri»): un clic li toglie tutti -->
   <button type="button" id="status-reset" class="linkbtn" hidden>Mostra tutte</button>
+  <!-- punto 71: elenco delle navi in quest'area (solo computer; su telefono il pannello in basso c'è sempre) -->
+  <button type="button" id="listbtn" class="hbtn" aria-pressed="false" aria-controls="sheet">☰ Elenco</button>
   <button id="registries" class="hbtn" title="Registri per trovare proprietari e armatori">📚 Registri</button>
   <button id="mode" class="hbtn" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
@@ -218,7 +270,21 @@
     <button type="button" id="f-reset" class="hbtn">Mostra tutte</button>
   </details>
 </details>
-<aside id="panel"><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
+<!-- punto 71: navi in quest'area. Telefono: maniglia (tocco, frecce, trascinamento) a tre altezze; computer: a destra -->
+<section id="sheet" aria-label="Navi in quest'area">
+  <button type="button" id="sheet-handle" aria-controls="sheet-body" aria-expanded="false"><span class="grip" aria-hidden="true"></span><span><span class="sr-only">Elenco: </span><span id="sheet-count">Caricamento…</span></span></button>
+  <div id="sheet-body">
+    <p id="list-count"></p>
+    <div class="sheet-tools">
+      <label for="list-sort">Ordina per</label>
+      <select id="list-sort"></select>
+      <button type="button" id="list-legend" class="hbtn">Legenda e filtri</button>
+    </div>
+    <ul id="list" aria-label="Navi"></ul>
+    <p id="list-more" hidden></p>
+  </div>
+</section>
+<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-label="Altezza della scheda: a metà"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
@@ -253,7 +319,7 @@ const { TYPES, typeOf, typeName, validHeading, symbol, stopped, decodeEta, match
   apiList, createFailover, networkDown, validSog, pickRadius, canvasTolerance, nearbyMarkers, pickTouch, pickLimit, pickMaxHeight,
   NAV_GROUPS, parseFilter, filterKey, passesFilter, filterCount,
   KN, R_EARTH, ANIM_DELAY_MS, canEstimate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority,
-  pickAnimated, frameInterval, inViewBox, boundsBox } = AisLogic;
+  pickAnimated, frameInterval, inViewBox, boundsBox, sheetStops, snapStop, listRows, panToKeepVisible } = AisLogic;
 
 // Server dei dati mondiali (punto 86). Su GitHub Pages config.js scrive l'elenco in window.BOATRADAR_APIS (prima la VM
 // Oracle, poi Render che si addormenta); da server.js è lo stesso host ('/api'). Si passa al successivo solo quando la
@@ -505,6 +571,7 @@ function setFilter(f, none = {}) {
   const st = $('status').textContent;
   if (STATUS_HEAD.test(st)) $('status').textContent = st.replace(STATUS_HEAD, `${markers.size} in mappa${filtersNote()}`);
   syncStatusReset();
+  renderList();   // punto 71: conteggio ed elenco senza le navi appena tolte
   scheduleTick();
 }
 
@@ -991,6 +1058,7 @@ async function loadLocations() {
       + (fromBackup ? ' · ' + backupName(API_LIST.find(b => b.url === server)) : '');
   $('status').textContent = `${markers.size} in mappa${filtersNote(noneTypes, noneStatus)} · agg. ${new Date(clock.now()).toLocaleTimeString('it-IT')}${note}`;
   syncStatusReset();
+  renderList();   // punto 71: conteggio ed elenco a ogni giro (le righe solo se l'elenco si vede)
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
   // scheda aggiornata a ogni giro (età), anche senza marker: con le ultime properties dice «posizione scaduta»
@@ -1007,17 +1075,29 @@ function deselect() {
 // Scheda aperta e chiusa. La classe panel-open tiene l'header fuori dalla scheda su desktop (CSS). Alla chiusura il
 // focus torna dove la scheda era stata aperta (pulsante, mappa) se è ancora visibile, altrimenti sul campo di ricerca:
 // senza, chi usa la tastiera lo perderebbe sulla × nascosta.
+// Punto 71: su telefono la scheda si apre a metà sopra il pannello in basso (stessa altezza, sheet.stop) e chiudendola il
+// pannello torna all'altezza di prima; aperta da una riga dell'elenco che nel frattempo è stata ridisegnata, il focus va
+// alla riga nuova della stessa nave (data-mmsi).
 let opener = null;
+const focusable = x => !!x && x !== document.body && x.isConnected && x.getClientRects().length > 0;
 function openPanel() {
-  if ($('panel').style.display !== 'block') opener = document.activeElement;
+  const shown = $('panel').style.display === 'block';
+  if (!shown) { opener = document.activeElement; sheet.before = sheet.stop; }
   $('panel').style.display = 'block';
   document.body.classList.add('panel-open');
+  if (!shown && isPhone()) setStop(1); else applySheet();
+  // aperta da una riga dell'elenco, che ora sta sotto la scheda (inert): il focus passa alla × della scheda
+  if (!shown && $('sheet').contains(opener)) $('close').focus();
 }
 function closePanel() {
   deselect();
   $('panel').style.display = 'none';
   document.body.classList.remove('panel-open');
-  const back = opener && opener !== document.body && opener.isConnected && opener.getClientRects().length ? opener : $('q');
+  const before = sheet.before;
+  sheet.before = null;
+  if (isPhone() && before != null && before !== sheet.stop) setStop(before); else applySheet();
+  const mmsi = opener?.dataset?.mmsi, again = !focusable(opener) && mmsi ? $('list').querySelector?.(`[data-mmsi="${mmsi}"]`) : null;
+  const back = focusable(opener) ? opener : focusable(again) ? again : $('q');
   opener = null;
   back.focus();
 }
@@ -1031,6 +1111,7 @@ function select(mmsi, props) {
   if (m) { m.marker.setStyle(markerStyle(m.props, true)).bringToFront(); }
   render(mmsi);
   openPanel();
+  keepVisible(mmsi);   // punto 71: su telefono la nave non resta sotto la scheda
   // senza marker (nascosta dai filtri, fuori dalla vista, dalla ricerca): un giro subito la chiede con include= (la nave
   // selezionata non si filtra), invece di aspettare il prossimo aggiornamento
   if (!m) scheduleTick();
@@ -1071,16 +1152,22 @@ function pickRow(mmsi) {
 // Margini dell'autoPan: il popup resta sotto l'header e fuori dalla scheda aperta (a destra su desktop, in basso sul
 // telefono), così non si apre una riga coperta. maxHeight: altezza del contenuto che ci sta davvero fra il fondo
 // dell'header e la cima della scheda (telefono) o il fondo della mappa (pickMaxHeight, almeno ~3 righe: oltre scorre).
+// Punto 71: su telefono il pannello in basso c'è sempre (la sua cima, se la scheda è chiusa); su computer l'elenco aperto
+// sta a destra come la scheda.
 function pickPadding() {
   const m = $('map').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect();
   const top = Math.max(0, h.bottom - m.top), topLeft = [10, Math.max(10, Math.round(top) + 10)];
-  const height = m.bottom - m.top;
-  if ($('panel').style.display !== 'block') return { topLeft, bottomRight: [10, 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
-  const p = $('panel').getBoundingClientRect();
-  if (!matchMedia('(max-width: 640px)').matches)
-    return { topLeft, bottomRight: [Math.max(10, Math.round(m.right - p.left) + 10), 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
-  return { topLeft, bottomRight: [10, Math.max(10, Math.round(m.bottom - p.top) + 10)],
-    maxHeight: pickMaxHeight({ top, bottom: Math.min(height, p.top - m.top) }) };
+  const height = m.bottom - m.top, panel = $('panel').style.display === 'block';
+  if (isPhone()) {
+    const coverTop = panel ? $('panel').getBoundingClientRect().top : m.bottom - sheetHeight();
+    if (coverTop >= m.bottom) return { topLeft, bottomRight: [10, 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
+    return { topLeft, bottomRight: [10, Math.max(10, Math.round(m.bottom - coverTop) + 10)],
+      maxHeight: pickMaxHeight({ top, bottom: Math.min(height, coverTop - m.top) }) };
+  }
+  const side = panel ? $('panel') : document.body.classList.contains('list-open') ? $('sheet') : null;
+  if (!side) return { topLeft, bottomRight: [10, 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
+  const p = side.getBoundingClientRect();
+  return { topLeft, bottomRight: [Math.max(10, Math.round(m.right - p.left) + 10), 10], maxHeight: pickMaxHeight({ top, bottom: height }) };
 }
 
 // list: MMSI dalla più vicina; al massimo PICK_MAX_ROWS righe, poi «e altre N: avvicina la mappa» (zoom + 2 sul punto)
@@ -1242,11 +1329,16 @@ function showRegistries() {
 }
 
 $('close').onclick = closePanel;
-// Esc chiude la scheda; nel campo di ricerca con i risultati aperti chiude prima i risultati
+// Esc chiude la scheda; nel campo di ricerca con i risultati aperti chiude prima i risultati; senza scheda chiude il
+// pannello con l'elenco (punto 71: su telefono lo abbassa, su computer chiude l'elenco), con il focus sulla maniglia o su
+// «Elenco». Popup «N navi qui» e legenda hanno il loro Esc prima di questo (defaultPrevented).
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || e.defaultPrevented) return;
   if (e.target === $('q') && $('results').style.display === 'block') { hideResults(); return; }
-  if ($('panel').style.display === 'block' && !document.body.classList.contains('vf')) closePanel();
+  if (document.body.classList.contains('vf')) return;
+  if ($('panel').style.display === 'block') { closePanel(); return; }
+  if (isPhone() && sheet.stop > 0) { e.preventDefault(); setStop(0); $('sheet-handle').focus(); }
+  else if (!isPhone() && document.body.classList.contains('list-open')) { e.preventDefault(); setList(false); $('listbtn').focus(); }
 });
 
 // Proprietario: i registri non accettano ricerche da link, quindi copio IMO/MMSI, apro il registro
@@ -1383,6 +1475,7 @@ $('content').addEventListener('click', e => {
 // Seconda mappa: VesselFinder, centrata dove si trova la nostra (o sulla nave scelta)
 function setMode(vesselFinder, mmsi) {
   document.body.classList.toggle('vf', vesselFinder);
+  applySheet();   // punto 71: con VesselFinder niente pannello in basso (--sheet-h 0)
   $('mode').textContent = vesselFinder ? '⚓ Mappa BoatRadar' : '🌍 VesselFinder';
   $('mode').title = vesselFinder ? 'Torna alla mappa di BoatRadar' : 'Passa alla mappa di VesselFinder';
   if (!vesselFinder) return;
@@ -1396,6 +1489,199 @@ function setMode(vesselFinder, mmsi) {
 }
 $('mode').onclick = () => setMode(!document.body.classList.contains('vf'));
 $('registries').onclick = () => { setMode(false); showRegistries(); };
+
+// --- Pannello con l'elenco delle navi in quest'area (punto 71) -------------------------------------------------------
+// Telefono (≤ 640 px): #sheet sempre in basso a tre altezze (sheet.stops di sheetStops: chiuso con il conteggio, metà,
+// aperto fino sotto l'header), stato in sheet.stop e altezza in --sheet-h su :root (la usano scheda, attribuzione di
+// Leaflet, toast e legenda). Maniglia (#sheet-handle, e #panel-handle della scheda, che ha la stessa altezza): tocco,
+// Invio o Spazio chiuso→metà, metà→chiuso, aperto→metà; frecce su/giù; trascinamento con i pointer event (pointerdown:
+// altezza massima compensata con translateY; pointermove solo translateY; pointerup: snapStop sulla velocità degli ultimi
+// 100 ms e transizione di 200 ms, salvo prefers-reduced-motion). Computer: #sheet a destra con «Elenco» dell'header
+// (body.list-open), la scheda gli si sovrappone. Righe (listRows, al massimo LIST_MAX) delle navi in mappa (già filtrate,
+// punto 9) nella vista non allargata, alla posizione mostrata (punti 13, 42); ridisegnate a ogni giro e a ogni moveend
+// solo quando l'elenco si vede, e solo se cambiano (il focus resta sulla riga della stessa nave). Il conteggio sempre.
+const SORT_KEY = 'boatradar:ordine', LIST_MAX = 100, STOP_WORDS = ['chiusa', 'a metà', 'aperta'];
+const SORTS = { name: 'Nome', speed: 'Velocità', age: 'Ultimo segnale', type: 'Tipo' };
+const isPhone = () => matchMedia('(max-width: 640px)').matches;
+const sheet = { stop: 0, stops: sheetStops(844, 96), before: null, drag: null, html: '', noClickUntil: -Infinity, animTimer: null,
+  // renders/renderMs: righe ridisegnate e durata dell'ultimo calcolo dell'elenco (ms), per le misure (docs/prestazioni.md)
+  stats: { renders: 0, renderMs: 0, renderMsMax: 0 } };
+let sortKey = (() => { try { return localStorage.getItem(SORT_KEY); } catch { return null; } })();
+if (!SORTS[sortKey]) sortKey = 'name';
+$('list-sort').innerHTML = Object.entries(SORTS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+$('list-sort').value = sortKey;
+
+// altezza del pannello in basso adesso (px): 0 su computer e con VesselFinder
+const sheetHeight = () => (isPhone() && !document.body.classList.contains('vf') ? sheet.stops[sheet.stop] : 0);
+// l'elenco si vede: telefono da metà in su, computer con «Elenco»; mai sotto la scheda aperta
+const listVisible = () => (isPhone() ? sheet.stop >= 1 : document.body.classList.contains('list-open'))
+  && $('panel').style.display !== 'block' && !document.body.classList.contains('vf');
+
+// Altezze ricalcolate (rotazione, header che va a capo) mantenendo la tappa; stato e attributi allineati
+function applySheet() {
+  const phone = isPhone();
+  if (phone) sheet.stops = sheetStops(window.innerHeight, document.querySelector('header').getBoundingClientRect().bottom);
+  document.documentElement.style.setProperty('--sheet-h', sheetHeight() + 'px');
+  $('sheet-handle').setAttribute('aria-expanded', String(sheet.stop >= 1));
+  $('listbtn').setAttribute('aria-pressed', String(document.body.classList.contains('list-open')));
+  $('panel-handle').setAttribute('aria-label', `Altezza della scheda: ${STOP_WORDS[sheet.stop]}`);
+  $('sheet-body').hidden = phone && sheet.stop === 0 && !sheet.drag;   // da chiuso il contenuto non si raggiunge col Tab
+  $('sheet').inert = $('panel').style.display === 'block';   // sotto la scheda aperta: niente focus né clic
+  document.body.classList.toggle('sheet-full', phone && sheet.stop === 2);
+  renderList();
+}
+// elementi che si spostano insieme: il pannello e, se aperta, la scheda sopra
+const sheetEls = () => [$('sheet'), ...($('panel').style.display === 'block' ? [$('panel')] : [])];
+function sheetStyle(els, h, off, transition) {
+  for (const x of els) {
+    x.style.transition = transition;
+    x.style.height = h == null ? '' : h + 'px';
+    x.style.transform = off == null ? '' : `translateY(${off}px)`;
+  }
+}
+// Da fromH px (altezza mostrata adesso) all'altezza della tappa attuale, solo con transform: altezza fissa alla maggiore
+// delle due, translateY da una all'altra in 200 ms, poi di nuovo l'altezza di --sheet-h
+function animateSheet(fromH) {
+  clearTimeout(sheet.animTimer);
+  const els = sheetEls(), to = sheetHeight();
+  if (!isPhone() || fromH == null || fromH === to || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    sheetStyle(els, null, null, '');
+    return;
+  }
+  const H = Math.max(fromH, to);
+  sheetStyle(els, H, H - fromH, 'none');
+  els[0].getBoundingClientRect();   // posizione di partenza applicata prima della transizione
+  sheetStyle(els, H, H - to, 'transform 200ms ease-out');
+  sheet.animTimer = setTimeout(() => sheetStyle(sheetEls(), null, null, ''), 220);
+}
+// Nuova tappa (0 chiuso, 1 metà, 2 aperto); from: altezza mostrata adesso, se non è quella della tappa di prima
+function setStop(i, { from } = {}) {
+  const prev = sheetHeight();
+  sheet.stop = Math.max(0, Math.min(2, i));
+  applySheet();
+  animateSheet(from ?? prev);
+}
+const tapStop = () => setStop(sheet.stop === 1 ? 0 : 1);
+// Computer: elenco a destra acceso o spento (pulsante «Elenco», aria-pressed)
+function setList(on) {
+  document.body.classList.toggle('list-open', on);
+  applySheet();   // anche aria-pressed di «Elenco»
+}
+
+// Trascinamento della maniglia (solo telefono). Un tocco (puntatore mai spostato di 6 px, anche se tenuto giù a lungo:
+// chi preme piano non deve trascinare per sbaglio) lo fa il click che segue, come Invio e Spazio; dopo un trascinamento
+// il click si ignora (noClickUntil).
+function dragStart(e) {
+  if (!isPhone() || sheet.drag || (e.button != null && e.button !== 0)) return;
+  clearTimeout(sheet.animTimer);
+  const t = perfNow(), h = sheetHeight(), open = sheet.stops[2], els = sheetEls();
+  try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch { /* il puntatore è già andato */ }
+  sheet.drag = { id: e.pointerId, y0: e.clientY, h0: h, h, t0: t, samples: [{ t, y: e.clientY }], els, open, moved: false };
+  $('sheet-body').hidden = false;
+  sheetStyle(els, open, open - h, 'none');
+}
+function dragMove(e) {
+  const d = sheet.drag;
+  if (!d || e.pointerId !== d.id) return;
+  const t = perfNow();
+  d.samples.push({ t, y: e.clientY });
+  while (d.samples.length > 2 && t - d.samples[0].t > 100) d.samples.shift();
+  if (Math.abs(e.clientY - d.y0) >= 6) d.moved = true;
+  d.h = Math.max(sheet.stops[0], Math.min(d.open, d.h0 - (e.clientY - d.y0)));
+  const off = `translateY(${d.open - d.h}px)`;
+  for (const x of d.els) x.style.transform = off;
+}
+function dragEnd(e) {
+  const d = sheet.drag;
+  if (!d || e.pointerId !== d.id) return;
+  sheet.drag = null;
+  const t = perfNow();
+  if (e.type === 'pointerup' && !d.moved) { sheetStyle(d.els, null, null, ''); applySheet(); return; }
+  sheet.noClickUntil = t + 400;
+  const first = d.samples[0], v = e.type === 'pointerup' && t > first.t ? (first.y - e.clientY) / (t - first.t) : 0;
+  setStop(snapStop(d.h, v, sheet.stops), { from: d.h });
+}
+for (const id of ['sheet-handle', 'panel-handle']) {
+  const h = $(id);
+  h.addEventListener('click', () => { if (isPhone() && perfNow() >= sheet.noClickUntil) tapStop(); });
+  h.addEventListener('keydown', e => {
+    if (!isPhone() || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    e.preventDefault();
+    setStop(sheet.stop + (e.key === 'ArrowUp' ? 1 : -1));
+  });
+  h.addEventListener('pointerdown', dragStart);
+  h.addEventListener('pointermove', dragMove);
+  h.addEventListener('pointerup', dragEnd);
+  h.addEventListener('pointercancel', dragEnd);
+}
+$('listbtn').addEventListener('click', () => setList(!document.body.classList.contains('list-open')));
+window.addEventListener('resize', () => { if (!sheet.drag) applySheet(); });
+new ResizeObserver(() => { if (!sheet.drag) applySheet(); }).observe(document.querySelector('header'));
+
+// Conteggio (sempre) e righe (solo se l'elenco si vede). Navi in mappa nella vista non allargata, alla posizione mostrata.
+function renderList() {
+  const t0 = perfNow(), b = map.getBounds(), box = boundsBox(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
+  const items = [];
+  for (const [mmsi, m] of markers) {
+    const ll = m.marker.getLatLng();
+    if (!inViewBox(box, ll.lat, ll.lng)) continue;
+    const v = meta.get(mmsi);
+    items.push({ mmsi, name: v?.name, sog: m.props?.sog, ts: m.props?.timestampExternal, type: typeOf(v?.shipType).label, p: m.props });
+  }
+  const n = items.length;
+  const text = (n ? `${n} ${n === 1 ? 'nave' : 'navi'} in quest'area` : 'Nessuna nave in quest\'area')
+    + (worldTotal > markers.size ? ` · ${worldTotal} in tutto, avvicina per vederle tutte` : '');
+  if ($('sheet-count').textContent !== text) { $('sheet-count').textContent = text; $('list-count').textContent = text; }
+  if (!listVisible()) return;
+  const { rows, more } = listRows(items, sortKey, LIST_MAX), now = clock.now();
+  const html = !n ? '<li class="empty">Nessuna nave in quest\'area: sposta la mappa o cambia i filtri.</li>' : rows.map(r => {
+    const sog = validSog(r.sog) ? r.sog.toFixed(1).replace('.', ',') + ' kn' : 'velocità n.d.', age = ageWords(r.p, now);
+    return `<li><button type="button" class="row" data-mmsi="${r.mmsi}"${r.mmsi === selected ? ' aria-current="true"' : ''}>`
+      + `${ageDot(r.p, now)}<b>${esc(r.name || 'Senza nome')}</b><small>${esc(`${r.type} · ${sog}${age ? ' · ' + age : ''}`)}</small></button></li>`;
+  }).join('');
+  if (html !== sheet.html) {
+    const a = document.activeElement, keep = a && a !== $('list') && $('list').contains(a) ? a.dataset?.mmsi : null;
+    $('list').innerHTML = sheet.html = html;
+    if (keep) $('list').querySelector(`[data-mmsi="${keep}"]`)?.focus();
+    sheet.stats.renders++;
+  }
+  $('list-more').textContent = more ? `e altre ${more}: avvicina la mappa o usa i filtri` : '';
+  $('list-more').hidden = !more;
+  const ms = perfNow() - t0;
+  Object.assign(sheet.stats, { renderMs: ms, renderMsMax: Math.max(sheet.stats.renderMsMax, ms) });
+}
+map.on('moveend', () => renderList());
+$('list-sort').addEventListener('change', e => {
+  sortKey = SORTS[e.target.value] ? e.target.value : 'name';
+  try { localStorage.setItem(SORT_KEY, sortKey); } catch { /* vale solo in memoria */ }
+  renderList();
+});
+// Riga → scheda della nave; su telefono a metà, con zoom almeno 11 e la nave fra header e scheda (select → keepVisible)
+$('list').addEventListener('click', e => {
+  const mmsi = Number(e.target.closest?.('[data-mmsi]')?.dataset.mmsi), m = markers.get(mmsi);
+  if (!m) return;
+  if (isPhone() && map.getZoom() < 11) map.setView(m.marker.getLatLng(), 11, { animate: false });
+  select(mmsi);
+});
+// «Legenda e filtri»: apre la legenda con il focus sul titolo (da aperto il pannello scende a metà: la legenda è sopra)
+$('list-legend').addEventListener('click', () => {
+  if (isPhone() && sheet.stop === 2) setStop(1);
+  $('legend').open = true;
+  $('legend-sum').focus();
+});
+// Su telefono sposta la mappa del minimo perché la nave scelta (posizione mostrata, o quella del risultato di ricerca)
+// resti fra il fondo dell'header e la cima della scheda, sopra l'attribuzione di Leaflet (in basso a destra, sopra il
+// pannello: due righe su telefono)
+function keepVisible(mmsi) {
+  if (!isPhone()) return;
+  const ll = markers.get(mmsi)?.marker.getLatLng() || found.get(mmsi);
+  if (!ll) return;
+  const top = document.querySelector('header').getBoundingClientRect().bottom - $('map').getBoundingClientRect().top;
+  const attr = document.querySelector('.leaflet-bottom.leaflet-right')?.getBoundingClientRect().height || 0;
+  const d = panToKeepVisible(map.latLngToContainerPoint(ll), map.getSize(), sheetHeight() + attr, top);
+  if (d.dx || d.dy) map.panBy([d.dx, d.dy]);
+}
+applySheet();
 
 // --- Ricerca (punto 12) ---------------------------------------------------------------------------------------------
 // Ordine e punteggio come /api/search (normQuery, searchScore, compareSearch di ais-logic.js). La richiesta parte
