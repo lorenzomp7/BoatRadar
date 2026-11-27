@@ -6,7 +6,7 @@ name: GitHub Pages
 on:
   push:
     branches: [main]
-    paths: [boatradar.html, vesselfinder.html, public/**, tools/config-pages.js, .github/workflows/pages.yml]
+    paths: [boatradar.html, vesselfinder.html, public/**, vendor/**, tools/config-pages.js, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -37,6 +37,19 @@ jobs:
           grep -qF "src=\"public/ais-logic.js?v=${GITHUB_SHA}\"" _site/index.html || { echo "versione di ais-logic.js non applicata a index.html"; exit 1; }
           cp vesselfinder.html _site/
           mkdir -p _site/public && cp public/ais-logic.js _site/public/
+          # Leaflet 1.9.4 dalla repo (punto 85), con la versione del commit come ais-logic.js
+          mkdir -p _site/vendor/leaflet/images
+          cp vendor/leaflet/leaflet.js _site/vendor/leaflet/
+          cp vendor/leaflet/leaflet.css _site/vendor/leaflet/
+          cp vendor/leaflet/images/layers.png _site/vendor/leaflet/images/
+          cp vendor/leaflet/images/layers-2x.png _site/vendor/leaflet/images/
+          cp vendor/leaflet/images/marker-icon.png _site/vendor/leaflet/images/
+          cp vendor/leaflet/images/marker-icon-2x.png _site/vendor/leaflet/images/
+          cp vendor/leaflet/images/marker-shadow.png _site/vendor/leaflet/images/
+          sed -i "s|src=\"vendor/leaflet/leaflet.js\"|src=\"vendor/leaflet/leaflet.js?v=${GITHUB_SHA}\"|" _site/index.html
+          grep -qF "src=\"vendor/leaflet/leaflet.js?v=${GITHUB_SHA}\"" _site/index.html || { echo "versione di leaflet.js non applicata a index.html"; exit 1; }
+          sed -i "s|href=\"vendor/leaflet/leaflet.css\"|href=\"vendor/leaflet/leaflet.css?v=${GITHUB_SHA}\"|" _site/index.html
+          grep -qF "href=\"vendor/leaflet/leaflet.css?v=${GITHUB_SHA}\"" _site/index.html || { echo "versione di leaflet.css non applicata a index.html"; exit 1; }
           # elenco dei server (VM, poi Render); esce con errore se una variabile non è un nome di host
           node tools/config-pages.js > _site/config.js
           # versione di config.js legata all'esecuzione e al tentativo (anche «Re-run» cambia la versione):

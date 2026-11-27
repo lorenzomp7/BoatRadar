@@ -108,6 +108,15 @@ Lavora su `main_claude` salvo indicazione diversa.
   `prefers-reduced-motion`): sotto l'header, su telefono sopra la cima più alta di pannello, legenda e attribuzione, su
   computer a sinistra della scheda o dell'elenco (`rightInset`). Esc: popup, risultati, scheda, pannello. Test in
   `test/pannello-logica.test.js` e `test/pagina-pannello.test.js` (anche il trascinamento con pointer event finti).
+- `vendor/leaflet/` (punto 85): Leaflet 1.9.4 preso da `npm pack leaflet@1.9.4` (integrità controllata con
+  `npm view leaflet@1.9.4 dist.integrity`; licenza BSD-2-Clause in `LICENSE`): `leaflet.js`, `leaflet.css` e le 5
+  immagini di `images/`, file identici al pacchetto (SHA-256 di js e css fissati in `test/leaflet-locale.test.js`). La
+  pagina non carica niente da CDN (nessun `https://` in `<script src>`/`<link href>`); senza `window.L` la riga di stato
+  lo dice, come per `AisLogic`. `server.js` serve solo i file dell'elenco fisso `ASSETS` (`{url: [file, tipo, cache]}`;
+  `vendor/` con `public, max-age=86400`, il resto `no-store`; ogni altro percorso 404). Js e css nella `COPY` del
+  `Dockerfile`, le immagini con `COPY vendor/leaflet/images/`; `vendor/**` nei `paths` di `deploy-backend.yml`,
+  `browser.yml`, `pages.yml` e nel `buildFilter` di `render.yaml`; `pages.yml` li copia in `_site/vendor/leaflet/` e
+  aggiunge `?v=<commit>` a js e css. Per aggiornare Leaflet: stessi passi con la nuova versione e nuovi SHA nel test.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -224,8 +233,10 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   primo buono non chieda nulla al secondo; e che dal secondo, con il primo tornato e l'orologio 5 min avanti, la
   pagina provi il primo con la stessa vista e ci torni (punto 86). Esce con 1 al primo problema; screenshot in `diagnosi/smoke/`.
 - Pagina già pubblicata: `SMOKE_URL=https://... bash tools/smoke-browser.sh` (usa le navi vere).
-- Rete senza unpkg.com (alcune sessioni cloud): `SMOKE_LEAFLET_LOCAL=1` carica Leaflet 1.9.4 dal
-  registro npm. Senza tile la mappa resta scura: è normale.
+- Leaflet (punto 85): in ogni sessione del browser le richieste a `https://unpkg.com/**` sono bloccate
+  (`agent-browser network route … --abort`, `block_unpkg`) e la verifica controlla `L.version === '1.9.4'`, il CSS
+  applicato (`.leaflet-pane` con `position: absolute`) e nessuna richiesta a unpkg.com: la pagina usa solo
+  `vendor/leaflet/`. `SMOKE_LEAFLET_LOCAL` non serve più. Senza tile (rete limitata) la mappa resta scura: è normale.
 - In CI il workflow `Browser` la esegue quando cambiano pagina, server, fixture o la verifica.
 
 ## Prestazioni (flameox)

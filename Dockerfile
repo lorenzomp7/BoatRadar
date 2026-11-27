@@ -6,6 +6,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY server.js position-check.js sample.js boatradar.html vesselfinder.html ./
 COPY public/ais-logic.js ./public/
+# Leaflet 1.9.4 servito dalla repo (punto 85)
+COPY vendor/leaflet/leaflet.js vendor/leaflet/leaflet.css ./vendor/leaflet/
+COPY vendor/leaflet/images/ ./vendor/leaflet/images/
 USER node
 EXPOSE 8765
 CMD ["node", "server.js"]

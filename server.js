@@ -490,10 +490,11 @@ function search(text) {
 
 // File statico della repo: le intestazioni partono solo quando il file è aperto. Se non si può
 // leggere (mancante, permessi) risponde 500 e scrive il motivo nel log, senza far cadere il processo.
-function sendFile(res, file, type) {
+// cache: 'no-store' per pagina e moduli che cambiano a ogni commit; Leaflet (vendor/, versione fissa) un giorno.
+function sendFile(res, file, type, cache = 'no-store') {
   const stream = fs.createReadStream(path.join(__dirname, file));
   stream.on('open', () => {
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache });
     stream.pipe(res);
   });
   stream.on('error', err => {
@@ -503,6 +504,21 @@ function sendFile(res, file, type) {
     res.end('Errore del server');
   });
   res.on('close', () => stream.destroy());
+}
+
+// File statici serviti: elenco fisso url -> [file, tipo, cache]; nessun altro file della repo è raggiungibile
+// (niente percorsi costruiti dall'URL, quindi niente ../). Leaflet 1.9.4 (punto 85) è in vendor/leaflet/.
+const VENDOR_CACHE = 'public, max-age=86400';
+const ASSETS = {
+  '/': ['boatradar.html', 'text/html; charset=utf-8'],
+  '/boatradar.html': ['boatradar.html', 'text/html; charset=utf-8'],
+  '/vesselfinder.html': ['vesselfinder.html', 'text/html; charset=utf-8'],
+  '/public/ais-logic.js': ['public/ais-logic.js', 'text/javascript; charset=utf-8'],
+  '/vendor/leaflet/leaflet.js': ['vendor/leaflet/leaflet.js', 'text/javascript; charset=utf-8', VENDOR_CACHE],
+  '/vendor/leaflet/leaflet.css': ['vendor/leaflet/leaflet.css', 'text/css; charset=utf-8', VENDOR_CACHE],
+};
+for (const img of ['layers.png', 'layers-2x.png', 'marker-icon.png', 'marker-icon-2x.png', 'marker-shadow.png']) {
+  ASSETS['/vendor/leaflet/images/' + img] = ['vendor/leaflet/images/' + img, 'image/png', VENDOR_CACHE];
 }
 
 http.createServer((req, res) => {
@@ -519,11 +535,8 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end('// API sullo stesso server della pagina\n');
   }
-  // script della pagina: elenco fisso, nessun altro file di public/ è servito
-  const asset = { '/public/ais-logic.js': 'public/ais-logic.js' }[url];
-  if (asset) return sendFile(res, asset, 'text/javascript; charset=utf-8');
-  const page = { '/': 'boatradar.html', '/boatradar.html': 'boatradar.html', '/vesselfinder.html': 'vesselfinder.html' }[url];
-  if (page) return sendFile(res, page, 'text/html; charset=utf-8');
+  // pagine, script e Leaflet: solo l'elenco fisso ASSETS (Object.hasOwn: niente chiavi ereditate come /constructor)
+  if (Object.hasOwn(ASSETS, url)) return sendFile(res, ...ASSETS[url]);
   res.writeHead(404); res.end('Not found');
 }).listen(PORT, () => {
   console.log(`BoatRadar in ascolto sulla porta ${PORT}`);
