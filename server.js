@@ -10,7 +10,8 @@ const zlib = require('zlib');
 const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
 const { sampleByImportance, staticImportance } = require('./sample');
-const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter, norm, normQuery, scoreFields, insertTop } = require('./public/ais-logic');
+const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter, norm, normQuery, scoreFields, insertTop, cleanText, isIMO } = require('./public/ais-logic');
+const snapshot = require('./snapshot');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -46,6 +47,14 @@ const POSITIONS_CLEANUP_MS = envPositive('POSITIONS_CLEANUP_MS', 60000);
 // Ora in cui la posizione p smette di valere (scade quando now > expiresAt) e se vale ancora all'ora now
 const expiresAt = p => p.ts + retentionMs(p, LIMITS);
 const isLive = (p, now) => now <= expiresAt(p);
+// Dati statici fra un riavvio e l'altro (punto 22, snapshot.js): con SNAPSHOT_FILE (sulla VM /data/vessels.json.gz, un
+// volume Docker) il server li rilegge all'avvio (al massimo SNAPSHOT_RESTORE_MS, 5 s, prima di collegarsi comunque ad
+// aisstream), li salva ogni SNAPSHOT_INTERVAL_MS (10 min) e a SIGTERM/SIGINT, con un tetto di SNAPSHOT_EXIT_MS (8 s)
+// prima di uscire comunque. Senza destinazione (Render Free) parte vuoto come prima.
+const SNAPSHOT_STORE = snapshot.storeFromEnv(process.env);
+const SNAPSHOT_INTERVAL_MS = envPositive('SNAPSHOT_INTERVAL_MS', 600000);
+const SNAPSHOT_EXIT_MS = envPositive('SNAPSHOT_EXIT_MS', 8000);
+const SNAPSHOT_RESTORE_MS = envPositive('SNAPSHOT_RESTORE_MS', 5000);
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts, classA, staticScore }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
@@ -55,15 +64,20 @@ let dataVersion = 0;  // cresce a ogni cambio di navi o posizioni: dice se una r
 // compressione con aisstream: negotiated = permessage-deflate accettato all'apertura, confirmed = CompressionEnabled
 // della SubscriptionConfirmation (null finché non arriva). aisstream limita la banda delle connessioni non compresse.
 status.compression = null;
+// snapshot (punto 22): store = tipo di destinazione ('file' o null), restored = navi ripristinate all'avvio,
+// restoreError = problema del ripristino (resta fino al riavvio), poi dell'ultimo salvataggio riuscito ora (savedAt),
+// byte gzip, navi e durata; error = problema dell'ultimo salvataggio (null dopo uno riuscito). Mai percorsi.
+status.snapshot = { store: SNAPSHOT_STORE ? SNAPSHOT_STORE.kind : null, restored: 0, restoreError: null, savedAt: null, bytes: null,
+  vessels: null, ms: null, error: null };
 
 function readKey() {
   if (process.env.AISSTREAM_KEY) return process.env.AISSTREAM_KEY.trim();
   try { return fs.readFileSync(KEY_FILE, 'utf8').trim(); } catch { return ''; }
 }
 
-// Testo AIS: senza il riempimento (@) e i caratteri di controllo, spazi (anche interni) compattati e tolti ai lati. I nomi
-// AIS sono già maiuscoli: così di solito coincidono con norm() della ricerca (punto 12) e non serve altro
-const clean = s => typeof s === 'string' ? s.replace(/@/g, '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+// Testo AIS (cleanText) e IMO con la cifra di controllo (isIMO): in public/ais-logic.js, perché snapshot.js applica le
+// stesse regole al ripristino (punto 22)
+const clean = cleanText;
 
 // Dimensioni AIS: distanze dell'antenna da prua (A), poppa (B), sinistra (C) e dritta (D)
 function setDimensions(v, d) {
@@ -80,15 +94,6 @@ function etaOf(e) {
   const month = intIn(e?.Month, 1, 12), day = intIn(e?.Day, 1, 31);
   if (month === null || day === null) return null;
   return { month, day, hour: intIn(e.Hour, 0, 23), minute: intIn(e.Minute, 0, 59) };
-}
-
-// IMO: 7 cifre, l'ultima è la cifra di controllo (somma delle prime sei per 7, 6, 5, 4, 3, 2, modulo 10)
-function isIMO(n) {
-  if (!Number.isInteger(n) || n < 1000000 || n > 9999999) return false;
-  const d = String(n).split('').map(Number);
-  let sum = 0;
-  for (let i = 0; i < 6; i++) sum += d[i] * (7 - i);
-  return sum % 10 === d[6];
 }
 
 // Prua vera AIS (TrueHeading, 9 bit): 0-359 gradi; 511 = non disponibile, gli altri valori (es. 496) non sono una prua
@@ -493,10 +498,11 @@ function search(text) {
 
 // File statico della repo: le intestazioni partono solo quando il file è aperto. Se non si può
 // leggere (mancante, permessi) risponde 500 e scrive il motivo nel log, senza far cadere il processo.
-function sendFile(res, file, type) {
+// cache: 'no-store' per pagina e moduli che cambiano a ogni commit; Leaflet (vendor/, versione fissa) un giorno.
+function sendFile(res, file, type, cache = 'no-store') {
   const stream = fs.createReadStream(path.join(__dirname, file));
   stream.on('open', () => {
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache });
     stream.pipe(res);
   });
   stream.on('error', err => {
@@ -507,6 +513,92 @@ function sendFile(res, file, type) {
   });
   res.on('close', () => stream.destroy());
 }
+
+// File statici serviti: elenco fisso url -> [file, tipo, cache]; nessun altro file della repo è raggiungibile
+// (niente percorsi costruiti dall'URL, quindi niente ../). Leaflet 1.9.4 (punto 85) è in vendor/leaflet/.
+const VENDOR_CACHE = 'public, max-age=86400';
+const ASSETS = {
+  '/': ['boatradar.html', 'text/html; charset=utf-8'],
+  '/boatradar.html': ['boatradar.html', 'text/html; charset=utf-8'],
+  '/vesselfinder.html': ['vesselfinder.html', 'text/html; charset=utf-8'],
+  '/public/ais-logic.js': ['public/ais-logic.js', 'text/javascript; charset=utf-8'],
+  '/vendor/leaflet/leaflet.js': ['vendor/leaflet/leaflet.js', 'text/javascript; charset=utf-8', VENDOR_CACHE],
+  '/vendor/leaflet/leaflet.css': ['vendor/leaflet/leaflet.css', 'text/css; charset=utf-8', VENDOR_CACHE],
+};
+for (const img of ['layers.png', 'layers-2x.png', 'marker-icon.png', 'marker-icon-2x.png', 'marker-shadow.png']) {
+  ASSETS['/vendor/leaflet/images/' + img] = ['vendor/leaflet/images/' + img, 'image/png', VENDOR_CACHE];
+}
+
+// --- Dati statici fra un riavvio e l'altro (punto 22) ------------------------------------------------------------
+// Nei messaggi solo il codice dell'errore (ENOENT, EIO…) o il motivo di SnapshotFormatError: quelli di fs contengono il
+// percorso.
+const why = err => snapshot.isFormatError(err) ? err.message : err?.code || err?.name || 'errore';
+let restoreDone = false;   // prima della fine del ripristino niente salvataggi: sovrascriverebbero il file con meno navi
+// Lettura fallita per I/O (EIO, EACCES, non un file…): il file può essere buono e il disco in difficoltà, quindi non lo si
+// tocca e non si salva più fino al riavvio (un salvataggio lo sostituirebbe con le sole navi arrivate da questo avvio).
+// Lo dice restoreError in /api/status. Un file non valido (SnapshotFormatError) invece si rinomina .bad e si riparte.
+let saveBlocked = false;
+async function restoreSnapshot() {
+  try {
+    const buf = await SNAPSHOT_STORE.load();
+    if (!buf) return;
+    // a blocchi, come il salvataggio: il ciclo degli eventi resta libero (richieste e, oltre il tetto, aisstream)
+    const list = await snapshot.restoreBuffer(buf);
+    // indexNames: nomi della ricerca normalizzati; staticScore se nel frattempo è arrivata una posizione
+    const n = await snapshot.mergeBatched(vessels, list, (mmsi, v) => {
+      indexNames(mmsi, v);
+      const cur = positions.get(mmsi);
+      if (cur) cur.staticScore = staticImportance(v);
+    });
+    if (n) dataVersion++;   // risposte in cache di /api/locations (nomi, tipi) non più attuali
+    status.snapshot.restored = n;
+    console.log(`dati statici: ${n} navi ripristinate`);
+  } catch (err) {
+    if (snapshot.isFormatError(err)) {
+      let moved = true;
+      try { await SNAPSHOT_STORE.quarantine(); } catch (e) { moved = false; console.error('dati statici: file non rinominato:', why(e)); }
+      status.snapshot.restoreError = `file non valido (${why(err)}), ${moved ? 'rinominato .bad' : 'non rinominato'}: si riparte vuoti`;
+    } else {
+      saveBlocked = true;
+      status.snapshot.restoreError = `lettura non riuscita (${why(err)}): file lasciato com'è, nessun salvataggio fino al riavvio`;
+    }
+    console.error('dati statici: ' + status.snapshot.restoreError);
+  } finally {
+    restoreDone = true;
+  }
+}
+
+let saving = null;   // salvataggio in corso: mai due insieme
+function saveSnapshot() {
+  if (!SNAPSHOT_STORE || !restoreDone || saveBlocked) return Promise.resolve();
+  if (saving) return saving;
+  saving = (async () => {
+    const t0 = Date.now(), stats = {};
+    try {
+      const buf = await snapshot.encode(snapshot.serialize(vessels, { now: t0, stats }));
+      await SNAPSHOT_STORE.save(buf);
+      Object.assign(status.snapshot, { savedAt: t0, bytes: buf.length, vessels: stats.vessels, ms: Date.now() - t0, error: null });
+    } catch (err) {
+      status.snapshot.error = `salvataggio non riuscito (${why(err)})`;
+      console.error('dati statici: salvataggio non riuscito:', why(err));
+    }
+  })().finally(() => { saving = null; });
+  return saving;
+}
+
+// SIGTERM (docker stop, Render) e SIGINT (Ctrl+C): senza destinazione, con il ripristino in corso o con i salvataggi
+// bloccati si esce subito; altrimenti un ultimo salvataggio (dopo quello eventualmente in corso), al massimo
+// SNAPSHOT_EXIT_MS, poi l'uscita. Un secondo segnale esce subito.
+let exiting = false;
+function onSignal(sig) {
+  if (exiting || !SNAPSHOT_STORE || !restoreDone || saveBlocked) process.exit(0);
+  exiting = true;
+  console.log(`${sig}: salvo i dati statici prima di uscire`);
+  setTimeout(() => { console.error('dati statici: salvataggio troppo lungo, esco senza aspettarlo'); process.exit(0); }, SNAPSHOT_EXIT_MS).unref();
+  (saving || Promise.resolve()).then(saveSnapshot).then(() => process.exit(0));
+}
+process.on('SIGTERM', onSignal);
+process.on('SIGINT', onSignal);
 
 http.createServer((req, res) => {
   const { pathname: url, searchParams: query } = new URL(req.url, 'http://localhost');
@@ -522,13 +614,20 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end('// API sullo stesso server della pagina\n');
   }
-  // script della pagina: elenco fisso, nessun altro file di public/ è servito
-  const asset = { '/public/ais-logic.js': 'public/ais-logic.js' }[url];
-  if (asset) return sendFile(res, asset, 'text/javascript; charset=utf-8');
-  const page = { '/': 'boatradar.html', '/boatradar.html': 'boatradar.html', '/vesselfinder.html': 'vesselfinder.html' }[url];
-  if (page) return sendFile(res, page, 'text/html; charset=utf-8');
+  // pagine, script e Leaflet: solo l'elenco fisso ASSETS (Object.hasOwn: niente chiavi ereditate come /constructor)
+  if (Object.hasOwn(ASSETS, url)) return sendFile(res, ...ASSETS[url]);
   res.writeHead(404); res.end('Not found');
 }).listen(PORT, () => {
   console.log(`BoatRadar in ascolto sulla porta ${PORT}`);
-  connect();
+  if (!SNAPSHOT_STORE) { restoreDone = true; return connect(); }
+  // prima i dati statici salvati (al massimo SNAPSHOT_RESTORE_MS), poi aisstream e i salvataggi periodici
+  const cap = new Promise(resolve => setTimeout(resolve, SNAPSHOT_RESTORE_MS, 'tetto').unref());
+  Promise.race([restoreSnapshot(), cap]).then(r => {
+    if (r === 'tetto') console.log(`dati statici: ripristino oltre ${SNAPSHOT_RESTORE_MS} ms, mi collego ad aisstream intanto`);
+    connect();
+    setInterval(saveSnapshot, SNAPSHOT_INTERVAL_MS).unref();
+  });
 });
+
+// per tools/carico.js --snapshot, che carica server.js nello stesso processo e misura un salvataggio
+module.exports = { saveSnapshot };

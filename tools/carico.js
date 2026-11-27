@@ -5,18 +5,23 @@
 // `node --cpu-prof` / `--heap-prof` (e flameox, che li usa) profilano proprio server.js.
 //
 //   node tools/carico.js [--navi 30000] [--richieste 100] [--json risultato.json] [--registra "etichetta"]
-//                        [--filtro "types=tanker"] [--cerca "NAVE 1"]
+//                        [--filtro "types=tanker"] [--cerca "NAVE 1"] [--snapshot]
 //
 // --filtro aggiunge una terza misura: la vista mondo con quei parametri di filtro (punto 9), solo stampata e nel JSON
 // (la riga di --registra resta quella delle viste senza filtro). --cerca misura allo stesso modo /api/search con quel testo
 // (punto 12: punteggio di tutte le navi e ordinamento delle corrispondenze; i nomi sintetici sono «NAVE <n>»).
+// --snapshot (punto 22) avvia server.js con SNAPSHOT_FILE in una cartella temporanea e, dopo le viste, misura un
+// salvataggio dei dati statici (saveSnapshot di server.js) e il ripristino dello stesso file (restoreBuffer e
+// mergeBatched di snapshot.js, come all'avvio): ms, blocco massimo del ciclo degli eventi (monitorEventLoopDelay) e KB gzip.
 // --registra aggiunge una riga alla tabella di docs/prestazioni.md. Le navi sono generate con un seme
 // fisso: due misure con gli stessi parametri usano gli stessi dati. Procedura in docs/prestazioni.md.
 'use strict';
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
+const os = require('node:os');
 const path = require('node:path');
+const { monitorEventLoopDelay } = require('node:perf_hooks');
 const { WebSocketServer } = require('ws');
 
 const ROOT = path.join(__dirname, '..');
@@ -32,10 +37,11 @@ const WORLD_BBOX = '-180,-90,180,90';                  // vista mondo, come la p
 const TYPES = [71, 70, 70, 84, 80, 60, 30, 37, 52, 0];
 
 function args(argv) {
-  const o = { navi: 30000, richieste: 100, json: null, registra: null, filtro: null, cerca: null };
+  const o = { navi: 30000, richieste: 100, json: null, registra: null, filtro: null, cerca: null, snapshot: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i].replace(/^--/, '');
     if (!(k in o)) throw new Error(`opzione sconosciuta: ${argv[i]}`);
+    if (k === 'snapshot') { o.snapshot = true; continue; }   // senza valore
     o[k] = ['navi', 'richieste'].includes(k) ? Number(argv[++i]) : argv[++i];
   }
   if (!(o.navi > 0) || !(o.richieste > 0)) throw new Error('--navi e --richieste devono essere numeri positivi');
@@ -121,6 +127,29 @@ async function searchTimes(port, text, n) {
   return { risultati: list.length, kbGzip: round(gz / 1024), msMediana: round(percentile(times, 0.5)), msP95: round(percentile(times, 0.95)) };
 }
 
+// Blocco massimo del ciclo degli eventi durante fn (ms, risoluzione 10 ms) e durata di fn
+async function measureBlocking(fn) {
+  global.gc?.();   // con --expose-gc la raccolta dei rifiuti delle misure precedenti non cade dentro questa
+  const h = monitorEventLoopDelay({ resolution: 10 });
+  h.enable();
+  const t0 = process.hrtime.bigint();
+  const value = await fn();
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  await new Promise(r => setTimeout(r, 30));   // l'ultimo campione del monitor
+  h.disable();
+  return { value, ms: round(ms), maxBlockMs: round(Math.max(0, h.max / 1e6 - 10)) };
+}
+
+// Punto 22: un salvataggio dei dati statici di server.js e il ripristino dello stesso file come all'avvio
+async function snapshotTimes(server, file) {
+  const snap = require(path.join(ROOT, 'snapshot.js'));
+  const save = await measureBlocking(() => server.saveSnapshot());
+  const buf = fs.readFileSync(file);
+  const restore = await measureBlocking(async () => snap.mergeBatched(new Map(), await snap.restoreBuffer(buf), () => {}));
+  return { navi: restore.value, kbGzip: round(buf.length / 1024),
+    salvataggio: { ms: save.ms, bloccoMaxMs: save.maxBlockMs }, ripristino: { ms: restore.ms, bloccoMaxMs: restore.maxBlockMs } };
+}
+
 function appendRow(label, res) {
   const file = path.join(ROOT, 'docs', 'prestazioni.md');
   const text = fs.readFileSync(file, 'utf8');
@@ -141,10 +170,14 @@ async function main(argv) {
   Object.assign(process.env, { PORT: String(port), AISSTREAM_KEY: 'chiave-di-carico',
     AISSTREAM_URL: `ws://127.0.0.1:${fake.address().port}`, RENDER_EXTERNAL_URL: '' });
   delete process.env.NODE_USE_ENV_PROXY;
+  // senza --snapshot nessuna destinazione, come prima del punto 22 (anche se l'ambiente ha SNAPSHOT_FILE o altre SNAPSHOT_*)
+  for (const k of Object.keys(process.env)) if (/^SNAPSHOT_/i.test(k)) delete process.env[k];
+  const snapDir = o.snapshot ? fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-carico-')) : null;
+  if (snapDir) Object.assign(process.env, { SNAPSHOT_FILE: path.join(snapDir, 'vessels.json.gz'), SNAPSHOT_INTERVAL_MS: '3600000' });
 
   const subscribed = new Promise(resolve => fake.on('connection', ws => ws.once('message', () => resolve(ws))));
   const log = console.log; console.log = () => {};      // i messaggi di server.js non servono qui
-  require(path.join(ROOT, 'server.js'));
+  const server = require(path.join(ROOT, 'server.js'));
   const ws = await subscribed;
 
   global.gc?.();
@@ -172,6 +205,9 @@ async function main(argv) {
   };
   if (o.filtro) res.mondoFiltrata = { filtro: o.filtro, ...await view(port, `${WORLD_BBOX}&${o.filtro}`, o.richieste) };
   if (o.cerca) res.ricerca = { testo: o.cerca, ...await searchTimes(port, o.cerca, o.richieste) };
+  if (snapDir) {
+    try { res.snapshot = await snapshotTimes(server, process.env.SNAPSHOT_FILE); } finally { fs.rmSync(snapDir, { recursive: true, force: true }); }
+  }
   console.log = log;
   const w = res.mondo, p = res.porto;
   console.log([
@@ -185,6 +221,9 @@ async function main(argv) {
     `${f.msMediana} ms mediana, ${f.msP95} ms p95`);
   const c = res.ricerca;
   if (c) console.log(`Ricerca «${c.testo}»: ${c.risultati} risultati, ${c.kbGzip} KB gzip, ${c.msMediana} ms mediana, ${c.msP95} ms p95`);
+  const sn = res.snapshot;
+  if (sn) console.log(`Snapshot: ${sn.navi} navi, ${sn.kbGzip} KB gzip · salvataggio ${sn.salvataggio.ms} ms ` +
+    `(blocco massimo ${sn.salvataggio.bloccoMaxMs} ms) · ripristino ${sn.ripristino.ms} ms (blocco massimo ${sn.ripristino.bloccoMaxMs} ms)`);
   if (o.json) fs.writeFileSync(o.json, JSON.stringify(res, null, 1) + '\n');
   if (o.registra) { appendRow(o.registra, res); console.log('Riga aggiunta a docs/prestazioni.md'); }
   return res;

@@ -25,17 +25,20 @@ async function waitFor(fn, what, ms = 5000) {
 }
 
 // Avvia server.js contro un finto aisstream. env si aggiunge a quello del processo; le variabili
-// di proxy dell'ambiente vengono tolte, così i test non dipendono dalla macchina che li esegue.
+// di proxy e quelle dello snapshot (SNAPSHOT_*, punto 22) dell'ambiente vengono tolte, così i test non dipendono dalla
+// macchina che li esegue e non sovrascrivono lo snapshot dello sviluppatore: chi le vuole le passa in env.
 // aisOptions va al finto aisstream (es. { perMessageDeflate: true } per accettare la compressione).
 // cwd: cartella con il server.js da avviare (predefinita la repo; serve per provare file mancanti).
-async function startServer(env = {}, aisOptions = {}, { cwd = ROOT } = {}) {
+// subscribe: false = non aspetta la sottoscrizione al finto aisstream (es. ripristino dello snapshot rallentato);
+// la si aspetta poi con `await s.subscribed`.
+async function startServer(env = {}, aisOptions = {}, { cwd = ROOT, subscribe = true } = {}) {
   const fakeAis = new WebSocketServer({ port: 0, ...aisOptions });
   const connected = new Promise(resolve => fakeAis.on('connection', ws => {
     ws.once('message', data => resolve({ socket: ws, subscription: JSON.parse(data.toString()) }));
   }));
   const port = await freePort();
   const base = { ...process.env };
-  for (const k of Object.keys(base)) if (/^(https?|no|all)_proxy$|^NODE_USE_ENV_PROXY$/i.test(k)) delete base[k];
+  for (const k of Object.keys(base)) if (/^(https?|no|all)_proxy$|^NODE_USE_ENV_PROXY$|^SNAPSHOT_/i.test(k)) delete base[k];
   const child = spawn(process.execPath, ['server.js'], {
     cwd,
     env: { ...base, PORT: String(port), AISSTREAM_KEY: 'chiave-di-test',
@@ -65,10 +68,13 @@ async function startServer(env = {}, aisOptions = {}, { cwd = ROOT } = {}) {
   // se l'avvio fallisce, chiudo figlio e finto aisstream: altrimenti npm test resterebbe appeso
   try {
     await waitFor(() => get('/api/status').then(() => true, () => false), 'server in ascolto');
+    const subscribed = connected.then(r => Object.assign(s, r));
+    const s = { fakeAis, port, request, get, getJson, log: () => log, stop, child, exited, subscribed };
+    if (!subscribe) return s;
     const timeout = new Promise((_, reject) => setTimeout(() =>
       reject(new Error('timeout in attesa di: sottoscrizione al finto aisstream\n' + log)), 5000).unref());
-    const { socket, subscription } = await Promise.race([connected, timeout]);
-    return { fakeAis, socket, subscription, port, request, get, getJson, log: () => log, stop };
+    await Promise.race([subscribed, timeout]);
+    return s;
   } catch (err) {
     await stop();
     throw err;
