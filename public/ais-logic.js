@@ -843,6 +843,19 @@
     return (typeof base === 'string' ? base : '') + (ok ? `?mmsi=${mmsi}${follow ? '&segui=1' : ''}` : '') + viewHash(view);
   }
 
+  // Punto 24: «Segui». Spostamento { dx, dy } (px interi, per map.panBy) che riporta la nave pt al centro dell'area libera
+  // free = { left, top, right, bottom } (punti del contenitore della mappa, senza header, pannello o scheda), solo se è
+  // uscita dalla zona centrale: il rettangolo rientrato di margin × larghezza (e altezza) per lato. margin 0,5 = la nave si
+  // centra sempre. Area vuota (pannello aperto fin sotto l'header): zona vuota, la nave va a metà. Dati non validi: 0.
+  function followPan(pt, free, { margin = 0.25 } = {}) {
+    if (!pt || !free || ![pt.x, pt.y, free.left, free.top, free.right, free.bottom].every(finite)) return { dx: 0, dy: 0 };
+    const k = finite(margin) ? Math.max(0, Math.min(0.5, margin)) : 0.25;
+    const inside = (v, a, b) => { const w = b - a, lo = a + w * k, hi = b - w * k; return lo <= hi && v >= lo && v <= hi; };
+    if (inside(pt.x, free.left, free.right) && inside(pt.y, free.top, free.bottom)) return { dx: 0, dy: 0 };
+    const dx = Math.round(pt.x - (free.left + free.right) / 2), dy = Math.round(pt.y - (free.top + free.bottom) / 2);
+    return { dx: dx || 0, dy: dy || 0 };
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
@@ -851,5 +864,5 @@
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
     norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
     sheetStops, snapStop, listRows, panToKeepVisible,
-    parseLink, viewHash, linkUrl };
+    parseLink, viewHash, linkUrl, followPan };
 });

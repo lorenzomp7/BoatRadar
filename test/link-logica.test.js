@@ -1,4 +1,4 @@
-// Punti 25 e 24: funzioni pure dei link condivisibili (parseLink, viewHash, linkUrl) in
+// Punti 25 e 24: funzioni pure dei link condivisibili (parseLink, viewHash, linkUrl) e di «Segui» (followPan) in
 // public/ais-logic.js. Formato del link: ?mmsi=…&segui=1#lat,lon,zoom. Il comportamento nella pagina è in
 // test/pagina-link.test.js e test/pagina-segui.test.js.
 const { test } = require('node:test');
@@ -89,4 +89,39 @@ test('linkUrl: percorso, ?mmsi=…&segui=1 e #vista; andata e ritorno con parseL
     const url = AL.linkUrl('/p', link), [path, hash = ''] = url.split('#'), search = path.slice(2);
     assert.deepEqual(AL.parseLink(search, hash ? '#' + hash : ''), link, url);
   }
+});
+
+// Area libera della mappa: sotto l'header (top 96), sopra il pannello (bottom 422) su un telefono 390 × 844
+const PHONE_FREE = { left: 0, top: 96, right: 390, bottom: 422 };
+
+test('followPan: nave nella zona centrale (metà centrale dell\'area libera) → nessuno spostamento', () => {
+  // centro 195, 259; zona x 97,5…292,5, y 177,5…340,5
+  assert.deepEqual(AL.followPan({ x: 195, y: 259 }, PHONE_FREE), { dx: 0, dy: 0 });
+  assert.deepEqual(AL.followPan({ x: 100, y: 180 }, PHONE_FREE), { dx: 0, dy: 0 });
+  assert.deepEqual(AL.followPan({ x: 292, y: 340 }, PHONE_FREE), { dx: 0, dy: 0 });
+});
+
+test('followPan: fuori dalla zona → lo spostamento che la riporta al centro dell\'area libera', () => {
+  assert.deepEqual(AL.followPan({ x: 195, y: 360 }, PHONE_FREE), { dx: 0, dy: 101 });
+  assert.deepEqual(AL.followPan({ x: 50, y: 259 }, PHONE_FREE), { dx: -145, dy: 0 });
+  // sotto il pannello (coperta): torna al centro dell'area libera, non della mappa
+  assert.deepEqual(AL.followPan({ x: 300, y: 700 }, PHONE_FREE), { dx: 105, dy: 441 });
+  // sotto l'header
+  assert.deepEqual(AL.followPan({ x: 195, y: 50 }, PHONE_FREE), { dx: 0, dy: -209 });
+  // computer: scheda a destra da 928 px (1280 − 12 − 340), header fino a 60
+  assert.deepEqual(AL.followPan({ x: 1000, y: 400 }, { left: 0, top: 60, right: 928, bottom: 800 }), { dx: 536, dy: -30 });
+});
+
+test('followPan: margin', () => {
+  assert.deepEqual(AL.followPan({ x: 100, y: 259 }, PHONE_FREE, { margin: 0.4 }), { dx: -95, dy: 0 });
+  // margin 0,5: zona ridotta al centro, la nave si centra sempre (per esempio premendo «Segui»)
+  assert.deepEqual(AL.followPan({ x: 196, y: 259 }, PHONE_FREE, { margin: 0.5 }), { dx: 1, dy: 0 });
+  assert.deepEqual(AL.followPan({ x: 195, y: 259 }, PHONE_FREE, { margin: 0.5 }), { dx: 0, dy: 0 });
+});
+
+test('followPan: area vuota (pannello aperto fin sotto l\'header) o dati non validi', () => {
+  // area con altezza negativa: il centro è a metà fra le due cime
+  assert.deepEqual(AL.followPan({ x: 195, y: 700 }, { left: 0, top: 120, right: 390, bottom: 80 }), { dx: 0, dy: 600 });
+  for (const [pt, free] of [[null, PHONE_FREE], [{ x: NaN, y: 1 }, PHONE_FREE], [{ x: 1, y: 1 }, null], [{ x: 1, y: 1 }, { left: 0, top: 0 }]])
+    assert.deepEqual(AL.followPan(pt, free), { dx: 0, dy: 0 }, JSON.stringify([pt, free]));
 });

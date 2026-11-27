@@ -30,9 +30,11 @@
 #      coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: distanza dal primo fix mai in calo, nave
 #      in movimento, stima entro il suo limite; #smooth spento con un clic vero sulla sua riga (≥ 44 px a 390) e la nave
 #      resta esattamente sull'ultimo fix;
-#   3d. (solo con il server locale, punto 25, vedi link_check) ?mmsi=247123450#45.4312,12.3355,14 apra la scheda di LAGUNA
-#      PRIMA a zoom 14 con «Condividi» da almeno 44 px e la × libera, l'indirizzo segua lo spostamento della mappa,
-#      ricaricando torni la stessa vista con la scheda e un clic vero su «Condividi» mostri «Link copiato» o il link;
+#   3d. (solo con il server locale, punti 25 e 24, vedi link_check) ?mmsi=247123450&segui=1#45.4312,12.3355,14 apra la
+#      scheda di LAGUNA PRIMA a zoom 14 con «Segui» acceso, «Segui» e «Condividi» da almeno 44 px e la × libera; spostata
+#      la mappa da script la nave torni nella zona centrale entro 4 s con «Segui» acceso; un trascinamento vero spenga
+#      «Segui» e cambi location.hash; l'indirizzo segua lo spostamento della mappa, ricaricando torni la stessa vista con
+#      la scheda e un clic vero su «Condividi» mostri «Link copiato» o il link;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
@@ -297,26 +299,29 @@ sheet_desktop() {
   ok "$name: riga → scheda sopra l'elenco; Esc → elenco (focus sulla riga); Esc → chiuso (focus su «Elenco»)"
 }
 
-# --- link condivisibili (punto 25) -----------------------------------------
-# Solo con il server locale. La pagina aperta da ?mmsi=247123450#45.4312,12.3355,14 mostra la scheda di LAGUNA PRIMA a zoom
-# 14 con «Condividi» (≥ 44 px) e la × libera; spostando la mappa l'indirizzo segue (#vista, ?mmsi= resta); ricaricando si
-# torna alla stessa vista con la scheda; un clic vero su «Condividi» mostra «Link copiato» o il link da copiare.
-# Screenshot con la scheda e i pulsanti.
+# --- link condivisibili e «Segui» (punti 25 e 24) ---------------------------
+# Solo con il server locale. La pagina aperta da ?mmsi=247123450&segui=1#45.4312,12.3355,14 mostra la scheda di LAGUNA
+# PRIMA a zoom 14 con «Segui» acceso e «Condividi» (≥ 44 px) e la × libera; spostata la mappa da script (panBy, non un
+# trascinamento) la nave torna nella zona centrale dell'area libera entro 4 s e «Segui» resta acceso; un trascinamento
+# vero della mappa spegne «Segui» (avviso, niente segui=1) e cambia location.hash; spostando la mappa l'indirizzo segue
+# (#vista, ?mmsi= resta); ricaricando si torna alla stessa vista con la scheda; un clic vero su «Condividi» mostra «Link
+# copiato» o il link da copiare. Screenshot con la scheda e i pulsanti.
 LINK_SHIP=247123450
 link_check() {
   local name="$1"
   # prima una pagina vuota: dalla stessa pagina agent-browser farebbe una navigazione nello stesso documento (solo
   # hashchange), senza ricaricarla
   "${AB[@]}" open about:blank >/dev/null
-  "${AB[@]}" open "${URL}?mmsi=$LINK_SHIP#45.4312,12.3355,14" >/dev/null || fail "$name: link: la pagina non si apre"
+  "${AB[@]}" open "${URL}?mmsi=$LINK_SHIP&segui=1#45.4312,12.3355,14" >/dev/null || fail "$name: link: la pagina non si apre"
   "${AB[@]}" wait --fn "typeof selected !== 'undefined' && selected === $LINK_SHIP && markers.has($LINK_SHIP)
-    && getComputedStyle(document.getElementById('panel')).display !== 'none' && map.getZoom() === 14" >/dev/null \
+    && getComputedStyle(document.getElementById('panel')).display !== 'none' && map.getZoom() === 14
+    && document.getElementById('follow').getAttribute('aria-pressed') === 'true'" >/dev/null \
     || { "${AB[@]}" screenshot "$OUT/$name-link-errore.png" >/dev/null || true
          fail "$name: link: scheda di $LINK_SHIP non aperta a zoom 14 (zoom $(js "map.getZoom()"), selezionata $(js "selected"), in mappa $(js "markers.has($LINK_SHIP)"), indirizzo $(js "location.href"), scheda $(js "document.getElementById('panel').style.display"), avviso $(js "document.getElementById('toast').textContent"))"; }
   "${AB[@]}" wait 900 >/dev/null   # spostamento della scheda (keepVisible) finito
   local btns
   btns=$(js "(() => { const out = [], c = document.getElementById('close').getBoundingClientRect();
-    for (const id of ['share']) { const r = document.getElementById(id).getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    for (const id of ['follow', 'share']) { const r = document.getElementById(id).getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       if (r.height < 44 || r.width < 44) out.push(id + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
       if (e?.closest('button')?.id !== id) out.push('sopra ' + id + ' c\'è ' + (e?.id || e?.tagName));
       if (r.right > c.left && r.top < c.bottom && r.bottom > c.top) out.push(id + ' sotto la ×'); }
@@ -325,17 +330,60 @@ link_check() {
     return out.length ? out.join('; ') : 'ok'; })()" | tr -d '"')
   "${AB[@]}" screenshot "$OUT/$name-link-scheda.png" >/dev/null
   [ "$btns" = ok ] || fail "$name: link: $btns"
-  ok "$name: ?mmsi=$LINK_SHIP#45.4312,12.3355,14 → scheda di $(js "document.querySelector('#content h2')?.textContent" | tr -d '"') a zoom 14, «Condividi» ≥ 44 px, × libera"
-  js "map.setView([45.44, 12.34], 13, { animate: false }), true" >/dev/null
-  "${AB[@]}" wait --fn "location.hash === '#45.44,12.34,13' && location.search === '?mmsi=$LINK_SHIP'" >/dev/null \
-    || fail "$name: link: dopo lo spostamento l'indirizzo è $(js "location.search + location.hash")"
+  ok "$name: ?mmsi=$LINK_SHIP&segui=1#45.4312,12.3355,14 → scheda di $(js "document.querySelector('#content h2')?.textContent" | tr -d '"') a zoom 14, «Segui» acceso, «Segui» e «Condividi» ≥ 44 px, × libera"
+  # posizione della nave sullo schermo rispetto all'area libera (freeArea): 'ok' se nella zona centrale (25 % per lato)
+  local zone_js="(() => { const { size, top, bottom, right } = freeArea(), p = map.latLngToContainerPoint(markers.get($LINK_SHIP).marker.getLatLng());
+    const l = 0, r = size.x - right, t = top, b = size.y - bottom, w = r - l, h = b - t;
+    const inside = p.x >= l + w / 4 && p.x <= r - w / 4 && p.y >= t + h / 4 && p.y <= b - h / 4;
+    return (inside ? 'ok ' : 'fuori ') + Math.round(p.x) + ',' + Math.round(p.y) + ' in ' + Math.round(l) + '-' + Math.round(r) + ' × ' + Math.round(t) + '-' + Math.round(b); })()"
+  local zone; zone=$(js "$zone_js" | tr -d '"')
+  case "$zone" in ok*) ;; *) "${AB[@]}" screenshot "$OUT/$name-segui-errore.png" >/dev/null || true; fail "$name: «Segui»: nave $zone" ;; esac
+  # posizione letta nella stessa chiamata dello spostamento: «Segui» la riporta già alla scelta dopo il moveend
+  local before; before=$(js "(window.__segui0 = performance.now(), window.__seguiMs = null,
+    map.panBy([Math.round(freeArea().size.x / 3), 0], { animate: false }), $zone_js)" | tr -d '"')
+  case "$before" in fuori*) ;; *) fail "$name: «Segui»: dopo panBy la nave dovrebbe essere fuori dalla zona: $before" ;; esac
+  # tempo misurato nella pagina alla prima lettura buona (la nave nella zona dopo la fine dello spostamento)
+  "${AB[@]}" wait --fn "!followPanning && $zone_js.startsWith('ok') && document.getElementById('follow').getAttribute('aria-pressed') === 'true'
+    && (window.__seguiMs ??= Math.round(performance.now() - window.__segui0), true)" >/dev/null \
+    || { "${AB[@]}" screenshot "$OUT/$name-segui-errore.png" >/dev/null || true; fail "$name: «Segui»: la nave non torna al centro ($(js "$zone_js"))"; }
+  local ms; ms=$(js "window.__seguiMs")
+  [ "$ms" -le 4000 ] || fail "$name: «Segui»: la nave torna al centro in $ms ms, oltre 4 s"
+  ok "$name: «Segui»: mappa spostata da script, nave $before → $(js "$zone_js" | tr -d '"') in $ms ms, «Segui» acceso"
+  "${AB[@]}" wait 900 >/dev/null   # fine dello spostamento di «Segui» e dell'indirizzo
+  local hash0; hash0=$(js "location.hash" | tr -d '"')
+  local dx dy
+  read -r dx dy <<<"$(js "(() => { const m = document.getElementById('map').getBoundingClientRect(), { size, top, bottom, right } = freeArea();
+    return Math.round(m.left + (size.x - right) / 5) + ' ' + Math.round(m.top + top + (size.y - bottom - top) / 3); })()" | tr -d '"')"
+  "${AB[@]}" mouse move "$dx" "$dy" >/dev/null
+  "${AB[@]}" mouse down >/dev/null
+  "${AB[@]}" mouse move "$((dx + 120))" "$((dy + 40))" --steps 10 --duration 300 >/dev/null
+  "${AB[@]}" mouse up >/dev/null
+  "${AB[@]}" wait --fn "document.getElementById('follow').getAttribute('aria-pressed') === 'false'
+    && /Segui disattivato/.test(document.getElementById('toast').textContent)
+    && location.hash !== '$hash0' && location.search === '?mmsi=$LINK_SHIP'" >/dev/null \
+    || { "${AB[@]}" screenshot "$OUT/$name-segui-errore.png" >/dev/null || true
+         fail "$name: «Segui»: il trascinamento vero non lo spegne (aria-pressed $(js "document.getElementById('follow').getAttribute('aria-pressed')"), indirizzo $(js "location.search + location.hash"), prima $hash0)"; }
+  ok "$name: trascinamento vero della mappa → «Segui» spento con l'avviso, indirizzo da $hash0 a $(js "location.search + location.hash" | tr -d '"')"
+  js "(document.getElementById('toast').style.display = 'none', true)" >/dev/null
+  # vista nuova a zoom 13 con la nave al centro dell'area libera (come la lascia la pagina con la scheda aperta)
+  local h0
+  h0=$(js "(() => { map.setView(markers.get($LINK_SHIP).marker.getLatLng(), 13, { animate: false });
+    const { size, top, bottom, right } = freeArea();
+    map.panBy([Math.round(size.x / 2 - (size.x - right) / 2), Math.round(size.y / 2 - (top + size.y - bottom) / 2)], { animate: false });
+    const c = map.getCenter(); return viewHash({ lat: c.lat, lon: c.lng, zoom: 13 }); })()" | tr -d '"')
+  "${AB[@]}" wait --fn "location.hash === '$h0' && location.search === '?mmsi=$LINK_SHIP'" >/dev/null \
+    || fail "$name: link: dopo lo spostamento l'indirizzo è $(js "location.search + location.hash"), atteso ?mmsi=$LINK_SHIP$h0"
   "${AB[@]}" reload >/dev/null || fail "$name: link: ricarica non riuscita"
+  local lat0 lon0
+  IFS=, read -r lat0 lon0 _ <<<"${h0#\#}"
   "${AB[@]}" wait --fn "typeof selected !== 'undefined' && selected === $LINK_SHIP && map.getZoom() === 13
-    && Math.abs(map.getCenter().lat - 45.44) < 2e-4 && Math.abs(map.getCenter().lng - 12.34) < 2e-4
+    && Math.abs(map.getCenter().lat - $lat0) < 2e-4 && Math.abs(map.getCenter().lng - $lon0) < 2e-4
     && getComputedStyle(document.getElementById('panel')).display !== 'none'" >/dev/null \
-    || fail "$name: link: ricaricando non torna la stessa vista con la scheda (zoom $(js "map.getZoom()"), centro $(js "map.getCenter()"))"
+    || fail "$name: link: ricaricando non torna la stessa vista $h0 con la scheda (zoom $(js "map.getZoom()"), centro $(js "map.getCenter()"))"
+  "${AB[@]}" wait 900 >/dev/null   # eventuale spostamento della scheda dopo la ricarica
+  [ "$(js "Math.abs(map.getCenter().lat - $lat0) < 2e-4 && Math.abs(map.getCenter().lng - $lon0) < 2e-4")" = true ] \
+    || fail "$name: link: dopo la ricarica la mappa si è spostata da $h0 a $(js "map.getCenter()")"
   ok "$name: l'indirizzo segue la mappa ($(js "location.search + location.hash" | tr -d '"')) e ricaricando torna la stessa vista con la scheda"
-  "${AB[@]}" wait 900 >/dev/null   # spostamento della scheda dopo la ricarica
   local sx sy
   read -r sx sy <<<"$(js "(() => { const r = document.getElementById('share').getBoundingClientRect();
     return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')"
@@ -345,7 +393,7 @@ link_check() {
     || fail "$name: «Condividi»: nessun avviso («$(js "document.getElementById('toast').textContent")»)"
   local shown
   shown=$(js "document.getElementById('share-url') ? 'link da copiare: ' + document.getElementById('share-url').value : document.getElementById('toast').textContent" | tr -d '"')
-  case "$shown" in *"mmsi=$LINK_SHIP#45.44,12.34,13"*|"Link copiato") ;; *) fail "$name: «Condividi»: $shown" ;; esac
+  case "$shown" in *"mmsi=$LINK_SHIP$h0"|"Link copiato") ;; *) fail "$name: «Condividi»: $shown" ;; esac
   "${AB[@]}" screenshot "$OUT/$name-link-condividi.png" >/dev/null
   ok "$name: clic vero su «Condividi» → $shown"
   js "(document.getElementById('toast').style.display = 'none', true)" >/dev/null

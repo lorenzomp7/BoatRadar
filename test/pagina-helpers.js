@@ -129,7 +129,7 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const views = [];
   let zoomNow = zoom, centerNow = { lat: 44, lng: 11 };
   const box = { getEast: () => bounds.e, getWest: () => bounds.w, getSouth: () => bounds.s, getNorth: () => bounds.n };
-  const map = { views, pans: [], panBy(...a) { this.pans.push(a); return this; },
+  const map = { views, pans: [], panBy(...a) { this.pans.push(a); return this; }, stop() { return this; },
     setView(...a) {
       views.push(a);
       if (trackView) {

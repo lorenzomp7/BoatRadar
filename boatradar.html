@@ -66,6 +66,9 @@
   #panel-actions .pbtn { min-height:44px; padding:0 14px; background:#0f1720; border:1px solid var(--line); border-radius:8px;
     color:var(--text); font:inherit; font-size:14px; cursor:pointer; }
   #panel-actions .pbtn:hover { border-color:var(--accent); }
+  /* «Segui» acceso: pieno giallo con il testo scuro (11:1) e la spunta, non solo un cambio di colore; la spunta non si legge */
+  #panel-actions .pbtn[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#0f1720; font-weight:600; }
+  #panel-actions .pbtn[aria-pressed="true"]::before { content:'✓ '; content:'✓ ' / ''; }
   #panel-actions .pbtn:focus-visible, #toast input:focus-visible { outline:2px solid #7cc4ff; outline-offset:1px; }
   #toast input { display:block; width:100%; min-height:36px; margin-top:8px; padding:4px 8px; background:#0f1720;
     border:1px solid var(--line); border-radius:6px; color:var(--text); font:inherit; font-size:13px; }
@@ -292,7 +295,7 @@
     <p id="list-more" hidden></p>
   </div>
 </section>
-<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="share" class="pbtn">Condividi</button></div><div id="content"></div></aside>
+<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="follow" class="pbtn" aria-pressed="false" title="Tiene la nave al centro della mappa">Segui</button><button type="button" id="share" class="pbtn">Condividi</button></div><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
@@ -397,7 +400,7 @@ const MID = {201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',2
 const $ = id => document.getElementById(id);
 // Punto 25: link condivisibili ?mmsi=…&segui=1#lat,lon,zoom (parseLink di ais-logic.js). La vista iniziale viene dal link,
 // altrimenti quella di sempre. location e history possono mancare (alcuni contesti di test): allora niente link.
-const { parseLink, viewHash, linkUrl } = AisLogic;
+const { parseLink, viewHash, linkUrl, followPan } = AisLogic;
 const LOC = typeof location === 'object' && location ? location : null;
 const HIST = typeof history === 'object' && history && typeof history.replaceState === 'function' ? history : null;
 const LINK = (() => { try { return parseLink(LOC?.search, LOC?.hash); } catch { return { view: null, mmsi: null, follow: false }; } })();
@@ -751,9 +754,11 @@ function animFrame() {
   const wall = perfNow(), T = playNow();
   // la scelta e il passo in fotogrammi diversi: nessun fotogramma muove più di ANIM_MAX navi (più quelle che escono
   // dalle scelte) e quelle ricalcolate
-  if (wall - anim.lastPick >= PICK_MS) pickAnim(wall, T);
+  const picked = wall - anim.lastPick >= PICK_MS;
+  if (picked) pickAnim(wall, T);
   else if ((anim.set.size || anim.settle.size) && wall - anim.lastStep >= anim.interval) animStep(wall, T);
   scheduleAnim(wall);
+  if (picked) followCheck();   // punto 24: dopo una scelta (ogni 3 s), mai nei passi; uno spostamento ferma il ciclo
 }
 // Scelta delle navi da animare: in movimento (stimabili o non ancora al loro ultimo fix) nella vista, più la selezionata
 function pickAnim(wall, T) {
@@ -1054,6 +1059,7 @@ async function loadLocations() {
   // la mappa resta com'era e alla riapertura (visibilitychange) riparte subito un giro
   if (document.hidden && api() !== API_LIST[0].url) return;
   const seq = ++roundSeq;
+  lastAsked = noView ? null : askedBox();   // punto 24: vista chiesta in questo giro (allargata come viewBox)
   // la prova urgente si aspetta solo prima delle richieste al server (punto 86): Baltico e attesa dell'orologio partono
   // subito. Il Baltico aspetta l'orologio (al massimo CLOCK_WAIT_MS dal primo giro), perché from= va calcolato con l'ora
   // corretta (anche un tick() chiamato durante l'attesa del primo giro aspetta la stessa promessa)
@@ -1167,6 +1173,7 @@ async function loadLocations() {
   if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
   // scheda aggiornata a ogni giro (età), anche senza marker: con le ultime properties dice «posizione scaduta»
   if (selected) render(selected);
+  followCheck();   // punto 24: con l'animazione spenta «Segui» lavora solo qui, a ogni giro
 }
 
 // Nessuna nave scelta: tolgo il bordo giallo; senza selected la pagina non chiede più la nave con include=
@@ -1197,6 +1204,7 @@ function openPanel() {
   if (!shown && $('sheet').contains(opener)) $('close').focus();
 }
 function closePanel() {
+  setFollow(false);   // punto 24
   deselect();
   $('panel').style.display = 'none';
   document.body.classList.remove('panel-open');
@@ -1214,6 +1222,7 @@ function closePanel() {
 
 // props: posizione nota se la nave non ha (ancora) un marker, es. un risultato di ricerca del server
 function select(mmsi, props) {
+  if (mmsi !== selected) setFollow(false);   // punto 24: un'altra nave
   deselect();
   selected = mmsi;
   const m = markers.get(mmsi);
@@ -1432,6 +1441,7 @@ function render(mmsi) {
 
 // Pagina con tutti i registri, apribile dal pulsante in alto anche senza aver scelto una nave
 function showRegistries() {
+  setFollow(false);   // punto 24
   deselect();
   $('content').dataset.mmsi = '';
   $('content').innerHTML = `<h2>Registri</h2>
@@ -1850,9 +1860,9 @@ $('list-legend').addEventListener('click', () => {
 // aperto, che la nasconde) e attribuzione di Leaflet; su computer a sinistra della scheda o dell'elenco aperti a destra. Mentre il
 // pannello scende --sheet-h è ancora l'altezza di prima (sheet.hold): legenda e attribuzione vanno contate dove finiranno.
 // Con prefers-reduced-motion senza animazione.
-function keepVisible(mmsi) {
-  const ll = markers.get(mmsi)?.marker.getLatLng() || found.get(mmsi);
-  if (!ll) return;
+// freeArea (anche per «Segui», punto 24): dimensioni della mappa, fondo dell'header, altezza coperta in basso (telefono)
+// e larghezza coperta a destra (computer), in px del contenitore della mappa
+function freeArea() {
   const m = $('map').getBoundingClientRect(), size = map.getSize();
   const top = document.querySelector('header').getBoundingClientRect().bottom - m.top;
   let bottom = 0, right = 0;
@@ -1869,6 +1879,12 @@ function keepVisible(mmsi) {
     const side = $('panel').style.display === 'block' ? $('panel') : document.body.classList.contains('list-open') ? $('sheet') : null;
     if (side) right = Math.max(0, m.right - side.getBoundingClientRect().left);
   }
+  return { size, top, bottom, right };
+}
+function keepVisible(mmsi) {
+  const ll = markers.get(mmsi)?.marker.getLatLng() || found.get(mmsi);
+  if (!ll) return;
+  const { size, top, bottom, right } = freeArea();
   const d = panToKeepVisible(map.latLngToContainerPoint(ll), size, bottom, top, 24, right);
   if (d.dx || d.dy) reducedMotion() ? map.panBy([d.dx, d.dy], { animate: false }) : map.panBy([d.dx, d.dy]);
 }
@@ -1885,7 +1901,7 @@ const URL_WAIT_MS = 300;
 let urlTimer = null;
 function currentLink() {
   const c = map.getCenter(), open = $('panel').style.display === 'block' && selected != null;
-  return { view: { lat: c.lat, lon: c.lng, zoom: map.getZoom() }, mmsi: open ? selected : null, follow: false };
+  return { view: { lat: c.lat, lon: c.lng, zoom: map.getZoom() }, mmsi: open ? selected : null, follow: open && follow };
 }
 function writeUrl() {
   urlTimer = null;
@@ -1927,6 +1943,63 @@ async function shareLink() {
   }
 }
 $('share').addEventListener('click', shareLink);
+
+// --- «Segui» (punto 24) -----------------------------------------------------------------------------------------------
+// #follow (aria-pressed) nella scheda tiene la nave selezionata in vista: followCheck sposta la mappa (panBy animato in
+// FOLLOW_MS, senza animazione con prefers-reduced-motion) solo quando la nave esce dalla zona centrale dell'area libera
+// (freeArea: sotto l'header, sopra la scheda su telefono, a sinistra della scheda su computer) e la riporta al centro
+// (followPan di ais-logic.js); premendo «Segui» la nave si centra subito (force). Chiamato alla fine di animFrame dopo
+// una scelta (ogni 3 s, mai nei passi), alla fine di loadLocations (ad animazione spenta solo lì) e dopo lo zoom; mai
+// durante il trascinamento del pannello, a scheda del browser nascosta, durante l'animazione dello zoom né mentre il suo
+// spostamento è in corso (followPanning, fino al moveend). Il moveend di uno spostamento di «Segui» non fa un giro se la
+// vista chiesta l'ultima volta (lastAsked, già allargata del 20 %) copre ancora la mappa (con l'antimeridiano sempre il
+// giro): niente richieste in più, l'animatore riparte (moveend) e l'elenco aggiorna solo il conteggio (scheda aperta).
+// Si spegne trascinando la mappa o con le frecce sulla mappa (avviso), scegliendo un'altra nave, chiudendo la scheda,
+// aprendo i registri; lo zoom lo lascia acceso. Nel link come segui=1 (currentLink).
+const FOLLOW_MS = 800;
+let follow = false, followPanning = false, lastMoveFollow = false, lastAsked = null;
+// calls: chiamate a followCheck; pans: spostamenti; skipped: giri risparmiati dopo uno spostamento coperto
+const followStats = { calls: 0, pans: 0, skipped: 0 };
+function askedBox() {
+  const b = map.getBounds().pad(0.2);
+  return { w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth() };
+}
+function viewCovered(a = lastAsked) {
+  if (!a || a.w < -180 || a.e > 180 || a.e - a.w >= 360) return false;
+  const b = map.getBounds();
+  return b.getWest() >= a.w && b.getEast() <= a.e && b.getSouth() >= a.s && b.getNorth() <= a.n;
+}
+function followCheck(force = false) {
+  followStats.calls++;
+  if (!follow || selected == null || followPanning || sheet.drag || document.hidden || map._animatingZoom
+    || $('panel').style.display !== 'block' || document.body.classList.contains('vf')) return;
+  const m = markers.get(selected);
+  if (!m) return;
+  const { size, top, bottom, right } = freeArea();
+  const d = followPan(map.latLngToContainerPoint(m.marker.getLatLng()), { left: 0, top, right: size.x - right, bottom: size.y - bottom },
+    { margin: force ? 0.5 : 0.25 });
+  if (!d.dx && !d.dy) return;
+  // uno spostamento ancora in corso (es. keepVisible) si ferma prima: il suo moveend non deve azzerare followPanning
+  map.stop();
+  followPanning = true;
+  followStats.pans++;
+  map.panBy([d.dx, d.dy], reducedMotion() ? { animate: false } : { duration: FOLLOW_MS / 1000 });
+}
+// why: 'drag' o 'keys' (l'utente ha spostato la mappa) → avviso
+function setFollow(on, why = '') {
+  const was = follow;
+  follow = !!on && selected != null;
+  $('follow').setAttribute('aria-pressed', String(follow));
+  if (was && !follow && (why === 'drag' || why === 'keys')) toast('Segui disattivato: hai spostato la mappa');
+  if (follow && !was) followCheck(true);
+  if (follow !== was) syncUrl();
+}
+$('follow').addEventListener('click', () => setFollow(!follow));
+// il moveend di uno spostamento di «Segui» (letto dal gestore che programma il giro, registrato dopo)
+map.on('moveend', () => { lastMoveFollow = followPanning; followPanning = false; });
+map.on('dragstart', () => { followPanning = false; if (follow) setFollow(false, 'drag'); });
+map.on('zoomend', () => setTimeout(followCheck, 0));   // dopo il moveend dello zoom
+$('map').addEventListener('keydown', e => { if (follow && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) setFollow(false, 'keys'); });
 
 // --- Ricerca (punto 12) ---------------------------------------------------------------------------------------------
 // Ordine e punteggio come /api/search (normQuery, searchScore, compareSearch di ais-logic.js). La richiesta parte
@@ -2103,8 +2176,10 @@ function scheduleTick() { clearTimeout(moveTimer); moveTimer = setTimeout(tick, 
   if (LINK.mmsi) { select(LINK.mmsi); clearTimeout(moveTimer); }
   await tick();
   if (LINK.mmsi) openLinked(LINK);
+  if (LINK.follow && selected === LINK.mmsi && $('panel').style.display === 'block') setFollow(true);   // punto 24
   setInterval(tick, REFRESH_MS);
-  map.on('moveend', scheduleTick);
+  // punto 24: dopo uno spostamento di «Segui» il giro solo se la mappa esce dalla vista chiesta l'ultima volta
+  map.on('moveend', () => { if (lastMoveFollow && viewCovered()) followStats.skipped++; else scheduleTick(); });
   setInterval(() => loadBalticMeta().catch(() => {}), 10 * 60 * 1000);
 })();
 </script>
