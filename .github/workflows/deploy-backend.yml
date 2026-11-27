@@ -6,7 +6,7 @@ name: Deploy backend
 on:
   push:
     branches: [main]
-    paths: [server.js, position-check.js, sample.js, boatradar.html, vesselfinder.html, public/**, vendor/**, package.json, package-lock.json, Dockerfile, deploy/**, .github/workflows/deploy-backend.yml]
+    paths: [server.js, position-check.js, sample.js, snapshot.js, boatradar.html, vesselfinder.html, public/**, vendor/**, package.json, package-lock.json, Dockerfile, deploy/**, .github/workflows/deploy-backend.yml]
   workflow_dispatch:
 
 permissions:

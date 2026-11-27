@@ -20,7 +20,10 @@ node --expose-gc tools/carico.js --navi 30000 --richieste 50 --registra "dopo pu
 
 `--registra` aggiunge una riga alla tabella qui sotto; `--json file` salva tutto. `--filtro "types=tanker"`
 (punto 9) misura e stampa anche la vista mondo con quei filtri (nel JSON `mondoFiltrata`, non nella riga
-della tabella, che resta sulle viste senza filtro). Client e server
+della tabella, che resta sulle viste senza filtro). `--snapshot` (punto 22) avvia `server.js` con `SNAPSHOT_FILE` in una
+cartella temporanea e, dopo le viste, misura un salvataggio dei dati statici e il ripristino dello stesso file come
+all'avvio (`restoreBuffer` e `mergeBatched` di `snapshot.js`): ms, blocco massimo del ciclo degli eventi
+(`monitorEventLoopDelay`, risoluzione 10 ms) e KB gzip; solo stampato e nel JSON (`snapshot`). Client e server
 condividono lo stesso processo: i tempi servono per confrontare due versioni sulla stessa macchina,
 non come tempi assoluti visti dal browser.
 
@@ -159,6 +162,21 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
   qui sotto (viste senza ricerca, stessa sessione): memoria e tempi pari; i MB/1000 navi più alti delle righe
   precedenti valgono per entrambe e vengono dalla macchina di quella sessione, non dalla modifica.
 
+- Punto 22, dati statici dopo un riavvio (27/11/2026): senza `SNAPSHOT_FILE` (come in queste righe e su Render) il
+  server lavora come prima; le righe «prima/dopo punto 22» qui sotto sono pari (caso con cache). Con `SNAPSHOT_FILE` si
+  aggiungono solo il ripristino all'avvio e un salvataggio ogni 10 min. Soglie con 30.000 navi: blocco del ciclo degli
+  eventi < 50 ms, salvataggio < 2 s, ripristino < 1 s. `node --expose-gc tools/carico.js --navi 30000 --richieste 5
+  --snapshot`, sei esecuzioni nella stessa sessione: file di 312-313 KB gzip (navi sintetiche con nomi simili: con nomi
+  veri il file è più grande); salvataggio 138-351 ms (mediana circa 140), blocco massimo 3-44 ms (mediana circa 8);
+  ripristino 134-248 ms (mediana circa 200), blocco massimo 8-28 ms. Con 50.000 navi: 522 KB, salvataggio 252 ms (blocco
+  10 ms), ripristino 319 ms (blocco 40 ms). La prima versione del ripristino (`JSON.parse` del file intero, poi
+  `restore` e `merge` in un colpo) bloccava il ciclo per 99 ms con 30.000 navi (parse 34-54 ms, convalida 31-139 ms,
+  unione 28-48 ms): ora `serialize` scrive un blocco di 1000 navi per riga e `restoreBuffer` e `mergeBatched` lavorano
+  una riga alla volta con un `setImmediate` fra l'una e l'altra; il salvataggio era già a blocchi (gzip nel thread
+  pool). In una misura senza `gc()` prima del ripristino il blocco è arrivato a 91 ms (raccolta dei rifiuti delle viste
+  misurate prima): `measureBlocking` ora chiama `gc()` con `--expose-gc`. I picchi sopra 20 ms che restano variano molto
+  fra esecuzioni uguali (probabilmente raccolte dei rifiuti; non verificato con un profilo).
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |
@@ -189,6 +207,8 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | dopo quota filtrate in cache (punto 9a) | 30000 | 0.55 | 169.7 | 6000 | 254.6 (1550.5) | 0.9 / 1.7 | 1427 | 57.7 (366) | 0.7 / 1.1 | v22.23.5 |
 | 2026-11-26 | prima correzioni punto 12 (2b2f80a) | 30000 | 1.73 | 175 | 6000 | 253.6 (1550.5) | 0.9 / 1.6 | 1427 | 57.4 (366) | 0.5 / 0.7 | v22.23.5 |
 | 2026-11-26 | dopo correzioni punto 12 | 30000 | 1.79 | 175.3 | 6000 | 254.6 (1550.5) | 0.7 / 1.1 | 1427 | 57.8 (366) | 0.4 / 0.5 | v22.23.5 |
+| 2026-11-27 | prima punto 22 | 30000 | 0.55 | 172.9 | 6000 | 255.9 (1550.5) | 1.4 / 1.9 | 1427 | 58.1 (366) | 0.8 / 1.4 | v22.23.5 |
+| 2026-11-27 | dopo punto 22 | 30000 | 0.55 | 174 | 6000 | 255 (1550.5) | 0.9 / 1.3 | 1427 | 57.8 (366) | 0.5 / 0.7 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
 
 ## Pagina

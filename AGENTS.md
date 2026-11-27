@@ -42,6 +42,22 @@ Lavora su `main_claude` salvo indicazione diversa.
 - `position-check.js`: funzioni pure usate da `server.js` per scartare posizioni non valide e
   salti impossibili (accettati se confermati da una seconda posizione); il conteggio degli scarti
   è `rejected` in `/api/status`. Va nella riga `COPY` del `Dockerfile` (lo controlla un test).
+- `snapshot.js` (punto 22): dati statici delle navi fra un riavvio e l'altro, solo con `SNAPSHOT_FILE` (sulla VM
+  `/data/vessels.json.gz`, volume `boatradar-data` di `deploy/compose.yml`; su Render Free nessuna persistenza, parte
+  vuoto). `serialize` (navi con `staticTs` di meno di 48 h, ordinate per `staticTs`, un blocco di 1000 per riga con un
+  `setImmediate` fra i blocchi) → `encode` (gzip a stream) → `fileStore.save` (`.tmp` e rinomina); all'avvio
+  `restoreBuffer` (riga per riga; validazione di `restore`: formato e versione, MMSI, `staticTs` fra 48 h fa e 5 min nel
+  futuro, testi ≤ 64, numeri nei loro intervalli, ETA come `etaOf`; mai eccezioni per dati strani, errore per gzip o JSON
+  rovinati) e `mergeBatched` (una nave entra solo se in memoria non ha dati statici più recenti), poi `indexNames`.
+  `server.js`: ripristino nella callback di `listen` con tetto di 5 s, poi `connect()` e un salvataggio ogni
+  `SNAPSHOT_INTERVAL_MS` (10 min, mai due insieme, mai prima della fine del ripristino); SIGTERM/SIGINT: senza
+  destinazione `process.exit(0)` subito, altrimenti ultimo salvataggio con tetto `SNAPSHOT_EXIT_MS` (8 s; `stop_grace_period`
+  20 s), un secondo segnale esce subito. `snapshot` in `/api/status` (`store`, `restored`, `savedAt`, `bytes`, `vessels`,
+  `ms`, `error` con il solo codice, mai percorsi). Va nella `COPY` del `Dockerfile` (con `/data` dell'utente `node`), nei
+  `paths` di `deploy-backend.yml` e `browser.yml`, nel `buildFilter` di `render.yaml` e in `node --check` di `test.yml`
+  (lo controlla un test). Test in `test/snapshot.test.js` e `test/snapshot-server.test.js`; misura con
+  `tools/carico.js --snapshot` (`docs/prestazioni.md`); costi delle alternative in `deploy/README.md`, «Dati statici dopo
+  un riavvio». In locale: `SNAPSHOT_FILE=diagnosi/vessels.json.gz node server.js`.
 - `boatradar.html`: tutta l'interfaccia (mappa, scheda nave, ricerca proprietari).
 - `public/ais-logic.js`: funzioni pure della pagina (tipi di nave, ETA, ricerca locale, età della posizione, filtri…), modulo UMD
   (`window.AisLogic` nel browser, `require` in Node) con test in `test/ais-logic.test.js` (filtri: `test/filtri-logica.test.js`).

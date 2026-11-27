@@ -11,6 +11,7 @@ const WebSocket = require('ws');
 const { isValidFix, step, pruneOlder } = require('./position-check');
 const { sampleByImportance, staticImportance } = require('./sample');
 const { DEFAULT_LIMITS, retentionMs, parseFilter, filterKey, passesFilter, norm, normQuery, scoreFields, insertTop } = require('./public/ais-logic');
+const snapshot = require('./snapshot');
 
 const PORT = Number(process.env.PORT) || 8765; // in cloud la porta la assegna l'hosting
 const BBOX = [[[-90, -180], [90, 180]]]; // tutto il mondo: [lat, lon] sud-ovest, nord-est
@@ -46,6 +47,13 @@ const POSITIONS_CLEANUP_MS = envPositive('POSITIONS_CLEANUP_MS', 60000);
 // Ora in cui la posizione p smette di valere (scade quando now > expiresAt) e se vale ancora all'ora now
 const expiresAt = p => p.ts + retentionMs(p, LIMITS);
 const isLive = (p, now) => now <= expiresAt(p);
+// Dati statici fra un riavvio e l'altro (punto 22, snapshot.js): con SNAPSHOT_FILE (sulla VM /data/vessels.json.gz, un
+// volume Docker) il server li rilegge all'avvio, li salva ogni SNAPSHOT_INTERVAL_MS (10 min) e a SIGTERM/SIGINT, con un
+// tetto di SNAPSHOT_EXIT_MS (8 s) prima di uscire comunque. Senza destinazione (Render Free) parte vuoto come prima.
+const SNAPSHOT_STORE = snapshot.storeFromEnv(process.env);
+const SNAPSHOT_INTERVAL_MS = envPositive('SNAPSHOT_INTERVAL_MS', 600000);
+const SNAPSHOT_EXIT_MS = envPositive('SNAPSHOT_EXIT_MS', 8000);
+const SNAPSHOT_RESTORE_MS = 5000;   // ripristino oltre questo tempo: la connessione ad aisstream parte comunque
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts, classA, staticScore }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
@@ -55,6 +63,9 @@ let dataVersion = 0;  // cresce a ogni cambio di navi o posizioni: dice se una r
 // compressione con aisstream: negotiated = permessage-deflate accettato all'apertura, confirmed = CompressionEnabled
 // della SubscriptionConfirmation (null finché non arriva). aisstream limita la banda delle connessioni non compresse.
 status.compression = null;
+// snapshot (punto 22): store = tipo di destinazione ('file' o null), restored = navi ripristinate all'avvio, poi
+// dell'ultimo salvataggio riuscito ora (savedAt), byte gzip, navi e durata; error = ultimo problema. Mai percorsi.
+status.snapshot = { store: SNAPSHOT_STORE ? SNAPSHOT_STORE.kind : null, restored: 0, savedAt: null, bytes: null, vessels: null, ms: null, error: null };
 
 function readKey() {
   if (process.env.AISSTREAM_KEY) return process.env.AISSTREAM_KEY.trim();
@@ -521,6 +532,64 @@ for (const img of ['layers.png', 'layers-2x.png', 'marker-icon.png', 'marker-ico
   ASSETS['/vendor/leaflet/images/' + img] = ['vendor/leaflet/images/' + img, 'image/png', VENDOR_CACHE];
 }
 
+// --- Dati statici fra un riavvio e l'altro (punto 22) ------------------------------------------------------------
+// Nei messaggi di errore solo il codice (ENOENT, Z_DATA_ERROR, SyntaxError…): quelli di fs contengono il percorso.
+const why = err => err?.code || err?.name || 'errore';
+let restoreDone = false;   // prima della fine del ripristino niente salvataggi: sovrascriverebbero il file con meno navi
+async function restoreSnapshot() {
+  try {
+    const buf = await SNAPSHOT_STORE.load();
+    if (!buf) return;
+    // a blocchi, come il salvataggio: il ciclo degli eventi resta libero (richieste e, oltre i 5 s, aisstream)
+    const list = await snapshot.restoreBuffer(buf);
+    // indexNames: nomi della ricerca normalizzati; staticScore se nel frattempo è arrivata una posizione
+    const n = await snapshot.mergeBatched(vessels, list, (mmsi, v) => {
+      indexNames(mmsi, v);
+      const cur = positions.get(mmsi);
+      if (cur) cur.staticScore = staticImportance(v);
+    });
+    if (n) dataVersion++;
+    status.snapshot.restored = n;
+    console.log(`dati statici: ${n} navi ripristinate`);
+  } catch (err) {
+    status.snapshot.error = `ripristino non riuscito (${why(err)})`;
+    console.error('dati statici: ripristino non riuscito:', err.message);
+  } finally {
+    restoreDone = true;
+  }
+}
+
+let saving = null;   // salvataggio in corso: mai due insieme
+function saveSnapshot() {
+  if (!SNAPSHOT_STORE || !restoreDone) return Promise.resolve();
+  if (saving) return saving;
+  saving = (async () => {
+    const t0 = Date.now(), stats = {};
+    try {
+      const buf = await snapshot.encode(snapshot.serialize(vessels, { now: t0, stats }));
+      await SNAPSHOT_STORE.save(buf);
+      Object.assign(status.snapshot, { savedAt: t0, bytes: buf.length, vessels: stats.vessels, ms: Date.now() - t0, error: null });
+    } catch (err) {
+      status.snapshot.error = `salvataggio non riuscito (${why(err)})`;
+      console.error('dati statici: salvataggio non riuscito:', err.message);
+    }
+  })().finally(() => { saving = null; });
+  return saving;
+}
+
+// SIGTERM (docker stop, Render) e SIGINT (Ctrl+C): senza destinazione si esce subito; altrimenti un ultimo salvataggio
+// (dopo quello eventualmente in corso), al massimo SNAPSHOT_EXIT_MS, poi l'uscita. Un secondo segnale esce subito.
+let exiting = false;
+function onSignal(sig) {
+  if (exiting || !SNAPSHOT_STORE || !restoreDone) process.exit(0);
+  exiting = true;
+  console.log(`${sig}: salvo i dati statici prima di uscire`);
+  setTimeout(() => { console.error('dati statici: salvataggio troppo lungo, esco senza aspettarlo'); process.exit(0); }, SNAPSHOT_EXIT_MS).unref();
+  (saving || Promise.resolve()).then(saveSnapshot).then(() => process.exit(0));
+}
+process.on('SIGTERM', onSignal);
+process.on('SIGINT', onSignal);
+
 http.createServer((req, res) => {
   const { pathname: url, searchParams: query } = new URL(req.url, 'http://localhost');
   if (url === '/api/locations') return sendLocations(req, res, query);
@@ -540,5 +609,14 @@ http.createServer((req, res) => {
   res.writeHead(404); res.end('Not found');
 }).listen(PORT, () => {
   console.log(`BoatRadar in ascolto sulla porta ${PORT}`);
-  connect();
+  if (!SNAPSHOT_STORE) { restoreDone = true; return connect(); }
+  // prima i dati statici salvati (al massimo SNAPSHOT_RESTORE_MS), poi aisstream e i salvataggi periodici
+  const cap = new Promise(resolve => setTimeout(resolve, SNAPSHOT_RESTORE_MS).unref());
+  Promise.race([restoreSnapshot(), cap]).then(() => {
+    connect();
+    setInterval(saveSnapshot, SNAPSHOT_INTERVAL_MS).unref();
+  });
 });
+
+// per tools/carico.js --snapshot, che carica server.js nello stesso processo e misura un salvataggio
+module.exports = { saveSnapshot };

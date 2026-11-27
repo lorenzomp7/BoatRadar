@@ -68,7 +68,7 @@ async function startServer(env = {}, aisOptions = {}, { cwd = ROOT } = {}) {
     const timeout = new Promise((_, reject) => setTimeout(() =>
       reject(new Error('timeout in attesa di: sottoscrizione al finto aisstream\n' + log)), 5000).unref());
     const { socket, subscription } = await Promise.race([connected, timeout]);
-    return { fakeAis, socket, subscription, port, request, get, getJson, log: () => log, stop };
+    return { fakeAis, socket, subscription, port, request, get, getJson, log: () => log, stop, child, exited };
   } catch (err) {
     await stop();
     throw err;
