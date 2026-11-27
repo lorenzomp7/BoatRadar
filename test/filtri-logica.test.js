@@ -7,7 +7,7 @@ const AL = require('../public/ais-logic');
 
 const MIN = 60000;
 // filtro con tutti i campi, null = nessun vincolo
-const F = extra => ({ types: null, status: null, minSog: null, maxSog: null, seen: null, moving: null, ...extra });
+const F = extra => ({ types: null, status: null, minSog: null, maxSog: null, seen: null, moving: null, hazard: null, ...extra });
 // query come da URLSearchParams di una chiave
 const fromKey = key => Object.fromEntries(new URLSearchParams(key));
 
@@ -161,4 +161,29 @@ test('passesFilter: combinazione = tutti i criteri insieme', () => {
   assert.equal(AL.passesFilter({ ...ok, navStat: 1 }, { shipType: 70 }, f, now), false, 'stato');
   assert.equal(AL.passesFilter({ ...ok, sog: 16 }, { shipType: 70 }, f, now), false, 'velocità');
   assert.equal(AL.passesFilter({ ...ok, ts: now - 6 * MIN }, { shipType: 70 }, f, now), false, 'ricezione');
+});
+
+// Punto 46: solo carichi pericolosi o inquinanti (hazardCategory del tipo di nave)
+test('hazard: \'1\' = solo carichi pericolosi; 0, abc, vuoto = nessun filtro; in coda alla chiave, che senza resta uguale', () => {
+  assert.deepEqual(AL.parseFilter({ hazard: '1' }), F({ hazard: true }));
+  assert.deepEqual(AL.parseFilter({ hazard: 1 }), F({ hazard: true }));
+  for (const h of ['0', 'abc', '', 'true', '2', null, undefined]) assert.equal(AL.parseFilter({ hazard: h }), null, String(h));
+  assert.equal(AL.filterKey(AL.parseFilter({ hazard: '1' })), 'hazard=1');
+  const all = { types: 'cargo,tanker', status: 'moored', minSog: '5', maxSog: '20', seen: '15', moving: '1' };
+  const key = AL.filterKey(AL.parseFilter(all));
+  assert.equal(key, 'types=cargo,tanker&status=moored&minSog=5&maxSog=20&seen=15&moving=1', 'chiave esistente invariata');
+  assert.equal(AL.filterKey(AL.parseFilter({ ...all, hazard: '1' })), key + '&hazard=1');
+  // andata e ritorno
+  const f = AL.parseFilter({ ...all, hazard: '1' });
+  assert.deepEqual(AL.parseFilter(fromKey(AL.filterKey(f))), f);
+  assert.equal(AL.filterCount(f), 6);
+  assert.equal(AL.filterCount(AL.parseFilter({ hazard: '1' })), 1);
+});
+
+test('hazard: passesFilter fa passare solo i tipi con categoria di carico (x1-x4 di 2x, 4x, 6x, 7x, 8x, 9x)', () => {
+  const f = AL.parseFilter({ hazard: '1' }), p = { sog: 5, navStat: 0, ts: 0 };
+  for (const t of [71, 84, 24, 94, 61, 43]) assert.equal(AL.passesFilter(p, { shipType: t }, f, 0), true, String(t));
+  for (const t of [70, 80, 31, 95, 99, 30, 0, undefined]) assert.equal(AL.passesFilter(p, { shipType: t }, f, 0), false, String(t));
+  assert.equal(AL.passesFilter(p, undefined, f, 0), false, 'senza dati statici');
+  assert.equal(AL.passesFilter(p, { shipType: 71 }, AL.parseFilter({ hazard: '1', types: 'tanker' }), 0), false, 'e con types');
 });

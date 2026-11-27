@@ -96,3 +96,17 @@ test('statusWords: il dichiarato e, se contrasta, cosa fa davvero (in parole, co
   assert.equal(AL.statusWords(0, 12), 'In navigazione a motore');
   assert.equal(AL.statusWords(undefined, 12), null);
 });
+
+// --- Punto 46: carico pericoloso -------------------------------------------------------------------------------------
+test('hazardCategory: categorie X, Y, Z, OS dalle unità 1-4 delle decine 2, 4, 6, 7, 8, 9', () => {
+  assert.equal(AL.hazardCategory(71), 'X');
+  assert.equal(AL.hazardCategory(72), 'Y');
+  assert.equal(AL.hazardCategory(83), 'Z');
+  assert.equal(AL.hazardCategory(84), 'OS');
+  assert.equal(AL.hazardCategory(24), 'OS', 'WIG');
+  assert.equal(AL.hazardCategory(94), 'OS', 'altro tipo');
+  assert.equal(AL.hazardCategory(41), 'X', 'unità veloce');
+  assert.equal(AL.hazardCategory(62), 'Y', 'passeggeri');
+  for (const t of [70, 80, 31, 34, 51, 95, 99, 0, 1, 14, 100, 71.5, -71, '71', null, undefined, NaN])
+    assert.equal(AL.hazardCategory(t), null, String(t));
+});

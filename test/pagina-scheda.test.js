@@ -74,3 +74,40 @@ test('pagina: riga «Stato» con il contrasto fra stato dichiarato e velocità',
   html = card(page, LIBERIA, { name: 'MONROVIA', shipType: 71, staticTs: T0 - 3600000 });
   assert.equal(cell(html, 'Stato'), 'Dichiara: in navigazione a motore · in realtà ferma (0,1 kn)');
 });
+
+// --- Punto 46 --------------------------------------------------------------------------------------------------------
+test('pagina: carico pericoloso in scheda (riga «Carico») e nel sottotitolo, in testo', async () => {
+  const page = await ready();
+  let html = card(page, LIBERIA, { name: 'MONROVIA', shipType: 71, staticTs: T0 - 3600000 });
+  assert.equal(cell(html, 'Carico'), 'pericoloso o inquinante, categoria X (dichiarato)');
+  assert.match(html, /<div class="sub" id="sub">[^<]*· ⚠ Carico pericoloso cat\. X<\/div>/);
+  html = card(page, SHIP, { name: 'LAGUNA PRIMA', shipType: 70, staticTs: T0 - 3600000 });
+  assert.equal(cell(html, 'Carico'), undefined, 'tipo 70: nessuna riga «Carico»');
+  assert.doesNotMatch(html, /⚠/);
+});
+
+const KEY = 'boatradar:filtri';
+const views = page => page.requests.filter(r => r.url.startsWith('/api/locations?bbox='));
+test('pagina: casella «Solo carichi pericolosi o inquinanti» salvata, applicata in pagina e chiesta con &hazard=1', async () => {
+  const page = await ready();
+  page.get(`meta.set(${LIBERIA}, { name: 'MONROVIA', shipType: 71 }); meta.set(${SHIP}, { name: 'LAGUNA PRIMA', shipType: 70 })`);
+  page.el('f-hazard').checked = true;
+  page.fireEl('legend', 'change', { target: page.el('f-hazard') });
+  assert.equal(page.local.get(KEY), 'hazard=1');
+  assert.equal(page.el('filter-count').textContent, ' · 1 attivo');
+  assert.deepEqual([...page.markers().keys()], [LIBERIA], 'restano solo i carichi pericolosi');
+  const n = views(page).length;
+  await until(() => views(page).length > n, 'vista con il filtro');
+  assert.match(views(page).at(-1).url, /&hazard=1$/);
+  page.el('f-hazard').checked = false;
+  page.fireEl('legend', 'change', { target: page.el('f-hazard') });
+  assert.equal(page.local.has(KEY), false);
+});
+
+test('pagina: filtro hazard=1 salvato → casella spuntata e pannello «Filtri» aperto dopo una ricarica', async () => {
+  const page = startPage({ routes, manualTime: T0, raf: false, local: { [KEY]: 'hazard=1' } });
+  assert.equal(page.el('f-hazard').checked, true);
+  assert.equal(page.el('filters').open, true);
+  await until(() => views(page).length > 0, 'vista');
+  assert.match(views(page).at(-1).url, /&hazard=1$/);
+});

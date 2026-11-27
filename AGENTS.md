@@ -119,6 +119,11 @@ Lavora su `main_claude` salvo indicazione diversa.
   con velocità nota fino a 0,5 kn) e `statusWords` per la riga «Stato» («Dichiara: ormeggiata · in realtà in moto a
   8,0 kn»). Conservazione (punto 8) e filtro `moving` usano già `isStill`, cioè lo stato reale; il filtro «Stato di
   navigazione» (`status`) resta sullo stato dichiarato.
+  Punto 46: `hazardCategory(shipType)` (X, Y, Z, OS per le unità 1-4 delle decine 2, 4, 6, 7, 8, 9), riga «Carico:
+  pericoloso o inquinante, categoria X (dichiarato)» e «⚠ Carico pericoloso cat. X» nel sottotitolo (in testo); filtro
+  `hazard=1` di `/api/locations` (`parseFilter`/`passesFilter`, in coda a `filterKey`: le chiavi di prima non cambiano;
+  altri valori = nessun filtro) e casella `#f-hazard` «Solo carichi pericolosi o inquinanti» nel pannello «Filtri».
+  `tools/carico.js` ha i tipi 71 e 84 per misurare `--filtro "hazard=1"`.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`

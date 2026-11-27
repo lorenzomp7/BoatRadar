@@ -298,7 +298,7 @@ function locationsParams(query) {
   // valgono solo se compaiono una volta. Non validi = nessun vincolo; nessun vincolo = filter null.
   const one = name => { const all = query.getAll(name); return all.length === 1 ? all[0] : null; };
   const filter = parseFilter({ types: query.getAll('types').join(','), status: query.getAll('status').join(','),
-    minSog: one('minSog'), maxSog: one('maxSog'), seen: one('seen'), moving: one('moving') });
+    minSog: one('minSog'), maxSog: one('maxSog'), seen: one('seen'), moving: one('moving'), hazard: one('hazard') });
   return { box, limit, include, filter,
     key: `bbox=${box ? box.join(',') : ''}&limit=${limit}${filter ? '&' + filterKey(filter) : ''}` };
 }

@@ -28,7 +28,8 @@ const PORTS = [
 ];
 const PORT_BBOX = '3.5,51.7,4.6,52.2';                 // vista porto: Rotterdam
 const WORLD_BBOX = '-180,-90,180,90';                  // vista mondo, come la pagina a zoom basso
-const TYPES = [70, 70, 70, 80, 80, 60, 30, 37, 52, 0];
+// 71 e 84: cargo e petroliera con carico pericoloso (categorie X e OS, punto 46), per --filtro "hazard=1"
+const TYPES = [71, 70, 70, 84, 80, 60, 30, 37, 52, 0];
 
 function args(argv) {
   const o = { navi: 30000, richieste: 100, json: null, registra: null, filtro: null, cerca: null };

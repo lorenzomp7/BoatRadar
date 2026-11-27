@@ -266,6 +266,8 @@
     <p class="fnote">Con un limite di velocità le navi che non la trasmettono non si vedono.</p>
     <div class="frow"><label for="f-seen">Ricevute negli ultimi</label><select id="f-seen"></select></div>
     <details id="f-status-box"><summary>Stato di navigazione</summary><div id="f-status" role="group" aria-label="Stato di navigazione"></div></details>
+    <!-- punto 46: hazard=1, tipi di nave con categoria di carico pericoloso o inquinante (X, Y, Z, OS) -->
+    <label><input type="checkbox" id="f-hazard"> Solo carichi pericolosi o inquinanti</label>
     <button type="button" id="f-reset" class="hbtn">Mostra tutte</button>
   </details>
 </details>
@@ -349,8 +351,8 @@ let wakeView = false;    // vista a Render in avvio in corso (fino a WAKE_TIMEOU
 const clock = createClock();
 
 // Lotto B (punti 27, 44, 46, 23): scheda nave. Bandiera e tipo di MMSI (le stazioni costiere, gli AtoN e i dispositivi di
-// soccorso non battono bandiera) e stato dichiarato contro velocità (punto 44), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
-const { mmsiKind, flagOf, mmsiWords, statusWords } = AisLogic;
+// soccorso non battono bandiera), stato dichiarato contro velocità (punto 44) e carico pericoloso (punto 46), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
+const { mmsiKind, flagOf, mmsiWords, statusWords, hazardCategory } = AisLogic;
 // true se l'MMSI è di una nave (o di una sua imbarcazione ausiliaria): solo allora la scheda ha la riga «Bandiera»
 const hasFlag = mmsi => ['ship', 'auxiliary'].includes(mmsiKind(mmsi).kind);
 
@@ -473,7 +475,7 @@ let filter = null, noTypes = false, noStatus = false;
 const nearest = (list, v, up) => list.reduce((b, x) => (Math.abs(x - v) < Math.abs(b - v) || (up && Math.abs(x - v) === Math.abs(b - v)) ? x : b));
 // filtro → parametri di parseFilter (stringhe), da modificare e rileggere
 const queryOf = f => ({ types: f?.types?.join(',') ?? '', status: f?.status?.join(',') ?? '', minSog: f?.minSog ?? '',
-  maxSog: f?.maxSog ?? '', seen: f?.seen ?? '', moving: f?.moving == null ? '' : f.moving ? '1' : '0' });
+  maxSog: f?.maxSog ?? '', seen: f?.seen ?? '', moving: f?.moving == null ? '' : f.moving ? '1' : '0', hazard: f?.hazard ? '1' : '' });
 // testo salvato → { filter, types, status } (types/status: nessuno acceso); non valido o assente = nessun filtro
 // (parseFilter non lancia mai). Velocità e «ricevute negli ultimi» fuori dalle liste delle tendine (salvate a mano o da
 // una versione con altri valori) vanno al valore più vicino: il minimo verso il basso, il massimo verso l'alto a parità
@@ -481,7 +483,7 @@ function readFilter(raw) {
   const q = new URLSearchParams(typeof raw === 'string' ? raw : ''), types = q.getAll('types'), status = q.getAll('status');
   const none = list => list.length > 0 && list.every(t => !t.trim());
   let f = parseFilter({ types: types.join(','), status: status.join(','), minSog: q.get('minSog'),
-    maxSog: q.get('maxSog'), seen: q.get('seen'), moving: q.get('moving') });
+    maxSog: q.get('maxSog'), seen: q.get('seen'), moving: q.get('moving'), hazard: q.get('hazard') });
   if (f) f = parseFilter({ ...queryOf(f), minSog: f.minSog == null ? '' : nearest(SOG_FROM, f.minSog),
     maxSog: f.maxSog == null ? '' : nearest(SOG_TO, f.maxSog, true), seen: f.seen == null ? '' : nearest(SEEN_MIN, f.seen) });
   return { filter: f, types: none(types), status: none(status) };
@@ -520,6 +522,7 @@ function syncFilterControls() {
   $('f-min').value = String(filter?.minSog ?? 0);
   $('f-max').value = filter?.maxSog == null ? '' : String(filter.maxSog);
   $('f-seen').value = filter?.seen == null ? '' : String(filter.seen);
+  $('f-hazard').checked = !!filter?.hazard;
   for (const o of $('f-max').options || []) o.disabled = o.value !== '' && filter?.minSog != null && Number(o.value) < filter.minSog;
   for (const o of $('f-min').options || []) o.disabled = filter?.maxSog != null && Number(o.value) > filter.maxSog;
   const n = filterCount(filter) + (noTypes ? 1 : 0) + (noStatus ? 1 : 0);
@@ -566,6 +569,7 @@ $('legend').addEventListener('change', e => {
   else if (t.id === 'f-max') q.maxSog = t.value;
   else if (t.id === 'f-seen') q.seen = t.value;
   else if (t.name === 'f-moving') q.moving = t.value;
+  else if (t.id === 'f-hazard') q.hazard = t.checked ? '1' : '';
   else if (t.name === 'f-status') {
     // si può spegnere anche l'ultima casella: nessuno stato acceso = nessuna nave, come senza tipi (e la riga lo dice)
     const on = new Set(noStatus ? [] : filter?.status || NAV_GROUPS.map(g => g.key));
@@ -599,7 +603,7 @@ document.addEventListener('keydown', e => {
   syncFilterControls();
   // dopo una ricarica con filtri del pannello (non solo i tipi della legenda) il pannello parte aperto: si vede perché
   // mancano navi
-  $('filters').open = noStatus || ['status', 'minSog', 'maxSog', 'seen', 'moving'].some(k => filter?.[k] != null);
+  $('filters').open = noStatus || ['status', 'minSog', 'maxSog', 'seen', 'moving', 'hazard'].some(k => filter?.[k] != null);
 }
 // su telefono la legenda parte chiusa (resta il pulsante «Legenda»), così non copre la mappa
 if (matchMedia('(max-width: 640px)').matches) $('legend').open = false;
@@ -1321,6 +1325,7 @@ function facts(mmsi) {
       ${row('Velocità / Rotta', sog || cog ? `${sog || '—'} / ${cog || '—'}` : null)}
       ${row('Prua', hdg != null ? hdg + '°' : null)}
       ${row('Stato', statusWords(p.navStat, p.sog))}
+      ${hazardCategory(v.shipType) ? row('Carico', `pericoloso o inquinante, categoria ${hazardCategory(v.shipType)} (dichiarato)`) : ''}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
       <tr><td>Posizione</td><td id="pos-mode">${esc(positionWords(mmsi))}</td></tr>
@@ -1339,6 +1344,8 @@ function render(mmsi) {
   const v = meta.get(mmsi) || {};
   // sottotitolo: bandiera per le navi, tipo di MMSI per le stazioni («Stazione costiera · Italia»)
   const flag = hasFlag(mmsi) ? 'bandiera ' + (flagOf(mmsi) || '—') : mmsiWords(mmsi);
+  // punto 46: carico pericoloso anche in testo, non solo con un colore
+  const hazard = hazardCategory(v.shipType) ? ` · ⚠ Carico pericoloso cat. ${hazardCategory(v.shipType)}` : '';
   const imo = v.imo && v.imo > 0 ? v.imo : null;
   const ids = { IMO: imo, MMSI: mmsi, Nome: v.name };
   const yacht = v.shipType === 36 || v.shipType === 37 || !imo;
@@ -1349,7 +1356,7 @@ function render(mmsi) {
   $('content').dataset.known = imo ? 'imo' : '';
   $('content').innerHTML = `
     <h2>${esc(v.name || 'Senza nome')}</h2>
-    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · ${esc(flag)}</div>
+    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · ${esc(flag)}${esc(hazard)}</div>
     <table id="facts">${facts(mmsi)}</table>
     <a class="link vfmore" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">📷 Foto, stazza, anno di costruzione e porti
       <small>Dati che il segnale AIS non trasmette: scheda completa su VesselFinder</small></a>

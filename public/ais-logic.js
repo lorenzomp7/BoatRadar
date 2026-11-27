@@ -410,11 +410,12 @@
   // Arrotondamento a 1/scale; + 0 trasforma -0 in 0
   const roundTo = (n, scale) => Math.round(n * scale) / scale + 0;
 
-  // Filtro normalizzato dai parametri q = { types, status, minSog, maxSog, seen, moving } (stringhe, come da URL):
-  // { types, status, minSog, maxSog, seen, moving } con null = nessun vincolo, oppure null se nessun vincolo resta.
+  // Filtro normalizzato dai parametri q = { types, status, minSog, maxSog, seen, moving, hazard } (stringhe, come da URL):
+  // { types, status, minSog, maxSog, seen, moving, hazard } con null = nessun vincolo, oppure null se nessun vincolo resta.
   // types e status: chiavi di TYPES e NAV_GROUPS separate da virgola (sconosciute scartate, tutte = nessun vincolo);
   // minSog e maxSog in nodi fra 0 e 102,2 arrotondati a 0,1 (minimo 0 = nessuno; minimo oltre il massimo = entrambi
-  // ignorati); seen in minuti, > 0 e ≤ 1440, arrotondato a 0,01; moving '1' = in moto, '0' = ferme. Mai eccezioni.
+  // ignorati); seen in minuti, > 0 e ≤ 1440, arrotondato a 0,01; moving '1' = in moto, '0' = ferme; hazard '1' = solo
+  // carichi pericolosi o inquinanti (punto 46, hazardCategory), qualunque altro valore nessun vincolo. Mai eccezioni.
   function parseFilter(q) {
     if (!q || typeof q !== 'object') return null;
     const sog = x => { const n = decimal(x); if (n === null) return null; const r = roundTo(n, 10); return r >= 0 && r <= 102.2 ? r : null; };
@@ -424,12 +425,14 @@
     const seenN = decimal(q.seen), seenR = seenN === null ? null : roundTo(seenN, 100);
     const mv = paramText(q.moving);
     const f = { types: keysOf(q.types, TYPES), status: keysOf(q.status, NAV_GROUPS), minSog, maxSog,
-      seen: seenR > 0 && seenR <= 1440 ? seenR : null, moving: mv === '1' ? true : mv === '0' ? false : null };
+      seen: seenR > 0 && seenR <= 1440 ? seenR : null, moving: mv === '1' ? true : mv === '0' ? false : null,
+      hazard: paramText(q.hazard) === '1' ? true : null };
     return Object.values(f).some(v => v !== null) ? f : null;
   }
 
   // Forma canonica del filtro, solo i campi presenti in ordine fisso:
-  // 'types=cargo,tanker&status=moored&minSog=5&maxSog=20&seen=15&moving=1'; '' senza filtro.
+  // 'types=cargo,tanker&status=moored&minSog=5&maxSog=20&seen=15&moving=1&hazard=1'; '' senza filtro (hazard in coda:
+  // le chiavi di prima del punto 46 non cambiano).
   // parseFilter dei suoi parametri restituisce lo stesso filtro (la usano la chiave della cache e localStorage).
   function filterKey(f) {
     if (!f) return '';
@@ -438,12 +441,14 @@
     if (f.status) parts.push('status=' + f.status.join(','));
     for (const k of ['minSog', 'maxSog', 'seen']) if (f[k] != null) parts.push(`${k}=${f[k]}`);
     if (f.moving != null) parts.push('moving=' + (f.moving ? 1 : 0));
+    if (f.hazard) parts.push('hazard=1');
     return parts.join('&');
   }
 
   // true se la posizione p = { sog, navStat, ts } della nave v = { shipType } passa il filtro f all'ora now (ms).
   // Velocità non nota (mancante o 102,3) non passa né minimo né massimo; seen: età ≤ seen minuti, ora non valida no;
-  // moving: in moto = non ferma (isStill del punto 8), così in moto e ferme dividono tutte le navi. f null = passa.
+  // moving: in moto = non ferma (isStill del punto 8), così in moto e ferme dividono tutte le navi; hazard: tipo con
+  // categoria di carico pericoloso (punto 46). f null = passa.
   function passesFilter(p, v, f, now) {
     if (!f) return true;
     if (f.types && !f.types.includes(typeOf(v?.shipType).key)) return false;
@@ -452,11 +457,13 @@
     if (f.maxSog != null && !(validSog(p.sog) && p.sog <= f.maxSog)) return false;
     if (f.seen != null && !(now - toMs(p.ts) <= f.seen * MIN_MS)) return false;
     if (f.moving != null && isStill(p) === f.moving) return false;
+    if (f.hazard && !hazardCategory(v?.shipType)) return false;
     return true;
   }
 
-  // Quanti criteri sono attivi (per «· 2 attivi»): tipi, stato, velocità (da e a contano una volta), ricezione, movimento
-  const filterCount = f => !f ? 0 : [f.types, f.status, f.minSog ?? f.maxSog, f.seen, f.moving].filter(x => x != null).length;
+  // Quanti criteri sono attivi (per «· 2 attivi»): tipi, stato, velocità (da e a contano una volta), ricezione, movimento,
+  // carico pericoloso
+  const filterCount = f => !f ? 0 : [f.types, f.status, f.minSog ?? f.maxSog, f.seen, f.moving, f.hazard].filter(x => x != null).length;
 
   // Lotto B (punti 27, 44, 46, 23): dati della scheda nave. Test in test/scheda-logica.test.js e test/pagina-scheda.test.js.
   // Punto 27: tipo di MMSI (ITU-R M.585). Prime 3 cifre dell'identità (MID) = paese. Tabella parziale.
@@ -546,6 +553,15 @@
     if (!declared) return null;
     if (!mismatch) return declared;
     return `Dichiara: ${lowerFirst(declared)} · in realtà ${mismatch === 'moving' ? 'in moto a ' + knots(sog) : `ferma (${knots(sog)})`}`;
+  }
+
+  // Punto 46: categoria del carico pericoloso o inquinante dal tipo di nave AIS (IMO: X, Y, Z, OS = unità 1-4 delle decine
+  // 2 WIG, 4 unità veloci, 6 passeggeri, 7 cargo, 8 petroliere, 9 altro); altrimenti null. Usata anche dal filtro hazard.
+  const HAZARD = ['X', 'Y', 'Z', 'OS'];
+  function hazardCategory(t) {
+    if (!Number.isInteger(t) || t < 0 || t > 99) return null;
+    const tens = Math.floor(t / 10), unit = t % 10;
+    return [2, 4, 6, 7, 8, 9].includes(tens) && unit >= 1 && unit <= 4 ? HAZARD[unit - 1] : null;
   }
 
   // Punto 86: server della pagina da config.js (cfg = window). BOATRADAR_APIS = [{url, name, sleeps}] o stringhe, nell'ordine
@@ -895,7 +911,7 @@
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
-    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, NAV_STATUS_LABEL, effectiveStatus, statusWords,
+    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, NAV_STATUS_LABEL, effectiveStatus, statusWords, hazardCategory,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
     norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
