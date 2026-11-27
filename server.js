@@ -49,7 +49,7 @@ const isLive = (p, now) => now <= expiresAt(p);
 
 const positions = new Map(); // mmsi -> { lat, lon, sog, cog, heading, rot, navStat, ts, classA, staticScore }
 const candidates = new Map(); // mmsi -> posizione dopo un salto, in attesa di conferma (position-check.js)
-const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught }
+const vessels = new Map();   // mmsi -> { mmsi, name, imo, callSign, shipType, destination, draught, aisClass, … }
 const status = { hasKey: false, connected: false, error: null, messages: 0, rejected: 0 };
 let dataVersion = 0;  // cresce a ogni cambio di navi o posizioni: dice se una risposta in cache è ancora attuale
 // compressione con aisstream: negotiated = permessage-deflate accettato all'apertura, confirmed = CompressionEnabled
@@ -131,6 +131,9 @@ function handle(msg) {
 
   const m = msg.Message || {};
   const pos = m.PositionReport || m.StandardClassBPositionReport || m.ExtendedClassBPositionReport;
+  // classe AIS dall'ultimo messaggio (in /api/vessel): la scheda spiega che le navi di classe B non mandano i dati di viaggio
+  if (m.PositionReport || m.ShipStaticData) v.aisClass = 'A';
+  else if (m.StandardClassBPositionReport || m.ExtendedClassBPositionReport || m.StaticDataReport) v.aisClass = 'B';
   if (pos) {
     if (m.ExtendedClassBPositionReport) { v.shipType = pos.Type; setDimensions(v, pos.Dimension); }
     // heading e rot fanno parte del fix: passano anche per candidato e conferma di position-check.js

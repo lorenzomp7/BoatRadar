@@ -524,12 +524,33 @@
     const { kind, mid } = mmsiKind(mmsi);
     return (kind === 'ship' || kind === 'auxiliary') && Object.hasOwn(MID_NAMES, mid) ? MID_NAMES[mid] : null;
   }
-  // Riga «Tipo di MMSI»: null per le navi; altrimenti il tipo e, se noto, il paese («Stazione costiera · Italia»)
+  const countryOf = mid => mid != null && Object.hasOwn(MID_NAMES, mid) ? MID_NAMES[mid] : null;
+  // Il server riceve solo messaggi di navi (posizione e dati statici): un MMSI con la forma di una stazione costiera, di un
+  // gruppo, di un aeromobile SAR o di un AtoN su una nave è programmato male a bordo (MMSI anomalo). Forma in minuscolo.
+  const STATION_FORMS = Object.freeze({ coast: 'stazione costiera', group: 'gruppo di navi', sar: 'aeromobile SAR',
+    aton: 'AtoN, aiuto alla navigazione' });
+  const anomalousMmsi = mmsi => Object.hasOwn(STATION_FORMS, mmsiKind(mmsi).kind);
+  // Riga «Tipo di MMSI»: null per le navi; «MMSI anomalo per una nave (forma di stazione costiera · Italia)» per le forme
+  // di stazione; altrimenti il tipo e, se noto, il paese («Radio VHF portatile · Italia»)
   function mmsiWords(mmsi) {
     const { kind, mid } = mmsiKind(mmsi);
     if (kind === 'ship') return null;
-    const country = mid != null && Object.hasOwn(MID_NAMES, mid) ? MID_NAMES[mid] : null;
+    const country = countryOf(mid);
+    if (Object.hasOwn(STATION_FORMS, kind))
+      return `MMSI anomalo per una nave (forma di ${[STATION_FORMS[kind], country].filter(Boolean).join(' · ')})`;
     return [MMSI_KIND_LABEL[kind], country].filter(Boolean).join(' · ');
+  }
+  // Riga «Bandiera»: flagOf per navi e ausiliari; per gli MMSI anomali il paese del MID con l'avviso
+  // («Italia (dal MID, MMSI anomalo)»); null per il resto o se il MID non è in tabella
+  function flagWords(mmsi) {
+    if (!anomalousMmsi(mmsi)) return flagOf(mmsi);
+    const country = countryOf(mmsiKind(mmsi).mid);
+    return country ? `${country} (dal MID, MMSI anomalo)` : null;
+  }
+  // Registri italiani (Barca italiana…) in scheda: MID 247 per navi, ausiliari e MMSI anomali
+  function italianRegistries(mmsi) {
+    const { kind, mid } = mmsiKind(mmsi);
+    return mid === 247 && (kind === 'ship' || kind === 'auxiliary' || Object.hasOwn(STATION_FORMS, kind));
   }
 
   // Punto 44: stato di navigazione dichiarato (impostato a mano dall'equipaggio, spesso non aggiornato) e cosa fa la nave.
@@ -545,7 +566,9 @@
       : (navStat === 0 || navStat === 8) && validSog(sog) && sog <= 0.5 ? 'still' : null;
     return { declared, still, mismatch };
   }
-  const knots = n => n.toFixed(1).replace('.', ',') + ' kn';
+  // una cifra decimale con la virgola, come in tutta la scheda («7,4 m», «90,0°», «8,0 kn»)
+  const oneDecimal = n => n.toFixed(1).replace('.', ',');
+  const knots = n => oneDecimal(n) + ' kn';
   const lowerFirst = t => t.charAt(0).toLowerCase() + t.slice(1);
   // Riga «Stato»: il dichiarato; se contrasta «Dichiara: ormeggiata · in realtà in moto a 8,0 kn» (o «ferma (0,0 kn)»)
   function statusWords(navStat, sog) {
@@ -565,28 +588,35 @@
   }
 
   // Punto 23: ETA con l'anno. L'AIS manda mese, giorno, ora e minuto UTC senza anno (decodeEta, etaOf di server.js):
-  // fra gli anni y−1, y e y+1 (y = anno UTC di now) vale la data esistente (niente 29/2 negli anni non bisestili né 31/4)
-  // nella finestra [now − 30 giorni, now + 335 giorni), lunga 365 giorni, quindi al più una. Ora mancante = inizio del
-  // giorno, minuto mancante = 0. → ms UTC, o null.
-  const DAY_MS = 24 * HOUR_MS;
+  // fra gli anni y−1, y e y+1 (y = anno UTC di now) vale la prima data esistente (niente 29/2 negli anni non bisestili
+  // né 31/4) da now − 300 giorni in poi, se è prima di now + 65 giorni: un'ETA vecchia (non aggiornata dall'equipaggio)
+  // resta passata invece di diventare un viaggio di 11 mesi. Fra due ricorrenze che scavalcano un 29 febbraio ci sono
+  // 366 giorni: allora vale fino a now + 66 giorni, così ogni data che non sia il 29/2 ha sempre un anno. Ora mancante
+  // = inizio del giorno, minuto mancante = 0. → ms UTC, o null.
+  const DAY_MS = 24 * HOUR_MS, ETA_PAST_DAYS = 300, ETA_AHEAD_DAYS = 65;
   function etaTime(eta, now) {
     if (!eta || !finite(now)) return null;
     const { month, day } = eta;
     if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
     const hour = Number.isInteger(eta.hour) && eta.hour >= 0 && eta.hour <= 23 ? eta.hour : 0;
     const minute = Number.isInteger(eta.hour) && Number.isInteger(eta.minute) && eta.minute >= 0 && eta.minute <= 59 ? eta.minute : 0;
-    const y = new Date(now).getUTCFullYear();
+    const y = new Date(now).getUTCFullYear(), from = now - ETA_PAST_DAYS * DAY_MS;
     for (const year of [y - 1, y, y + 1]) {
       const t = Date.UTC(year, month - 1, day, hour, minute), d = new Date(t);
-      if (d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) continue;
-      if (t >= now - 30 * DAY_MS && t < now + 335 * DAY_MS) return t;
+      if (d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day || t < from) continue;
+      // la prima da now − 300 giorni: entro 65 giorni avanti, o 66 se l'anno prima esiste ed è a 366 giorni
+      const prev = Date.UTC(year - 1, month - 1, day, hour, minute), leapGap = new Date(prev).getUTCDate() === day && t - prev > 365 * DAY_MS;
+      return t < now + (ETA_AHEAD_DAYS + (leapGap ? 1 : 0)) * DAY_MS ? t : null;
     }
     return null;
   }
   const MONTHS = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
   const two = n => String(n).padStart(2, '0');
-  // Riga «ETA»: { date: '2 gen 2027, 08:00 UTC', rel } con rel «tra 5 h 20 min» sotto le 48 h, poi «tra N giorni», o
-  // «già passata»; senza ora solo la data e i giorni di calendario («oggi», «domani», «tra N giorni»). null se etaTime è null.
+  // Riga «ETA»: { date: '2 gen 2027, 08:00 UTC', rel } con rel «tra 5 h 20 min» sotto le 48 h, poi «tra N giorni»; passata
+  // «già passata» sotto un giorno, poi «già passata (N giorni fa): forse non aggiornata»; senza ora solo la data e i giorni
+  // di calendario («oggi», «domani», «tra N giorni», «già passata (1 giorno fa)…»). null se etaTime è null.
+  const pastWords = days => days < 1 ? 'già passata'
+    : `già passata (${days === 1 ? '1 giorno' : days + ' giorni'} fa): forse non aggiornata`;
   function etaWords(eta, now) {
     const t = etaTime(eta, now);
     if (t == null) return null;
@@ -596,10 +626,10 @@
     let rel;
     if (!hasHour) {
       const today = new Date(now), days = Math.round((t - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / DAY_MS);
-      rel = days < 0 ? 'già passata' : days === 0 ? 'oggi' : days === 1 ? 'domani' : `tra ${days} giorni`;
+      rel = days < 0 ? pastWords(-days) : days === 0 ? 'oggi' : days === 1 ? 'domani' : `tra ${days} giorni`;
     } else {
       const diff = t - now;
-      if (diff < 0) rel = 'già passata';
+      if (diff < 0) rel = pastWords(Math.floor(-diff / DAY_MS));
       else if (diff < MIN_MS) rel = 'tra meno di 1 min';
       else if (diff < 48 * HOUR_MS) {
         const min = Math.floor(diff / MIN_MS), h = Math.floor(min / 60), m = min % 60;
@@ -961,7 +991,7 @@
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
-    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, NAV_STATUS_LABEL, effectiveStatus, statusWords, hazardCategory,
+    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, anomalousMmsi, flagWords, italianRegistries, oneDecimal, knots, NAV_STATUS_LABEL, effectiveStatus, statusWords, hazardCategory,
     etaTime, etaWords, voyageTitle,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,

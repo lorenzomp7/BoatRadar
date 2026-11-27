@@ -112,8 +112,12 @@ Lavora su `main_claude` salvo indicazione diversa.
   `test/scheda-logica.test.js` e `test/pagina-scheda.test.js`). Punto 27: `mmsiKind` (ITU-R M.585: nave, stazione
   costiera `00`, gruppo `0`, SAR `111`, AtoN `99`, ausiliaria `98`, portatile `8`, SART/MOB/EPIRB `970`/`972`/`974`, MID
   fuori da 201-775 = non valido), `MID_NAMES` (tabella spostata dalla pagina), `flagOf` (paese solo per navi e ausiliarie)
-  e `mmsiWords`; in scheda riga «Bandiera» per le navi, «Tipo di MMSI» per le altre (anche nel sottotitolo); i registri
-  italiani e la bandiera dei risultati usano `flagOf`. Il server non scarta gli MMSI non validi: la scheda li marca.
+  e `mmsiWords`; in scheda riga «Bandiera» per le navi, «Tipo di MMSI» per le altre (anche nel sottotitolo). Il server
+  riceve solo messaggi di navi: le forme di stazione costiera, gruppo, SAR e AtoN (`anomalousMmsi`) sono navi con l'MMSI
+  programmato male, «MMSI anomalo per una nave (forma di stazione costiera · Italia)», con «Bandiera» dal MID
+  («Italia (dal MID, MMSI anomalo)», `flagWords`, anche nel sottotitolo e nei risultati della ricerca); registri italiani
+  con MID 247 per navi, ausiliarie e MMSI anomali (`italianRegistries`). SART, MOB, EPIRB e portatili restano «Tipo di
+  MMSI» senza bandiera. Il server non scarta gli MMSI non validi: la scheda li marca.
   Punto 44: `NAV_STATUS_LABEL` (spostato dalla pagina), `effectiveStatus(navStat, sog)` (`mismatch` 'moving' se dichiara
   all'ancora, ormeggiata o incagliata ma per `isStill` non è ferma, cioè va da 3 kn; 'still' se dichiara in navigazione
   con velocità nota fino a 0,5 kn) e `statusWords` per la riga «Stato» («Dichiara: ormeggiata · in realtà in moto a
@@ -124,12 +128,22 @@ Lavora su `main_claude` salvo indicazione diversa.
   `hazard=1` di `/api/locations` (`parseFilter`/`passesFilter`, in coda a `filterKey`: le chiavi di prima non cambiano;
   altri valori = nessun filtro) e casella `#f-hazard` «Solo carichi pericolosi o inquinanti» nel pannello «Filtri».
   `tools/carico.js` ha i tipi 71 e 84 per misurare `--filtro "hazard=1"`.
-  Punto 23: `etaTime(eta, now)` (l'anno fra y−1, y, y+1 che mette la data esistente in [now − 30 giorni, now + 335
-  giorni), `etaWords` («2 gen 2027, 08:00 UTC (tra 5 h 20 min)», «tra N giorni», «già passata»; senza ora solo la data) e
-  `voyageTitle`; in scheda «n.d.» per ogni valore mancante (mai «—», anche nel sottotitolo) e, in fondo, il gruppo
-  «Viaggio (dichiarato dalla nave, 2 h fa)» con Prossimo porto, ETA e Pescaggio, o «Dati di viaggio non trasmessi dalla
-  nave» se sono arrivati i dati statici ma nessuno dei tre. Nel browser: passo 2 bis di `tools/smoke-browser.sh`
-  (scheda di LAGUNA PRIMA, screenshot `diagnosi/smoke/<desktop|telefono>-scheda.png`).
+  Punto 23: `etaTime(eta, now)` (fra y−1, y, y+1 la prima data esistente da now − 300 giorni, se è prima di now + 65
+  giorni, o + 66 quando fra le due ricorrenze c'è un 29 febbraio: ogni data che non sia il 29/2 ha sempre un anno e
+  un'ETA vecchia resta passata), `etaWords` («2 gen 2027, 08:00 UTC (tra 5 h 20 min)», «tra N giorni», «già passata»
+  sotto un giorno, poi «già passata (N giorni fa): forse non aggiornata»; senza ora solo la data) e `voyageTitle`.
+  Tabella della scheda in `<tbody>`: chi è la nave (Tipo, Dimensioni «150 × 22 m» o «150 m (larghezza n.d.)», Bandiera
+  e/o Tipo di MMSI, IMO, MMSI, Nominativo), poi «Viaggio (dichiarato dalla nave, 2 h fa)» (Prossimo porto, ETA,
+  Pescaggio, Carico; o «Dati di viaggio non trasmessi dalla nave», con «(le navi di classe B non li trasmettono)» se
+  `aisClass` di `/api/vessel` è 'B': classe dall'ultimo messaggio, A da `PositionReport`/`ShipStaticData`, B dalle
+  posizioni di classe B e da `StaticDataReport`), poi «Movimento» (Velocità / Rotta, Prua, Stato, Posizione, Ultimo
+  segnale, Fonte); titoli in `<th colspan="2" scope="rowgroup">`. Decimali con la virgola (`oneDecimal`, `knots`).
+  «n.d.» per ogni valore mancante (mai «—», anche nel sottotitolo) come `ND_HTML`: `<abbr title="non disponibile">` con
+  «non disponibile» per i lettori di schermo; i dati AIS passano sempre da `esc()`. `render()` rifà tutta la scheda
+  quando cambiano IMO o tipo (`knownKey`: sottotitolo, carico pericoloso, registri), altrimenti solo la tabella.
+  Nel browser: passo 2 bis di `tools/smoke-browser.sh` (scheda di LAGUNA PRIMA: ordine dei gruppi, `scope`, virgola e
+  prossimo porto in vista senza scorrere, anche a 390 con la scheda a metà; screenshot
+  `diagnosi/smoke/<desktop|telefono>-scheda.png`).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`

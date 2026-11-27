@@ -494,7 +494,7 @@ test('pagina: scheda aperta su una nave scaduta: «posizione scaduta (ultima: �
   assert.equal(page.get('selected'), X, 'la nave resta selezionata');
   assert.equal(page.el('panel').style.display, 'block', 'scheda aperta');
   assert.equal(lastSeen(page), dotOf('rosso') + `posizione scaduta (ultima: ${hms(ts)})`);
-  assert.match(page.el('content').innerHTML, /<td>Velocità \/ Rotta<\/td><td>10\.0 kn \/ 90\.0°<\/td>/, 'gli altri dati dell\'ultima posizione restano');
+  assert.match(page.el('content').innerHTML, /<td>Velocità \/ Rotta<\/td><td>10,0 kn \/ 90,0°<\/td>/, 'gli altri dati dell\'ultima posizione restano');
   // arriva una posizione nuova: la nave torna in mappa con il bordo giallo e la scheda torna all'età
   ts = Date.now() + advance;
   await page.tick();
