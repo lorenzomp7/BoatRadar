@@ -58,3 +58,13 @@ test('con --cerca misura anche /api/search (punto 12)', async () => {
     { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
   assert.match(out, /Ricerca «NAVE 1»: 25 risultati, [\d.]+ KB gzip, [\d.]+ ms mediana, [\d.]+ ms p95/);
 });
+
+test('con --snapshot misura salvataggio e ripristino dei dati statici (punto 22)', async () => {
+  assert.equal(args(['--snapshot']).snapshot, true);
+  assert.equal(args([]).snapshot, false);
+  assert.equal(args(['--snapshot', '--navi', '5']).navi, 5, '--snapshot non prende un valore');
+  const out = await new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--snapshot'],
+    { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
+  assert.match(out, /Snapshot: 300 navi, [\d.]+ KB gzip · salvataggio [\d.]+ ms \(blocco massimo [\d.]+ ms\) · ripristino [\d.]+ ms \(blocco massimo [\d.]+ ms\)/);
+});

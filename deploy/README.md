@@ -59,12 +59,59 @@ negativo) vale come il default. Lo stato della cache è in `locationsCache` di `
 | `LOCATIONS_CACHE_BYTES` | `33554432` (32 MB) | byte al massimo (JSON più gzip); oltre esce la voce più vecchia |
 | `LOCATIONS_CACHE_FILTERED` | `20` | quante delle `LOCATIONS_CACHE_SIZE` voci possono avere un filtro (`types`, `status`, `minSog`, `maxSog`, `seen`, `moving`; mai più di `LOCATIONS_CACHE_SIZE`, decimali arrotondati per difetto); `0` = le richieste filtrate non entrano in cache. Una voce filtrata oltre questa quota, o oltre i tetti di voci e byte, espelle la filtrata più vecchia: il traffico filtrato non espelle mai le viste senza filtro. Una voce senza filtro oltre i tetti espelle invece la più vecchia in assoluto |
 | `LOCATIONS_CACHE_CLEANUP_MS` | `60000` | ogni quanti ms si tolgono le voci che non si possono più riusare |
+| `SNAPSHOT_FILE` | nessuno (in `compose.yml`: `/data/vessels.json.gz`) | file dei dati statici delle navi conservati fra un riavvio e l'altro (punto 22, sezione «Dati statici dopo un riavvio»); senza, il server parte vuoto |
+| `SNAPSHOT_INTERVAL_MS` | `600000` (10 min) | ogni quanti ms si salvano i dati statici (solo con `SNAPSHOT_FILE`) |
+| `SNAPSHOT_EXIT_MS` | `8000` | a SIGTERM/SIGINT, tempo massimo dell'ultimo salvataggio prima di uscire comunque (sotto il `stop_grace_period` di 20 s di `compose.yml`) |
+| `SNAPSHOT_RESTORE_MS` | `5000` | tempo massimo del ripristino all'avvio prima di collegarsi comunque ad aisstream (il ripristino continua; i salvataggi aspettano la sua fine) |
 
 `vessels` di `/api/status` conta le posizioni in memoria, non le navi in mappa: comprende anche le posizioni già
 scadute che la pulizia non ha ancora tolto (al massimo `POSITIONS_CLEANUP_MS`, 60 s) e, con il punto 8, le navi ferme
 fino a 6 h invece di 30 min. Dopo il deploy del punto 8 il numero cresce quindi anche senza navi nuove: annota
 `vessels` sulla VM prima del deploy e confrontalo dopo qualche ora (memoria della VM e peso della vista mondo,
 `docs/prestazioni.md`), per esempio con `curl -s https://<API_HOST>/api/status | jq '{vessels, limits}'`.
+
+## Dati statici dopo un riavvio
+
+Nome, IMO, nominativo, tipo, destinazione, pescaggio, dimensioni ed ETA arrivano da aisstream solo ogni 6 minuti
+circa per nave (`ShipStaticData`), mentre le posizioni arrivano di continuo: dopo un riavvio o un deploy le schede
+restavano a lungo senza nome né destinazione. Con `SNAPSHOT_FILE` (`snapshot.js`, punto 22) `server.js`:
+
+- all'avvio rilegge il file prima di collegarsi ad aisstream (al massimo 5 s, poi si collega comunque) e ripristina
+  solo i dati statici di meno di 48 h, validati campo per campo con le stesse regole dei messaggi in arrivo (testi
+  ripuliti, IMO con la cifra di controllo, pescaggio maggiore di 0); nessuna posizione (le navi tornano in mappa con la
+  prima posizione nuova). Se nel frattempo è arrivato qualcosa di una nave (es. il nome in `MetaData`), vale quello e
+  dal file si prendono solo i campi che mancano;
+- un file non valido (rovinato, di un altro formato o versione, o oltre i tetti: 16 MB su disco, controllati prima di
+  leggerlo; 64 MB decompresso, dove 50.000 navi sono circa 12 MB; righe di al massimo 1000 navi e non più di quelle di
+  250.000 navi; JSON non a righe fino a 4 MB) non blocca l'avvio: diventa `vessels.json.gz.bad` (sostituisce un `.bad`
+  di prima, da guardare o cancellare a mano) e il server parte vuoto. Un file costruito per esaurire la memoria (es.
+  pochi KB di gzip con milioni di a capo) si ferma al tetto del decompresso, così il container non riparte all'infinito;
+- se invece la lettura fallisce per I/O (`EIO`, `EACCES`, non un file…) il file resta com'è e **fino al riavvio non si
+  salva più** (né a intervalli né a SIGTERM): il file può essere buono e il disco in difficoltà, e un salvataggio lo
+  sostituirebbe con le sole navi arrivate dopo l'avvio. Sistemato il disco, un riavvio lo rilegge;
+- li salva ogni `SNAPSHOT_INTERVAL_MS` (10 min) e a `docker stop` (SIGTERM), in gzip (circa 0,5 MB per 50.000 navi
+  sintetiche di `tools/carico.js`; con nomi e destinazioni veri di più), su un file `.tmp` scritto e sincronizzato su
+  disco (`fsync`) e poi rinominato: un'interruzione o un calo di corrente a metà lasciano intero il file di prima. Mai
+  prima della fine del ripristino; un segnale durante il ripristino esce senza salvare, un secondo segnale esce subito;
+- riporta in `snapshot` di `/api/status` `store` (`file` o `null`), `restored` (navi ripristinate all'avvio),
+  `restoreError` (problema del ripristino, resta fino al riavvio), `savedAt`, `bytes`, `vessels` e `ms` dell'ultimo
+  salvataggio ed `error` (dell'ultimo salvataggio; solo il codice o il motivo, mai percorsi).
+
+Sulla VM `deploy/compose.yml` imposta `SNAPSHOT_FILE: /data/vessels.json.gz` nel volume Docker `boatradar-data`
+(`/data`, creato nell'immagine per l'utente `node`), con `stop_grace_period: 20s` per l'ultimo salvataggio. Il volume
+resta fra un deploy e l'altro (`remote-deploy.sh` usa `up -d --build`); **`docker compose down -v` lo cancella** con i
+dati salvati. Controllo: `curl -s https://<API_HOST>/api/status | jq .snapshot`. In locale:
+`SNAPSHOT_FILE=diagnosi/vessels.json.gz node server.js` (`diagnosi/` è ignorata da git).
+
+Render Free non ha un disco persistente e a ogni risveglio o deploy riparte da un'immagine pulita: lì `SNAPSHOT_FILE`
+non è impostato e il server parte vuoto, come prima (decisione del 27/11/2026: 0 €, Render è solo la riserva).
+Alternative, se un giorno servisse anche lì (prezzi verificati il 27/11/2026):
+
+| Alternativa | Costo | Note |
+|---|---|---|
+| Nessuna persistenza su Render (scelta) | 0 € | il server di riserva parte senza dati statici |
+| Cloudflare R2 come destinazione | 0 € entro 10 GB-mese di dati e 1 milione di scritture (classe A) al mese; oltre 0,015 $/GB-mese e 4,50 $ per milione di scritture | un salvataggio ogni 10 min sono circa 4.400 scritture al mese; servirebbe un `store` R2 in `snapshot.js` con chiavi d'accesso come secret di Render ([prezzi R2](https://developers.cloudflare.com/r2/pricing/)) |
+| Disco persistente di Render | istanza a pagamento da 7 $/mese più 0,25 $/GB-mese | il piano Free non ha dischi; basterebbe `SNAPSHOT_FILE` sul disco ([prezzi Render](https://render.com/pricing)) |
 
 ## Indirizzi
 

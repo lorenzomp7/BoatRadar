@@ -45,15 +45,15 @@
 #   SMOKE_URL=https://.../ bash tools/smoke-browser.sh   # pagina già pubblicata (nessun server locale)
 #
 # Variabili: SMOKE_PORT (8799), SMOKE_FIXTURE, SMOKE_URL, SMOKE_APIS (JSON di window.BOATRADAR_APIS per il controllo 5:
-# primo server morto, secondo buono; di solito non serve), SMOKE_LEAFLET_LOCAL=1 per caricare Leaflet dal
-# registro npm quando unpkg.com non è raggiungibile (ambienti con rete limitata), AGENT_BROWSER_EXECUTABLE_PATH
+# primo server morto, secondo buono; di solito non serve), AGENT_BROWSER_EXECUTABLE_PATH
 # per usare un Chrome già installato invece di quello scaricato da «agent-browser install».
+# Leaflet (punto 85) viene da vendor/leaflet/ della repo: in ogni sessione del browser le richieste a unpkg.com sono
+# bloccate (block_unpkg), così la verifica fallisce se la pagina torna a dipendere dal CDN.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SESSION="boatradar-smoke-$$"
 AB=(agent-browser --session "$SESSION")
-INIT=()   # init script comuni (Leaflet locale) anche per il passaggio con l'orologio avanti
 PORT="${SMOKE_PORT:-8799}"
 OUT="diagnosi/smoke"
 mkdir -p "$OUT"
@@ -89,24 +89,10 @@ else
 fi
 ok "pagina: $URL"
 
-# --- Leaflet senza unpkg (facoltativo) -------------------------------------
-# La pagina carica Leaflet da unpkg.com. Se non è raggiungibile, Leaflet 1.9.4 preso dal registro npm
-# viene eseguito appena il browser crea <html>, prima degli script della pagina.
-if [ "${SMOKE_LEAFLET_LOCAL:-0}" = 1 ]; then
-  (cd "$TMP" && npm pack leaflet@1.9.4 --silent >/dev/null && tar xzf leaflet-1.9.4.tgz)
-  node -e '
-    const fs = require("fs"), d = process.argv[1] + "/package/dist/";
-    const js = fs.readFileSync(d + "leaflet.js", "utf8"), css = fs.readFileSync(d + "leaflet.css", "utf8");
-    fs.writeFileSync(process.argv[1] + "/leaflet-init.js", "(function(){if(window.top!==window)return;" +
-      "function run(){if(window.L)return;" + js + "\n;var s=document.createElement(\"style\");s.textContent=" +
-      JSON.stringify(css) + ";document.documentElement.appendChild(s);}" +
-      "if(document.documentElement)run();else new MutationObserver(function(_,o){if(document.documentElement)" +
-      "{o.disconnect();run();}}).observe(document,{childList:true});})();");
-  ' "$TMP"
-  INIT+=(--init-script "$TMP/leaflet-init.js")
-  AB+=("${INIT[@]}")
-  ok "Leaflet caricato dal registro npm (SMOKE_LEAFLET_LOCAL=1)"
-fi
+# --- Leaflet senza unpkg (punto 85) ----------------------------------------
+# La pagina carica Leaflet 1.9.4 da vendor/leaflet/: le richieste a unpkg.com si annullano in ogni sessione, prima di
+# aprire la pagina (il browser parte qui, con gli init script della sessione già in AB).
+block_unpkg() { "${AB[@]}" network route "https://unpkg.com/**" --abort >/dev/null || fail "non riesco a bloccare unpkg.com"; }
 
 # Clic vero del mouse nel punto x y della pagina
 click_at() { "${AB[@]}" mouse move "$1" "$2" >/dev/null; "${AB[@]}" mouse down >/dev/null; "${AB[@]}" mouse up >/dev/null; }
@@ -302,6 +288,13 @@ check() {
   "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0" >/dev/null \
     || fail "$name: nessuna nave in mappa (Leaflet caricato? $(js "typeof L") · stato: $(js "document.getElementById('status')?.textContent"))"
   ok "$name: $(js "markers.size") navi in mappa"
+  # punto 85: Leaflet 1.9.4 della repo, con il suo CSS applicato (con unpkg.com bloccato)
+  local lf
+  lf=$(js "(() => { const p = document.querySelector('.leaflet-pane');
+    return (window.L && L.version) + ' ' + (p && getComputedStyle(p).position) + ' '
+      + performance.getEntriesByType('resource').filter(e => /unpkg\\.com/.test(e.name)).length; })()" | tr -d '"')
+  [ "$lf" = "1.9.4 absolute 0" ] || fail "$name: Leaflet locale non caricato o CSS non applicato (versione, .leaflet-pane, richieste a unpkg: $lf)"
+  ok "$name: Leaflet $(cut -d' ' -f1 <<<"$lf") da vendor/leaflet/, CSS applicato, nessuna richiesta a unpkg.com"
 
   # nave da aprire: quella della fixture di esempio se c'è, altrimenti la prima ricevuta
   local mmsi
@@ -669,6 +662,7 @@ check() {
   "${AB[@]}" errors --clear >/dev/null; "${AB[@]}" console --clear >/dev/null
 }
 
+block_unpkg
 check desktop 1280 800
 # stessa sessione: niente filtri della passata desktop (punto 9) nella passata telefono
 js "(localStorage.clear(), true)" >/dev/null
@@ -706,7 +700,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
   };
 })();
 JS
-  AB=(agent-browser --session "$SESSION-40min" "${INIT[@]}" --init-script "$TMP/orologio-40.js")
+  AB=(agent-browser --session "$SESSION-40min" --init-script "$TMP/orologio-40.js")
+  block_unpkg
   STILL=538001234 MOVING=247123450
   "${AB[@]}" set viewport 1280 800 >/dev/null
   "${AB[@]}" open "$URL" >/dev/null || fail "40 min: la pagina non si apre"
@@ -775,7 +770,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
   apis_init "$TMP/riserva.js" "${SMOKE_APIS:-$DEFAULT_APIS}"
   for size in "desktop 1280 800" "telefono 390 844"; do
     set -- $size
-    AB=(agent-browser --session "$SESSION-riserva-$1" "${INIT[@]}" --init-script "$TMP/riserva.js")
+    AB=(agent-browser --session "$SESSION-riserva-$1" --init-script "$TMP/riserva.js")
+    block_unpkg
     "${AB[@]}" set viewport "$2" "$3" >/dev/null
     "${AB[@]}" open "$URL" >/dev/null || fail "riserva $1: la pagina non si apre"
     "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0
@@ -795,7 +791,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
 
   # primo server buono: resta sul primo, al secondo (qui morto) non arriva nessuna richiesta, neanche al giro dopo
   apis_init "$TMP/primo-buono.js" "[{\"url\":\"$GOOD_API\",\"name\":\"VM Oracle\",\"sleeps\":false},{\"url\":\"$DEAD_API\",\"name\":\"Render\",\"sleeps\":true}]"
-  AB=(agent-browser --session "$SESSION-primo-buono" "${INIT[@]}" --init-script "$TMP/primo-buono.js")
+  AB=(agent-browser --session "$SESSION-primo-buono" --init-script "$TMP/primo-buono.js")
+  block_unpkg
   "${AB[@]}" set viewport 1280 800 >/dev/null
   "${AB[@]}" open "$URL" >/dev/null || fail "primo buono: la pagina non si apre"
   "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0" >/dev/null \
@@ -845,7 +842,8 @@ if [ -z "${SMOKE_URL:-}" ]; then
 JS
   for size in "desktop 1280 800" "telefono 390 844"; do
     set -- $size
-    AB=(agent-browser --session "$SESSION-ritorno-$1" "${INIT[@]}" --init-script "$TMP/ritorno.js")
+    AB=(agent-browser --session "$SESSION-ritorno-$1" --init-script "$TMP/ritorno.js")
+    block_unpkg
     "${AB[@]}" set viewport "$2" "$3" >/dev/null
     "${AB[@]}" open "$URL" >/dev/null || fail "ritorno $1: la pagina non si apre"
     "${AB[@]}" wait --fn "typeof markers !== 'undefined' && markers.size > 0

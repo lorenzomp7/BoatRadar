@@ -65,6 +65,8 @@ function main() {
     const env = { ...process.env, PORT: String(port), AISSTREAM_KEY: 'chiave-di-prova',
       AISSTREAM_URL: `ws://127.0.0.1:${fakeAis.address().port}`, RENDER_EXTERNAL_URL: '' };
     delete env.NODE_USE_ENV_PROXY;
+    // nessuno snapshot (punto 22): con SNAPSHOT_FILE dell'ambiente le navi di prova sovrascriverebbero quello vero
+    for (const k of Object.keys(env)) if (/^SNAPSHOT_/i.test(k)) delete env[k];
     server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'inherit', 'inherit'] });
     server.on('exit', code => { console.error(`server.js terminato (codice ${code})`); fakeAis.close(); process.exit(1); });
     waitReady();

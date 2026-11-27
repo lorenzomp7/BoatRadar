@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BoatRadar</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <style>
   :root { --bg:#0f1720; --panel:#17212d; --line:#263444; --text:#e6edf3; --muted:#8b9bb0; --accent:#ffc83d;
     --sheet-h:0px; }   /* --sheet-h: altezza del pannello in basso (punto 71, solo telefono; 0 su computer) */
@@ -285,7 +285,7 @@
 </section>
 <aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
 <script src="config.js"></script>
 <script src="public/ais-logic.js"></script>
 <script>
@@ -310,6 +310,12 @@ const PRIMARY_RECHECK_MS = 5 * 60 * 1000;   // su un server di riserva: ogni 5 m
 // Se non è arrivato (rete, cache) lo dico nella riga di stato invece di fermarmi con un ReferenceError.
 if (!window.AisLogic) {
   const msg = 'Errore: public/ais-logic.js non è stato caricato. Ricarica la pagina (Ctrl+F5 o trascina giù sul telefono).';
+  document.getElementById('status').textContent = msg;
+  throw new Error(msg);
+}
+// Leaflet 1.9.4 dalla repo (vendor/leaflet/, punto 85): stesso controllo, se manca la mappa non può partire
+if (!window.L) {
+  const msg = 'Errore: Leaflet (vendor/leaflet/leaflet.js) non è stato caricato. Ricarica la pagina (Ctrl+F5 o trascina giù sul telefono).';
   document.getElementById('status').textContent = msg;
   throw new Error(msg);
 }

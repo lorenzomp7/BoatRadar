@@ -661,6 +661,19 @@
     return Number.isFinite(h) ? Math.max(min, h) : min;
   }
 
+  // Dati statici AIS (server.js all'arrivo e snapshot.js al ripristino, punto 22: stesse regole, test in test/snapshot.test.js).
+  // Testo AIS: senza il riempimento (@) e i caratteri di controllo, spazi (anche interni) compattati e tolti ai lati; non
+  // stringa = ''. I nomi AIS sono già maiuscoli: così di solito coincidono con norm() della ricerca (punto 12).
+  const cleanText = s => typeof s === 'string' ? s.replace(/@/g, '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  // IMO: 7 cifre, l'ultima è la cifra di controllo (somma delle prime sei per 7, 6, 5, 4, 3, 2, modulo 10)
+  function isIMO(n) {
+    if (!Number.isInteger(n) || n < 1000000 || n > 9999999) return false;
+    const d = String(n).split('').map(Number);
+    let sum = 0;
+    for (let i = 0; i < 6; i++) sum += d[i] * (7 - i);
+    return sum % 10 === d[6];
+  }
+
   // Punto 12: ricerca ordinata e riconoscibile (test in test/ricerca-logica.test.js). La usano server.js (/api/search) e la
   // pagina (unione con le navi in mappa), così l'ordine è lo stesso.
   // Testo confrontabile: senza accenti (NFD e segni combinanti tolti), maiuscolo, trattino, punto, barra e spazi (anche a
@@ -807,6 +820,6 @@
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
-    norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
+    cleanText, isIMO, norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
     sheetStops, snapStop, listRows, panToKeepVisible };
 });

@@ -37,7 +37,7 @@ test('file statico illeggibile: risposta 500 e il server resta in piedi', async 
   // per la conservazione delle posizioni, punto 8): lo copio e lo cancello a server avviato
   const ROOT = path.join(__dirname, '..');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boatradar-statici-'));
-  for (const f of ['server.js', 'position-check.js', 'sample.js', 'public/ais-logic.js']) {
+  for (const f of ['server.js', 'position-check.js', 'sample.js', 'snapshot.js', 'public/ais-logic.js']) {
     fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
     fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
   }
