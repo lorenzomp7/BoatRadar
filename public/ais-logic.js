@@ -525,6 +525,29 @@
     return [MMSI_KIND_LABEL[kind], country].filter(Boolean).join(' · ');
   }
 
+  // Punto 44: stato di navigazione dichiarato (impostato a mano dall'equipaggio, spesso non aggiornato) e cosa fa la nave.
+  const NAV_STATUS_LABEL = Object.freeze(['In navigazione a motore', 'All\'ancora', 'Non governabile', 'Manovrabilità limitata',
+    'Limitata dal pescaggio', 'Ormeggiata', 'Incagliata', 'In pesca', 'In navigazione a vela']);
+  // { declared: etichetta o null, still: isStill (punto 8), mismatch }: 'moving' se dichiara all'ancora, ormeggiata o
+  // incagliata (1, 5, 6) ma per isStill non è ferma (velocità nota da 3 kn); 'still' se dichiara in navigazione (0, 8) con
+  // velocità nota fino a 0,5 kn; altrimenti null. Il filtro «Stato di navigazione» resta sul dichiarato.
+  function effectiveStatus(navStat, sog) {
+    const declared = Number.isInteger(navStat) && navStat >= 0 && navStat < NAV_STATUS_LABEL.length ? NAV_STATUS_LABEL[navStat] : null;
+    const still = isStill({ navStat, sog });
+    const mismatch = STILL_STATUS.includes(navStat) && !still ? 'moving'
+      : (navStat === 0 || navStat === 8) && validSog(sog) && sog <= 0.5 ? 'still' : null;
+    return { declared, still, mismatch };
+  }
+  const knots = n => n.toFixed(1).replace('.', ',') + ' kn';
+  const lowerFirst = t => t.charAt(0).toLowerCase() + t.slice(1);
+  // Riga «Stato»: il dichiarato; se contrasta «Dichiara: ormeggiata · in realtà in moto a 8,0 kn» (o «ferma (0,0 kn)»)
+  function statusWords(navStat, sog) {
+    const { declared, mismatch } = effectiveStatus(navStat, sog);
+    if (!declared) return null;
+    if (!mismatch) return declared;
+    return `Dichiara: ${lowerFirst(declared)} · in realtà ${mismatch === 'moving' ? 'in moto a ' + knots(sog) : `ferma (${knots(sog)})`}`;
+  }
+
   // Punto 86: server della pagina da config.js (cfg = window). BOATRADAR_APIS = [{url, name, sleeps}] o stringhe, nell'ordine
   // di preferenza (prima la VM, poi Render che si addormenta); se non dà nessun indirizzo valido BOATRADAR_API, poi '/api'
   // (server.js della pagina stessa). Indirizzi senza / finale, doppioni e voci non valide (né http(s):// né /percorso,
@@ -872,7 +895,7 @@
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
-    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords,
+    MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, NAV_STATUS_LABEL, effectiveStatus, statusWords,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
     norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,

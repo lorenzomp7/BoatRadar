@@ -58,3 +58,41 @@ test('mmsiWords: null per le navi, altrimenti tipo e paese della stazione', () =
   for (const kind of ['ship', 'coast', 'group', 'sar', 'aton', 'auxiliary', 'handheld', 'sart', 'mob', 'epirb', 'invalid'])
     assert.equal(typeof AL.MMSI_KIND_LABEL[kind], 'string', kind);
 });
+
+// --- Punto 44: stato dichiarato contro velocità ------------------------------------------------------------------------
+test('effectiveStatus: dichiara ormeggiata ma va a 8 kn → in moto; in navigazione a 0,05 kn → ferma', () => {
+  assert.deepEqual(AL.effectiveStatus(5, 8), { declared: 'Ormeggiata', still: false, mismatch: 'moving' });
+  assert.deepEqual(AL.effectiveStatus(0, 0.05), { declared: 'In navigazione a motore', still: true, mismatch: 'still' });
+  assert.deepEqual(AL.effectiveStatus(1, 0.1), { declared: 'All\'ancora', still: true, mismatch: null }, 'all\'ancora e ferma');
+  assert.deepEqual(AL.effectiveStatus(8, 0), { declared: 'In navigazione a vela', still: true, mismatch: 'still' });
+  assert.deepEqual(AL.effectiveStatus(6, 4), { declared: 'Incagliata', still: false, mismatch: 'moving' });
+});
+
+test('effectiveStatus: confini di isStill (3 kn per ancora/ormeggio/incaglio, 0,5 kn per le navi in navigazione)', () => {
+  assert.equal(AL.effectiveStatus(5, 2.9).mismatch, null, '2,9 kn ormeggiata: ancora ferma per isStill');
+  assert.equal(AL.effectiveStatus(5, 2.9).still, true);
+  assert.equal(AL.effectiveStatus(5, 3).mismatch, 'moving', 'da 3 kn in moto');
+  assert.equal(AL.effectiveStatus(0, 0.5).mismatch, 'still', '0,5 kn: ferma');
+  assert.equal(AL.effectiveStatus(0, 0.6).mismatch, null, '0,6 kn: in moto, come dichiara');
+  assert.equal(AL.effectiveStatus(0, 0.6).still, false);
+});
+
+test('effectiveStatus: velocità non disponibile (102,3) o mancante, stato mancante o fuori tabella → nessun contrasto', () => {
+  assert.deepEqual(AL.effectiveStatus(5, 102.3), { declared: 'Ormeggiata', still: true, mismatch: null });
+  assert.deepEqual(AL.effectiveStatus(0, 102.3), { declared: 'In navigazione a motore', still: false, mismatch: null });
+  assert.deepEqual(AL.effectiveStatus(0, undefined), { declared: 'In navigazione a motore', still: false, mismatch: null });
+  assert.deepEqual(AL.effectiveStatus(undefined, 8), { declared: null, still: false, mismatch: null });
+  assert.deepEqual(AL.effectiveStatus(undefined, 0), { declared: null, still: true, mismatch: null });
+  assert.equal(AL.effectiveStatus(15, 0).declared, null, '15 = non definito');
+  assert.equal(AL.NAV_STATUS_LABEL[7], 'In pesca');
+});
+
+test('statusWords: il dichiarato e, se contrasta, cosa fa davvero (in parole, con la velocità)', () => {
+  assert.equal(AL.statusWords(5, 8), 'Dichiara: ormeggiata · in realtà in moto a 8,0 kn');
+  assert.equal(AL.statusWords(1, 12.34), 'Dichiara: all\'ancora · in realtà in moto a 12,3 kn');
+  assert.equal(AL.statusWords(0, 0.05), 'Dichiara: in navigazione a motore · in realtà ferma (0,1 kn)');
+  assert.equal(AL.statusWords(0, 0), 'Dichiara: in navigazione a motore · in realtà ferma (0,0 kn)');
+  assert.equal(AL.statusWords(5, 0), 'Ormeggiata');
+  assert.equal(AL.statusWords(0, 12), 'In navigazione a motore');
+  assert.equal(AL.statusWords(undefined, 12), null);
+});

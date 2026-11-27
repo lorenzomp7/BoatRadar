@@ -65,3 +65,12 @@ test('pagina: bandiera nei risultati della ricerca con flagOf (nessuna per la st
   assert.match(html, /<small id="res-247123450-d">Nave cargo · Italia/);
   assert.doesNotMatch(/<small id="res-2470001-d">[^<]*/.exec(html)?.[0] || '', /Italia/);
 });
+
+// --- Punto 44 --------------------------------------------------------------------------------------------------------
+test('pagina: riga «Stato» con il contrasto fra stato dichiarato e velocità', async () => {
+  const page = await ready();
+  let html = card(page, SHIP, { name: 'LAGUNA PRIMA', shipType: 70, staticTs: T0 - 3600000 });
+  assert.equal(cell(html, 'Stato'), 'Dichiara: ormeggiata · in realtà in moto a 8,0 kn');
+  html = card(page, LIBERIA, { name: 'MONROVIA', shipType: 71, staticTs: T0 - 3600000 });
+  assert.equal(cell(html, 'Stato'), 'Dichiara: in navigazione a motore · in realtà ferma (0,1 kn)');
+});

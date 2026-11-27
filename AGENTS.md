@@ -114,6 +114,11 @@ Lavora su `main_claude` salvo indicazione diversa.
   fuori da 201-775 = non valido), `MID_NAMES` (tabella spostata dalla pagina), `flagOf` (paese solo per navi e ausiliarie)
   e `mmsiWords`; in scheda riga «Bandiera» per le navi, «Tipo di MMSI» per le altre (anche nel sottotitolo); i registri
   italiani e la bandiera dei risultati usano `flagOf`. Il server non scarta gli MMSI non validi: la scheda li marca.
+  Punto 44: `NAV_STATUS_LABEL` (spostato dalla pagina), `effectiveStatus(navStat, sog)` (`mismatch` 'moving' se dichiara
+  all'ancora, ormeggiata o incagliata ma per `isStill` non è ferma, cioè va da 3 kn; 'still' se dichiara in navigazione
+  con velocità nota fino a 0,5 kn) e `statusWords` per la riga «Stato» («Dichiara: ormeggiata · in realtà in moto a
+  8,0 kn»). Conservazione (punto 8) e filtro `moving` usano già `isStill`, cioè lo stato reale; il filtro «Stato di
+  navigazione» (`status`) resta sullo stato dichiarato.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`

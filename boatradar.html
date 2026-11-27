@@ -348,12 +348,9 @@ let wakeView = false;    // vista a Render in avvio in corso (fino a WAKE_TIMEOU
 // minuto non sposta età e finestre. Ogni calcolo con l'ora attuale usa clock.now(), non l'ora del telefono.
 const clock = createClock();
 
-const NAV_STATUS = ['In navigazione a motore','All\'ancora','Non governabile','Manovrabilità limitata','Limitata dal pescaggio',
-  'Ormeggiata','Incagliata','In pesca','In navigazione a vela'];
-
 // Lotto B (punti 27, 44, 46, 23): scheda nave. Bandiera e tipo di MMSI (le stazioni costiere, gli AtoN e i dispositivi di
-// soccorso non battono bandiera), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
-const { mmsiKind, flagOf, mmsiWords } = AisLogic;
+// soccorso non battono bandiera) e stato dichiarato contro velocità (punto 44), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
+const { mmsiKind, flagOf, mmsiWords, statusWords } = AisLogic;
 // true se l'MMSI è di una nave (o di una sua imbarcazione ausiliaria): solo allora la scheda ha la riga «Bandiera»
 const hasFlag = mmsi => ['ship', 'auxiliary'].includes(mmsiKind(mmsi).kind);
 
@@ -1323,7 +1320,7 @@ function facts(mmsi) {
       ${row('ETA', eta)}
       ${row('Velocità / Rotta', sog || cog ? `${sog || '—'} / ${cog || '—'}` : null)}
       ${row('Prua', hdg != null ? hdg + '°' : null)}
-      ${row('Stato', NAV_STATUS[p.navStat])}
+      ${row('Stato', statusWords(p.navStat, p.sog))}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
       <tr><td>Posizione</td><td id="pos-mode">${esc(positionWords(mmsi))}</td></tr>
