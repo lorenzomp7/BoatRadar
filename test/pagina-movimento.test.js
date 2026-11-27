@@ -215,3 +215,76 @@ test('pagina: il tempo di ridisegno del renderer (renderer._redraw avvolto) entr
   assert.equal(page.get('anim.redrawMs'), 8);
   assert.equal(page.get('anim.stats.redraws'), 1);
 });
+
+// --- commit C: interruttore «Movimento fluido e posizione stimata» e riga «Posizione» della scheda ---
+const KEY = 'boatradar:movimento';
+
+test('pagina: interruttore in localStorage: acceso di default, spento con prefers-reduced-motion, la scelta salvata vince', async () => {
+  const state = { features: [fix(A, 44, 11, T0 - 60000)] };
+  let page = await ready(state);
+  assert.equal(page.get('anim.enabled'), true, 'acceso di default');
+  assert.equal(page.el('smooth').checked, true);
+  page.stop();
+  page = await ready(state, { local: { [KEY]: '0' } });
+  assert.equal(page.get('anim.enabled'), false, 'spento se salvato spento');
+  assert.equal(page.el('smooth').checked, false);
+  assert.deepEqual(latlng(page, A), { lat: 44, lon: 11 }, 'all\'ultimo fix');
+  page.stop();
+  page = await ready(state, { media: { '(prefers-reduced-motion: reduce)': true } });
+  assert.equal(page.el('smooth').checked, false, 'spento con prefers-reduced-motion');
+  page.stop();
+  page = await ready(state, { media: { '(prefers-reduced-motion: reduce)': true }, local: { [KEY]: '1' } });
+  assert.equal(page.get('anim.enabled'), true, 'acceso se l\'utente l\'ha acceso');
+  page.stop();
+  page = await ready(state, { local: 'throw' });
+  assert.equal(page.get('anim.enabled'), true, 'localStorage che lancia: default');
+});
+
+test('pagina: spegnendo l\'interruttore ogni nave torna all\'ultimo fix e il ciclo si ferma; riaccendendo riparte', async () => {
+  const a = { lat: 44, lon: 11 }, b = east(a, 10 * AL.KN * 15);
+  const state = { features: [fix(A, a.lat, a.lon, T0)] };
+  const page = await ready(state);
+  state.features = [fix(A, b.lat, b.lon, T0 + 15000)];
+  page.setNow(T0 + 16000);
+  await page.tick();
+  page.setNow(T0 + 40000);
+  page.frame(); page.frame();
+  assert.ok(dist(latlng(page, A), b) > 1, 'animata: non è sul fix');
+  page.el('smooth').checked = false;
+  page.fireEl('smooth', 'change', { target: page.el('smooth') });
+  assert.equal(page.local.get(KEY), '0');
+  assert.deepEqual(latlng(page, A), b, 'esattamente all\'ultimo fix');
+  page.frame();
+  assert.equal(page.rafPending(), 0, 'ciclo fermo');
+  page.advance(5000);
+  page.frame();
+  assert.deepEqual(latlng(page, A), b, 'resta lì');
+  page.el('smooth').checked = true;
+  page.fireEl('smooth', 'change', { target: page.el('smooth') });
+  assert.equal(page.local.get(KEY), '1');
+  assert.equal(page.rafPending(), 1, 'ciclo ripartito');
+  page.frame(); page.frame();
+  assert.ok(dist(latlng(page, A), b) > 1, 'di nuovo stimata');
+});
+
+test('pagina: riga «Posizione» della scheda: ultimo segnale, fra due segnali, stimata da velocità e rotta', async () => {
+  const a = { lat: 44, lon: 11 }, b = east(a, 10 * AL.KN * 15), S = 247100002;
+  const state = { features: [fix(A, a.lat, a.lon, T0), fix(S, 44.5, 11.5, T0, { sog: 0, navStat: 5 })] };
+  const page = await ready(state);
+  const row = mmsi => /<td>Posizione<\/td><td[^>]*>([^<]*)<\/td>/.exec(page.get(`facts(${mmsi})`))?.[1];
+  assert.equal(row(A), 'ultimo segnale', 'prima del fix (riproduzione 15 s indietro): l\'ultimo segnale');
+  state.features = [fix(A, b.lat, b.lon, T0 + 15000), fix(S, 44.5, 11.5, T0 + 15000, { sog: 0, navStat: 5 })];
+  page.setNow(T0 + 20000);
+  await page.tick();
+  assert.equal(row(A), 'fra due segnali (in differita di 15 s)');
+  page.setNow(T0 + 15000 + 15000 + 3 * 60000);
+  assert.equal(row(A), 'stimata da velocità e rotta (ultimo segnale 3 min fa)');
+  page.setNow(T0 + 15000 + 15000 + 30000);
+  assert.equal(row(A), 'stimata da velocità e rotta (ultimo segnale meno di 1 min fa)');
+  assert.equal(row(S), 'ultimo segnale', 'nave ormeggiata: mai stimata');
+  page.el('smooth').checked = false;
+  page.fireEl('smooth', 'change', { target: page.el('smooth') });
+  assert.equal(row(A), 'ultimo segnale', 'animazione spenta');
+  // velocità e rotta in scheda restano quelle del fix
+  assert.match(page.get(`facts(${A})`), /10\.0 kn \/ 90\.0°/);
+});

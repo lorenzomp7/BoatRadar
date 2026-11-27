@@ -60,6 +60,9 @@
   #legend .ltype[aria-pressed="false"] .dot { background:transparent; }
   #legend .ltype:focus-visible, #legend select:focus-visible, #legend input:focus-visible, #legend #f-reset:focus-visible {
     outline:2px solid #7cc4ff; outline-offset:1px; }
+  /* punti 13, 42: interruttore del movimento fluido, separato dai simboli come i filtri */
+  #legend .smooth { display:flex; align-items:center; gap:6px; min-height:24px; margin-top:6px; padding-top:6px;
+    border-top:1px solid var(--line); cursor:pointer; }
   #filters { border-top:1px solid var(--line); margin-top:6px; }
   #filters fieldset { border:0; margin:4px 0; padding:0; }
   #filters legend { color:var(--muted); padding:0; margin-bottom:2px; }
@@ -147,7 +150,7 @@
     /* titolo «Legenda e filtri» fisso in cima mentre la legenda scorre (copre anche il padding laterale) */
     #legend > summary { position:sticky; top:0; z-index:1; margin:0 -12px; padding:0 12px; background:var(--panel); }
     #legend[open] { padding-bottom:8px; }
-    #legend .ltype, #filters label, #filters select, #f-reset { min-height:44px; }   /* righe e controlli da 44 px */
+    #legend .ltype, #legend .smooth, #filters label, #filters select, #f-reset { min-height:44px; }   /* righe e controlli da 44 px */
     #toast { bottom:calc(58vh + 20px); }
   }
 </style>
@@ -179,6 +182,9 @@
        tratteggiate dopo 30 min -->
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="fading"/></svg>sbiadita, bordo chiaro = posizione di qualche minuto fa</div>
   <div class="sym"><svg viewBox="-6 -9 12 16" aria-hidden="true"><circle r="4" class="old"/></svg>sbiadita, tratteggiata = posizione vecchia (ferma)</div>
+  <!-- punti 13, 42: navi che scorrono fra due segnali (in differita di 15 s) e posizione stimata da velocità e rotta
+       dopo l'ultimo; salvato in localStorage['boatradar:movimento'], acceso salvo prefers-reduced-motion -->
+  <label class="smooth"><input type="checkbox" id="smooth"> Movimento fluido e posizione stimata</label>
   <!-- punto 9: filtri, salvati in localStorage['boatradar:filtri']; le opzioni delle tendine le scrive lo script -->
   <details id="filters">
     <summary id="filters-sum">Filtri</summary>
@@ -560,7 +566,15 @@ const HAS_RAF = typeof requestAnimationFrame === 'function';
 const M_PER_DEG = R_EARTH * Math.PI / 180;
 // orologio per misurare (tempi dei passi e del ridisegno): performance.now, o l'ora corretta dove manca
 const perfNow = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : clock.now());
-const anim = { enabled: HAS_RAF && !matchMedia('(prefers-reduced-motion: reduce)').matches, set: new Set(), T: -Infinity,
+// Interruttore «Movimento fluido e posizione stimata» (#smooth nella legenda): '1' acceso, '0' spento in
+// localStorage['boatradar:movimento']; senza scelta salvata acceso, ma spento con prefers-reduced-motion
+const MOTION_KEY = 'boatradar:movimento';
+const motionWanted = (() => {
+  let saved = null;
+  try { saved = localStorage.getItem(MOTION_KEY); } catch { /* scelta solo in memoria */ }
+  return saved === '1' || (saved !== '0' && !matchMedia('(prefers-reduced-motion: reduce)').matches);
+})();
+const anim = { enabled: HAS_RAF && motionWanted, set: new Set(), T: -Infinity,
   lastPick: -Infinity, lastStep: -Infinity, interval: ANIM_MIN_MS, redrawMs: 0, paused: false, raf: 0,
   // frames: fotogrammi del ciclo; picks/candidates: scelte e navi in movimento nella vista all'ultima scelta;
   // steps/moved: passi e setLatLng dei passi; stepMs/pickMs: durata dell'ultimo passo e dell'ultima scelta;
@@ -626,6 +640,7 @@ function pickAnim(wall) {
   }
   for (const it of rest) draw(it.m, it.target, zoom);
   anim.interval = frameInterval({ redrawMs: anim.redrawMs, maxPxPerS: maxPx, minMs: ANIM_MIN_MS });
+  syncPositionRow();
   Object.assign(anim.stats, { picks: anim.stats.picks + 1, candidates: items.length, pickMs: perfNow() - t0 });
 }
 // Un passo: le navi scelte verso la loro posizione all'ora di riproduzione, senza salti né ritorni (approach)
@@ -648,6 +663,38 @@ function placeAll() {
   const zoom = map.getZoom();
   for (const m of markers.values()) if (m.track?.length) draw(m, targetOf(m), zoom, true);
 }
+// Riga «Posizione» della scheda: come è calcolata la posizione mostrata adesso (velocità, rotta ed età restano del fix)
+function positionWords(mmsi, now = clock.now()) {
+  const m = markers.get(mmsi);
+  if (!anim.enabled || !m?.track?.length) return 'ultimo segnale';
+  const pos = positionAt(m.track, playNow()), last = lastFix(m);
+  if (pos.lat === last.lat && pos.lon === last.lon) return 'ultimo segnale';
+  if (pos.mode === 'interp') return `fra due segnali (in differita di ${ANIM_DELAY_MS / 1000} s)`;
+  if (pos.mode !== 'estimate') return 'ultimo segnale';
+  const age = formatAge(now - last.ts);
+  return `stimata da velocità e rotta (ultimo segnale ${age === 'adesso' ? 'meno di 1 min fa' : age})`;
+}
+// la riga della scheda aperta, aggiornata a ogni scelta (3 s) e quando cambia l'interruttore
+function syncPositionRow() {
+  const c = $('pos-mode');
+  if (c && selected != null && $('content').dataset.mmsi === String(selected)) c.textContent = positionWords(selected);
+}
+// Interruttore: spento, ogni nave all'ultimo fix e ciclo fermo; acceso, il ciclo riparte (le navi ripartono dal fix,
+// senza tornare indietro: approach)
+function setAnim(on) {
+  try { localStorage.setItem(MOTION_KEY, on ? '1' : '0'); } catch { /* vale solo in memoria */ }
+  anim.enabled = HAS_RAF && on;
+  if (anim.enabled) { anim.lastPick = -Infinity; startAnim(); }
+  else {
+    if (anim.raf) cancelAnimationFrame(anim.raf);
+    anim.raf = 0;
+    anim.set = new Set();
+    placeAll();
+  }
+  syncPositionRow();
+}
+$('smooth').checked = motionWanted;
+$('smooth').addEventListener('change', () => setAnim(!!$('smooth').checked));
 map.on('movestart zoomstart', () => { anim.paused = true; });
 map.on('moveend', () => { anim.paused = false; anim.lastPick = -Infinity; startAnim(); });
 document.addEventListener('visibilitychange', () => {
@@ -1109,6 +1156,7 @@ function facts(mmsi) {
       ${row('Stato', NAV_STATUS[p.navStat])}
       ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
       ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
+      <tr><td>Posizione</td><td id="pos-mode">${esc(positionWords(mmsi))}</td></tr>
       <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : '—'}</td></tr>
       ${row('Fonte', SOURCE_LABEL[p.source])}`;
 }

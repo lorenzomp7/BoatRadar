@@ -161,3 +161,50 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | dopo punto 9a | 30000 | 0.55 | 170.2 | 6000 | 254.3 (1550.5) | 1.1 / 5.1 | 1427 | 57.6 (366) | 0.8 / 1.2 | v22.23.5 |
 | 2026-11-26 | dopo quota filtrate in cache (punto 9a) | 30000 | 0.55 | 169.7 | 6000 | 254.6 (1550.5) | 0.9 / 1.7 | 1427 | 57.7 (366) | 0.7 / 1.1 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
+
+## Pagina
+
+Misura della pagina nel browser (punti 13, 63, 42: movimento fluido e posizione stimata) con `tools/misura-pagina.sh`:
+`server.js` con le navi sintetiche di `tools/carico.js` (`tools/smoke-server.js --navi 30000`, che le fa avanzare
+coerenti con velocità e rotta), `boatradar.html` in agent-browser a 1280×800, per ogni scenario con l'animazione spenta e
+accesa, 10 s di misura (`MISURA_SECONDI`):
+
+- fps: fotogrammi `requestAnimationFrame` al secondo;
+- ridisegni del canvas al secondo e loro p50 / p95 (`renderer._redraw`, metodo privato di Leaflet 1.9.4);
+- long task oltre 50 ms fuori dall'arrivo dei dati (non entro 1 s dalla fine di una risposta di `/api/locations` o del
+  Baltico), in tutto, e quante risposte di dati sono arrivate durante la misura (un giro ogni 15 s);
+- passi dell'animatore e `setLatLng` al secondo, p95 del passo, durata dell'ultima scelta delle navi animate (`anim.stats`);
+- `loadLocations`: tempo per unire le fonti e aggiornare i marker, mediana di 5 giri (`anim.stats.loadMs`).
+
+```
+SMOKE_LEAFLET_LOCAL=1 bash tools/misura-pagina.sh --registra "dopo punti 13, 63, 42"
+MISURA_CPU=4 bash tools/misura-pagina.sh     # facoltativo: CPU rallentata 4 volte via CDP
+```
+
+Soglie: fps ≥ 55; con l'animazione accesa vista mondo ≤ 2 ridisegni/s e p95 ≤ 12 ms, zoom 13 p95 ≤ 6 ms (spenta
+l'unico ridisegno è quello dei dati arrivati, uguale nei due casi, e resta in tabella come riferimento); nessun long task > 50 ms fuori
+dall'arrivo dei dati; `loadLocations` con l'animazione accesa al massimo 2 ms più che spenta; facoltativo, con la CPU
+4 volte più lenta, fps ≥ 30 a zoom 13. Se non reggono: `ANIM_MAX` 200 e `ANIM_MIN_MS` 50 in `boatradar.html`, poi di
+nuovo la misura. Headless e senza GPU i numeri servono a confrontare due versioni sulla stessa macchina.
+
+| Data | Versione | Scenario | Animazione | Marker | Animate / in moto | fps | Ridisegni/s | Ridisegno p50 / p95 ms | Long task > 50 ms fuori dai dati (max ms) · in tutto, risposte nella misura | Passi/s / setLatLng/s | Passo p95 ms | Scelta ms | loadLocations ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.7 | 0.1 | 17.8 / 17.8 | 0 (max 0) · 2 (max 61), 2 risposte | 0 / 0 | 0 | 8.1 | 65.3 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.8 | 0.1 | 11.4 / 11.4 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.7 | 3.1 | 60.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 3.2 / 3.2 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.8 | 19 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 853 | 60 | 0.5 | 2.8 / 6.6 | 0 (max 0) · 0 (max 0), 2 risposte | 0.9 / 0.4 | 1.2 | 0.8 | 7.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0 | 0 / 0 | 0 (max 0) · 0 (max 0), 1 risposte | 0 / 0 | 0 | 0.4 | 2.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 0.4 / 1.1 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 44.2 | 0.6 | 0.3 | 2.2 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.6 | 0.1 | 19.8 / 19.8 | 0 (max 0) · 2 (max 68), 2 risposte | 0 / 0 | 0 | 8.4 | 64.3 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.9 | 0.1 | 9.7 / 9.7 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.6 | 2 | 52.4 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 2.7 / 2.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.5 | 13.9 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60.1 | 0.5 | 0.8 / 3.9 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 1.8 | 1.5 | 9.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 0.7 / 0.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.5 | 4.2 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60.1 | 1.5 | 0.4 / 1 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.5 | 0.7 | 0.5 | 3.1 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | mondo z3 | spenta | 6000 | 0 / 0 | 57.8 | 0.1 | 54.3 / 54.3 | 0 (max 0) · 2 (max 230), 2 risposte | 0 / 0 | 0 | 14 | 174.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | mondo z3 | accesa | 6000 | 500 / 3578 | 57.7 | 0.1 | 47.5 / 47.5 | 0 (max 0) · 3 (max 213), 2 risposte | 1 / 0 | 6.1 | 13.8 | 162.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z9 | spenta | 1437 | 0 / 0 | 59.4 | 0.1 | 23 / 23 | 0 (max 0) · 2 (max 87), 2 risposte | 0 / 0 | 0 | 2.3 | 47.3 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z9 | accesa | 1437 | 500 / 853 | 58.4 | 0.8 | 14.6 / 38.6 | 2 (max 77) · 3 (max 106), 2 risposte | 1 / 14.8 | 6.5 | 3.9 | 56 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z13 | spenta | 320 | 0 / 0 | 60 | 0.1 | 4.5 / 4.5 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 3.2 | 21.8 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 2 / 7.3 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.6 | 2.2 | 1.5 | 26.4 |
+<!-- nuove righe della pagina sopra questa linea -->
