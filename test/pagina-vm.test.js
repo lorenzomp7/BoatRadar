@@ -43,7 +43,9 @@ function startPage({ skewMs = 0, routes }) {
     if (!elements.has(id)) elements.set(id, { id, style: {}, dataset: {}, textContent: '', innerHTML: '', open: true,
       isConnected: true, addEventListener() {}, focus() { document.activeElement = this; },
       contains(x) { return x === this; },   // Esc nella legenda (punto 9): il focus è dentro #legend?
-      setAttribute(k, v) { (this.attributes ||= {})[k] = String(v); },   // aria-pressed dei tipi in legenda (punto 9)
+      // attributi ARIA della ricerca (punto 12: aria-expanded, aria-activedescendant)
+      attributes: {}, setAttribute(k, v) { this.attributes[k] = String(v); }, getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; },
+      removeAttribute(k) { delete this.attributes[k]; },
       getClientRects() { return this.style.display === 'none' ? [] : [{}]; } });
     return elements.get(id);
   };
@@ -431,19 +433,16 @@ test('pagina: pallino verde/arancio/rosso con il testo dell\'età, in scheda e n
   }
 
   // ricerca: risultati del server (con timestampExternal) e navi in mappa, ognuno con pallino e testo
-  const q = page.el('q');
-  q.value = 'eta';
-  const handlers = [];
-  // il campo di ricerca registra il suo gestore con addEventListener: lo recupero rieseguendo la registrazione
-  q.addEventListener = (type, fn) => handlers.push(fn);
-  vm.runInContext(pageScript.slice(pageScript.indexOf("$('q').addEventListener('input'"),
-    pageScript.indexOf("$('results').addEventListener('click'")), page.ctx);
-  await handlers[0]({ target: q });
+  // ricerca senza l'attesa fra i tasti (runSearch; attesa e tastiera in test/pagina-ricerca.test.js)
+  page.el('q').value = 'eta';
+  await page.ctx.runSearch('eta');
   const res = page.el('results').innerHTML;
-  assert.ok(res.includes(`${dot('arancio')}ETA LONTANA`), 'risultato del server: pallino');
-  assert.match(res, /ETA LONTANA <span[^>]*>· 247620004 · 7 min fa<\/span>/, 'e il testo dell\'età');
-  assert.ok(res.includes(`${dot('verde')}ETA VERDE`) && res.includes('· 2 min fa'), 'nave in mappa');
-  assert.ok(res.includes(`${dot('rosso')}ETA ROSSO`));
+  // nome con il suo id (nome accessibile, punto 12), MMSI con l'etichetta «MMSI » solo per i lettori di schermo
+  const named = (c, name) => new RegExp(`${dot(c).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<b id="res-\\d+-n">${name}</b>`);
+  assert.match(res, named('arancio', 'ETA LONTANA'), 'risultato del server: pallino');
+  assert.match(res, /<b id="res-247620004-n">ETA LONTANA<\/b><span class="mmsi" id="res-247620004-m"><span class="sr-only">MMSI <\/span>247620004<\/span><small id="res-247620004-d">[^<]*7 min fa<\/small>/, 'e il testo dell\'età');
+  assert.ok(named('verde', 'ETA VERDE').test(res) && res.includes('2 min fa'), 'nave in mappa');
+  assert.match(res, named('rosso', 'ETA ROSSO'));
 });
 
 // --- Correzioni dopo revisione e QA (punti 8 e 62) ---------------------------------------------------------------
@@ -541,18 +540,18 @@ test('pagina: ricerca: risultati del server scaduti segnati «posizione scaduta�
     { mmsi: FRESHR, name: 'CERCA FRESCA', lat: -32, lon: -42, sog: 9, navStat: 0, timestampExternal: now - 2 * MIN }];
   const page = startPage({ routes: baseRoutes({ search: () => remote }) });
   await page.firstTickDone();
-  const q = page.el('q');
-  q.value = 'cerca';
-  const onInput = handler(page, 'q', "$('q').addEventListener('input'", "$('results').addEventListener('click'");
-  await onInput({ target: q });
+  page.el('q').value = 'cerca';
+  await page.ctx.runSearch('cerca');
   const res = page.el('results').innerHTML;
-  assert.match(res, new RegExp(`${dotOf('rosso')}CERCA SCADUTA <span[^>]*>· ${EXP} · posizione scaduta</span>`), res);
-  assert.match(res, new RegExp(`${dotOf('rosso')}CERCA ORMEGGIATA <span[^>]*>· ${OLDM} · posizione di 40 min fa</span>`), 'come tooltip e scheda');
-  assert.match(res, new RegExp(`${dotOf('verde')}CERCA FRESCA <span[^>]*>· ${FRESHR} · 2 min fa</span>`));
+  const row = (c, name, mmsi, age) => new RegExp(`${dotOf(c)}<b id="res-${mmsi}-n">${name}</b><span class="mmsi" id="res-${mmsi}-m">`
+    + `<span class="sr-only">MMSI </span>${mmsi}</span><small id="res-${mmsi}-d">[^<]*${age}</small>`);
+  assert.match(res, row('rosso', 'CERCA SCADUTA', EXP, 'posizione scaduta'), res);
+  assert.match(res, row('rosso', 'CERCA ORMEGGIATA', OLDM, 'posizione di 40 min fa'), 'come tooltip e scheda');
+  assert.match(res, row('verde', 'CERCA FRESCA', FRESHR, '2 min fa'));
   assert.equal(page.get('meta').get(EXP).sog, undefined, 'velocità e stato non finiscono nei dati statici');
 
   // clic sul risultato scaduto: la scheda si apre e dice che la posizione è scaduta
-  const onClick = handler(page, 'results', "$('results').addEventListener('click'", 'async function tick()');
+  const onClick = handler(page, 'results', "$('results').addEventListener('click'", '\nasync function tick()');
   await onClick({ target: { closest: () => ({ dataset: { mmsi: String(EXP) } }) } });
   assert.equal(page.get('selected'), EXP);
   assert.equal(page.el('panel').style.display, 'block');

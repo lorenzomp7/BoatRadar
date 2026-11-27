@@ -5,10 +5,11 @@
 // `node --cpu-prof` / `--heap-prof` (e flameox, che li usa) profilano proprio server.js.
 //
 //   node tools/carico.js [--navi 30000] [--richieste 100] [--json risultato.json] [--registra "etichetta"]
-//                        [--filtro "types=tanker"]
+//                        [--filtro "types=tanker"] [--cerca "NAVE 1"]
 //
 // --filtro aggiunge una terza misura: la vista mondo con quei parametri di filtro (punto 9), solo stampata e nel JSON
-// (la riga di --registra resta quella delle viste senza filtro).
+// (la riga di --registra resta quella delle viste senza filtro). --cerca misura allo stesso modo /api/search con quel testo
+// (punto 12: punteggio di tutte le navi e ordinamento delle corrispondenze; i nomi sintetici sono «NAVE <n>»).
 // --registra aggiunge una riga alla tabella di docs/prestazioni.md. Le navi sono generate con un seme
 // fisso: due misure con gli stessi parametri usano gli stessi dati. Procedura in docs/prestazioni.md.
 'use strict';
@@ -30,7 +31,7 @@ const WORLD_BBOX = '-180,-90,180,90';                  // vista mondo, come la p
 const TYPES = [70, 70, 70, 80, 80, 60, 30, 37, 52, 0];
 
 function args(argv) {
-  const o = { navi: 30000, richieste: 100, json: null, registra: null, filtro: null };
+  const o = { navi: 30000, richieste: 100, json: null, registra: null, filtro: null, cerca: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i].replace(/^--/, '');
     if (!(k in o)) throw new Error(`opzione sconosciuta: ${argv[i]}`);
@@ -38,6 +39,7 @@ function args(argv) {
   }
   if (!(o.navi > 0) || !(o.richieste > 0)) throw new Error('--navi e --richieste devono essere numeri positivi');
   if (o.filtro !== null && !o.filtro) throw new Error('--filtro vuole i parametri, es. --filtro "types=tanker"');
+  if (o.cerca !== null && !o.cerca) throw new Error('--cerca vuole il testo da cercare, es. --cerca "NAVE 1"');
   return o;
 }
 
@@ -109,6 +111,15 @@ async function view(port, bbox, n) {
     msMediana: round(percentile(times, 0.5)), msP95: round(percentile(times, 0.95)) };
 }
 
+// /api/search?q=testo (punto 12), n richieste con gzip come la pagina
+async function searchTimes(port, text, n) {
+  const url = '/api/search?q=' + encodeURIComponent(text), times = [];
+  const list = JSON.parse((await request(port, url, false)).body.toString('utf8'));
+  let gz = 0;
+  for (let i = 0; i < n; i++) { const r = await request(port, url, true); times.push(r.ms); gz = r.body.length; }
+  return { risultati: list.length, kbGzip: round(gz / 1024), msMediana: round(percentile(times, 0.5)), msP95: round(percentile(times, 0.95)) };
+}
+
 function appendRow(label, res) {
   const file = path.join(ROOT, 'docs', 'prestazioni.md');
   const text = fs.readFileSync(file, 'utf8');
@@ -159,6 +170,7 @@ async function main(argv) {
     porto: await view(port, PORT_BBOX, o.richieste),
   };
   if (o.filtro) res.mondoFiltrata = { filtro: o.filtro, ...await view(port, `${WORLD_BBOX}&${o.filtro}`, o.richieste) };
+  if (o.cerca) res.ricerca = { testo: o.cerca, ...await searchTimes(port, o.cerca, o.richieste) };
   console.log = log;
   const w = res.mondo, p = res.porto;
   console.log([
@@ -170,6 +182,8 @@ async function main(argv) {
   const f = res.mondoFiltrata;
   if (f) console.log(`Vista mondo filtrata (${f.filtro}): ${f.navi} navi su ${f.totale}, ${f.kbGzip} KB gzip (${f.kb} KB), ` +
     `${f.msMediana} ms mediana, ${f.msP95} ms p95`);
+  const c = res.ricerca;
+  if (c) console.log(`Ricerca «${c.testo}»: ${c.risultati} risultati, ${c.kbGzip} KB gzip, ${c.msMediana} ms mediana, ${c.msP95} ms p95`);
   if (o.json) fs.writeFileSync(o.json, JSON.stringify(res, null, 1) + '\n');
   if (o.registra) { appendRow(o.registra, res); console.log('Riga aggiunta a docs/prestazioni.md'); }
   return res;

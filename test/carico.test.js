@@ -21,6 +21,8 @@ test('opzioni non valide vengono rifiutate', () => {
   assert.throws(() => args(['--filtro']), /--filtro/);
   assert.equal(args(['--filtro', 'types=tanker']).filtro, 'types=tanker');
   assert.equal(args([]).filtro, null);
+  assert.throws(() => args(['--cerca']), /--cerca/);
+  assert.equal(args(['--cerca', 'NAVE 1']).cerca, 'NAVE 1');
 });
 
 // senza variabili di proxy: la misura non deve dipendere dalla macchina che esegue i test
@@ -48,4 +50,11 @@ test('con --filtro stampa anche la vista mondo filtrata (punto 9)', async () => 
   assert.match(out, /Vista mondo: 300 navi su 300/);
   // TYPES di carico.js: 2 petroliere (tipo 80) ogni 10 navi
   assert.match(out, /Vista mondo filtrata \(types=tanker\): 60 navi su 60,/);
+});
+
+test('con --cerca misura anche /api/search (punto 12)', async () => {
+  const out = await new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'tools', 'carico.js'), '--navi', '300', '--richieste', '2', '--cerca', 'NAVE 1'],
+    { timeout: 30000, env: cleanEnv() }, (err, stdout, stderr) => err ? reject(new Error(stderr || err.message)) : resolve(stdout)));
+  assert.match(out, /Ricerca «NAVE 1»: 25 risultati, [\d.]+ KB gzip, [\d.]+ ms mediana, [\d.]+ ms p95/);
 });

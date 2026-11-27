@@ -132,6 +132,33 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
   restituite perché il filtro viene prima del campione): 0,8 / 1,5 ms con la cache, 43,9-44,5 ms di mediana a
   cache spenta, un po' meno della vista senza filtro (campione su 6000 navi invece che su 30.000).
 
+- Punto 12, ricerca ordinata (26/11/2026): `/api/search` ora dà un punteggio a TUTTE le navi con posizione
+  (`searchScore`: nome, MMSI, IMO, nominativo) e ordina le corrispondenze (`compareSearch`) prima di tenerne 25; prima si
+  fermava alle prime 25 trovate. Misura con `tools/carico.js --navi 30000 --richieste 50 --cerca "<testo>"` (nomi
+  sintetici «NAVE n»), mediana / p95, prima (1bb8261) e dopo nella stessa sessione:
+  «NAVE» (30.000 corrispondenze) 0,9 / 1,1 → 30,6 / 49,4 ms; «NAVE 1» (11.111) 0,8 / 1,1 → 25,5 / 31,7 ms;
+  «NAVE 29999» (1) 6,7 / 11,1 → 22,7 / 41,1 ms; «XYZ» (nessuna) 6,9 / 10,9 → 14,9 / 29,8 ms. In Node puro, senza
+  HTTP: punteggio delle 30.000 navi 11-16 ms (circa 5 ms per `norm` di nome e nominativo), ordinamento di 30.000
+  corrispondenze 2-5 ms. Il costo è uno per ricerca, non per tasto (la pagina aspetta 250 ms dopo l'ultimo tasto e
+  annulla la richiesta precedente), quindi accettabile; se servisse, la leva è tenere in memoria nome e nominativo già
+  normalizzati in `vessels`.
+- Punto 12, correzioni da revisione (26/11/2026): la ricerca gira sul ciclo degli eventi del server, quindi per tutta
+  la sua durata ogni altra richiesta (`/api/locations` delle altre schede, `/api/status`) e i messaggi di aisstream
+  aspettano: il costo va tenuto basso anche se è uno per ricerca. Ora nomi e nominativi sono ripuliti all'arrivo
+  (`clean`: spazi interni compattati, riempimento tolto) e quelli che `norm` cambierebbe (accenti, minuscole, `- . /`)
+  sono salvati normalizzati in `searchNames`; `scoreFields` fa un solo `indexOf` sul nome per le navi che non
+  corrispondono, converte MMSI e IMO in stringa solo per le query di cifre; `insertTop` tiene le prime 25 senza ordinare
+  tutte le corrispondenze (con le 25 già piene basta un confronto). Stesso ordine di prima (test di equivalenza su dati
+  casuali in `test/ricerca-logica.test.js` e `test/ricerca.test.js`). `tools/carico.js --navi 30000 --richieste 50
+  --cerca "<testo>"`, mediana / p95, prima (2b2f80a) e dopo alternati nella stessa sessione, due giri:
+  «NAVE» 17,8 / 31,7 e 23,2 / 32,8 → 6,1 / 8,1 e 5,9 / 7,8 ms; «NAVE 1» 18,5 / 31,8 e 28,4 / 40,4 → 6,2 / 8,0 e
+  5,3 / 8,6 ms; «NAVE 29999» 16,7 / 25,5 e 21,0 / 33,4 → 4,1 / 9,1 e 3,9 / 7,5 ms; «XYZ» 19,1 / 24,0 e 16,7 / 23,1 →
+  4,5 / 6,0 e 4,6 / 5,8 ms. Circa 4 volte meno; resta più della ricerca prima del punto 12 (0,8-6,9 ms), che si
+  fermava alle prime 25 trovate. I nomi sintetici «NAVE n» non finiscono in `searchNames` (vuota, ma letta comunque per
+  ogni nave): con nomi veri con accenti, trattini o punti cambia solo quante voci contiene. Righe «prima/dopo correzioni punto 12»
+  qui sotto (viste senza ricerca, stessa sessione): memoria e tempi pari; i MB/1000 navi più alti delle righe
+  precedenti valgono per entrambe e vengono dalla macchina di quella sessione, non dalla modifica.
+
 | Data | Versione | Navi | MB/1000 navi | RSS MB | Mondo: navi | Mondo: KB gzip (raw) | Mondo: ms mediana / p95 | Porto: navi | Porto: KB gzip (raw) | Porto: ms mediana / p95 | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-23 | riferimento (prima dei punti 4, 21, 22) · cloud Claude | 30000 | 0.5 | 168.2 | 5979 | 227.1 (1459.5) | 31.5 / 38.6 | 1427 | 53.1 (346.9) | 8.3 / 9.8 | v22.23.5 |
@@ -160,6 +187,8 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | prima punto 9a | 30000 | 0.54 | 171.1 | 6000 | 253.6 (1550.5) | 0.9 / 2.3 | 1427 | 57.5 (366) | 0.5 / 0.7 | v22.23.5 |
 | 2026-11-26 | dopo punto 9a | 30000 | 0.55 | 170.2 | 6000 | 254.3 (1550.5) | 1.1 / 5.1 | 1427 | 57.6 (366) | 0.8 / 1.2 | v22.23.5 |
 | 2026-11-26 | dopo quota filtrate in cache (punto 9a) | 30000 | 0.55 | 169.7 | 6000 | 254.6 (1550.5) | 0.9 / 1.7 | 1427 | 57.7 (366) | 0.7 / 1.1 | v22.23.5 |
+| 2026-11-26 | prima correzioni punto 12 (2b2f80a) | 30000 | 1.73 | 175 | 6000 | 253.6 (1550.5) | 0.9 / 1.6 | 1427 | 57.4 (366) | 0.5 / 0.7 | v22.23.5 |
+| 2026-11-26 | dopo correzioni punto 12 | 30000 | 1.79 | 175.3 | 6000 | 254.6 (1550.5) | 0.7 / 1.1 | 1427 | 57.8 (366) | 0.4 / 0.5 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
 
 ## Pagina
