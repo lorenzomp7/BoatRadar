@@ -71,7 +71,9 @@ function startPage({ skewMs = 0, routes }) {
     getLatLng() { return { lat: this.latlng[0], lng: this.latlng[1] }; }
     remove() { this.removed = true; }
   }
+  // getSize, latLngToContainerPoint e panBy: la scheda aperta sposta la mappa se la nave le resta sotto (punto 71)
   const map = { setView() { return this; }, on() { return this; }, invalidateSize() {}, getZoom: () => 6,
+    getSize: () => ({ x: 1000, y: 800 }), latLngToContainerPoint: () => ({ x: 500, y: 400 }), panBy() { return this; },
     getCenter: () => ({ lat: 44, lng: 11 }),
     getBounds: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45,
       pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }) };

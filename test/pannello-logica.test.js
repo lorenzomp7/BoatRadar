@@ -49,6 +49,10 @@ test('listRows: per nome (alfabetico italiano, maiuscole e accenti come le lette
   const items = [it(5, 'zeta'), it(3, undefined), it(2, 'Àlfa'), it(4, 'beta'), it(1, 'ALFA'), it(6, ''), it(7, 'alfa 2'), it(8, 'ALFA 10')];
   assert.deepEqual(mmsis(AL.listRows(items, 'name')), [1, 2, 7, 8, 4, 5, 3, 6]);
   assert.deepEqual(mmsis(AL.listRows(items, 'sconosciuto')), mmsis(AL.listRows(items, 'name')), 'ordinamento sconosciuto = nome');
+  // nomi delle proprietà di Object.prototype: come un ordinamento sconosciuto (prima 'hasOwnProperty' lanciava,
+  // 'constructor' dava un ordine casuale)
+  for (const k of ['hasOwnProperty', 'constructor', 'toString', '__proto__'])
+    assert.deepEqual(mmsis(AL.listRows(items, k)), [1, 2, 7, 8, 4, 5, 3, 6], k);
 });
 
 test('listRows: per velocità decrescente, sconosciuta o non valida in fondo', () => {
@@ -103,4 +107,15 @@ test('panToKeepVisible: nessuno spostamento se la nave è già fra header e pann
   // dati non validi: nessuno spostamento
   assert.deepEqual(AL.panToKeepVisible({ x: NaN, y: 1 }, size, 422, 96), { dx: 0, dy: 0 });
   assert.deepEqual(AL.panToKeepVisible(null, size, 422, 96), { dx: 0, dy: 0 });
+});
+
+test('panToKeepVisible: margine destro (computer, scheda o elenco a destra)', () => {
+  const size = { x: 1280, y: 800 };
+  // scheda a destra da x 928: margine destro 1280 − 928 = 352 → banda x 24 … 1280 − 352 − 24 = 904
+  assert.deepEqual(AL.panToKeepVisible({ x: 1000, y: 400 }, size, 0, 60, 24, 352), { dx: 96, dy: 0 }, 'sotto la scheda: a sinistra');
+  assert.deepEqual(AL.panToKeepVisible({ x: 600, y: 400 }, size, 0, 60, 24, 352), { dx: 0, dy: 0 }, 'già libera');
+  assert.deepEqual(AL.panToKeepVisible({ x: 1000, y: 400 }, size, 0, 60), { dx: 0, dy: 0 }, 'senza margine destro come prima');
+  assert.deepEqual(AL.panToKeepVisible({ x: 1000, y: 400 }, size, 0, 60, 24, NaN), { dx: 0, dy: 0 }, 'margine non valido = 0');
+  // nessuno spazio libero in larghezza: a metà di quello che resta
+  assert.deepEqual(AL.panToKeepVisible({ x: 300, y: 400 }, { x: 390, y: 800 }, 0, 60, 24, 352), { dx: 300 - 19, dy: 0 });
 });

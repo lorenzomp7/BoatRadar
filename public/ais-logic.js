@@ -753,7 +753,8 @@
     type: (a, b) => textCmp(a.type, b.type) || textCmp(a.name, b.name),
   };
   function listRows(items, sort, limit = 100) {
-    const by = LIST_CMP[sort] || LIST_CMP.name, max = Math.max(0, limit);
+    // Object.hasOwn: un nome di Object.prototype ('constructor', 'hasOwnProperty'…) è un ordinamento sconosciuto
+    const by = Object.hasOwn(LIST_CMP, sort) ? LIST_CMP[sort] : LIST_CMP.name, max = Math.max(0, limit);
     const cmp = (a, b) => by(a, b) || (a.mmsi < b.mmsi ? -1 : a.mmsi > b.mmsi ? 1 : 0);
     const list = Array.isArray(items) ? items : [], rows = [];
     for (const x of list) {
@@ -768,13 +769,15 @@
     return { rows, more: list.length - rows.length };
   }
   // Spostamento minimo { dx, dy } (px interi, per map.panBy: il punto finisce in pt − d) perché pt (punto del contenitore
-  // della mappa) resti a margin px dai bordi, sotto l'header (headerBottom) e sopra il pannello alto sheetH. Se fra header
-  // e pannello non c'è spazio, la nave va a metà di quello che resta. Dati non validi: nessuno spostamento.
-  function panToKeepVisible(pt, size, sheetH, headerBottom, margin = 24) {
+  // della mappa) resti a margin px dai bordi, sotto l'header (headerBottom), sopra il pannello alto sheetH (telefono: la
+  // cima più alta fra pannello, legenda e attribuzione) e a sinistra di quello che copre la destra della mappa per
+  // rightInset px (computer: scheda o elenco). Se non c'è spazio, la nave va a metà di quello che resta. Dati non validi:
+  // nessuno spostamento.
+  function panToKeepVisible(pt, size, sheetH, headerBottom, margin = 24, rightInset = 0) {
     if (!pt || !size || ![pt.x, pt.y, size.x, size.y].every(finite)) return { dx: 0, dy: 0 };
-    const sh = finite(sheetH) ? sheetH : 0, top = finite(headerBottom) ? headerBottom : 0;
+    const sh = finite(sheetH) ? sheetH : 0, top = finite(headerBottom) ? headerBottom : 0, right = finite(rightInset) ? rightInset : 0;
     const axis = (v, lo, hi) => (lo > hi ? v - (lo + hi) / 2 : v < lo ? v - lo : v > hi ? v - hi : 0);
-    const dx = Math.round(axis(pt.x, margin, size.x - margin)), dy = Math.round(axis(pt.y, top + margin, size.y - sh - margin));
+    const dx = Math.round(axis(pt.x, margin, size.x - right - margin)), dy = Math.round(axis(pt.y, top + margin, size.y - sh - margin));
     return { dx: dx || 0, dy: dy || 0 };
   }
 

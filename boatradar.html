@@ -168,7 +168,6 @@
   #list .row { display:block; width:100%; min-height:44px; margin:0 0 4px; padding:6px 10px; text-align:left; cursor:pointer;
     background:#0f1720; border:1px solid var(--line); border-radius:8px; color:var(--text); font:inherit; font-size:13px; }
   #list .row:hover { background:#1f2c3b; }
-  #list .row[aria-current="true"] { border-color:var(--accent); }   /* nave della scheda aperta */
   #list .row small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
   #list .empty, #list-more { color:var(--muted); font-size:12.5px; padding:6px 2px; margin:0; line-height:1.4; }
   #list .row:focus-visible, #sheet-handle:focus-visible, #panel-handle:focus-visible, #list-sort:focus-visible,
@@ -192,7 +191,7 @@
       padding:0 14px 14px; border-width:1px 0 0; border-radius:14px 14px 0 0; }
     #close { top:0; right:4px; }
     #sheet { display:flex; position:fixed; left:0; right:0; bottom:0; height:var(--sheet-h); border-width:1px 0 0;
-      border-radius:14px 14px 0 0; padding-bottom:env(safe-area-inset-bottom); box-shadow:0 -4px 18px rgba(0,0,0,.35); }
+      border-radius:14px 14px 0 0; box-shadow:0 -4px 18px rgba(0,0,0,.35); }
     #sheet-handle, #panel-handle { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
       background:none; border:0; color:var(--text); font:inherit; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
     #sheet-handle { flex:none; width:100%; min-height:56px; padding:8px 12px; font-size:14px; }
@@ -230,7 +229,7 @@
   <!-- punto 9: filtri che svuotano la mappa (« · nessuna nave con questi filtri»): un clic li toglie tutti -->
   <button type="button" id="status-reset" class="linkbtn" hidden>Mostra tutte</button>
   <!-- punto 71: elenco delle navi in quest'area (solo computer; su telefono il pannello in basso c'è sempre) -->
-  <button type="button" id="listbtn" class="hbtn" aria-pressed="false" aria-controls="sheet">☰ Elenco</button>
+  <button type="button" id="listbtn" class="hbtn" aria-pressed="false" aria-controls="sheet"><span aria-hidden="true">☰</span> Elenco</button>
   <button id="registries" class="hbtn" title="Registri per trovare proprietari e armatori">📚 Registri</button>
   <button id="mode" class="hbtn" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
@@ -284,7 +283,7 @@
     <p id="list-more" hidden></p>
   </div>
 </section>
-<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-label="Altezza della scheda: a metà"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
+<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
@@ -427,6 +426,9 @@ let selected = null;
 // scaduta, nave scelta dalla ricerca non ancora arrivata)
 let selectedProps = null;
 let worldTotal = 0;
+// punto 71: navi mandate dal server nella vista (worldShown, meno di worldTotal se ha mandato un campione) e filtro con cui
+// è stata chiesta (worldKey, activeFilterKey): la nota «N di M nei dintorni» dell'elenco vale solo per il filtro di adesso
+let worldShown = 0, worldKey = '';
 // Limiti di conservazione del server (limits di /api/status, normLimits): valgono per le navi di aisstream; quelle del
 // Baltico (Digitraffic) usano i limiti normali. Una risposta senza limiti validi riporta ai normali; se /api/status non
 // risponde restano gli ultimi ricevuti.
@@ -555,13 +557,15 @@ function syncFilterControls() {
   $('filter-count').textContent = n ? ` · ${n} ${n === 1 ? 'attivo' : 'attivi'}` : '';
 }
 
+// Filtro di adesso come stringa (quella salvata in localStorage): nessun tipo / nessuno stato acceso compresi
+function activeFilterKey() { return [noTypes && 'types=', noStatus && 'status=', filterKey(filter)].filter(Boolean).join('&'); }
 // Nuovo filtro: salvato, controlli aggiornati, popup «N navi qui» chiuso (le sue righe possono essere navi ora nascoste),
 // via subito le navi che non passano (non la selezionata), poi un giro (dopo 300 ms, come lo spostamento della mappa)
 // con il filtro nella vista. none: { types, status } = nessun tipo / nessuno stato acceso
 function setFilter(f, none = {}) {
   noTypes = !!none.types; noStatus = !!none.status;
   filter = f && (noTypes || noStatus) ? parseFilter({ ...queryOf(f), ...(noTypes && { types: '' }), ...(noStatus && { status: '' }) }) : f;
-  const saved = [noTypes && 'types=', noStatus && 'status=', filterKey(filter)].filter(Boolean).join('&');
+  const saved = activeFilterKey();
   try { saved ? localStorage.setItem(FILTERS_KEY, saved) : localStorage.removeItem(FILTERS_KEY); } catch { /* vale solo in memoria */ }
   syncFilterControls();
   if (pickPopup) map.closePopup();
@@ -571,7 +575,7 @@ function setFilter(f, none = {}) {
   const st = $('status').textContent;
   if (STATUS_HEAD.test(st)) $('status').textContent = st.replace(STATUS_HEAD, `${markers.size} in mappa${filtersNote()}`);
   syncStatusReset();
-  renderList();   // punto 71: conteggio ed elenco senza le navi appena tolte
+  renderList();   // punto 71: conteggio ed elenco senza le navi appena tolte (e senza la nota del totale del filtro di prima)
   scheduleTick();
 }
 
@@ -845,14 +849,15 @@ async function fetchFc(url, get = fetch) {
   if (!res.ok) throw Object.assign(new Error('locations ' + res.status), { status: res.status });
   return res.json();
 }
-// fc.total della vista = navi nella vista (worldTotal)
-function viewFeatures(fc) {
-  if (fc.total != null) worldTotal = fc.total;
+// fc.total della vista = navi nella vista (worldTotal); key: filtro con cui è stata chiesta (activeFilterKey)
+function viewFeatures(fc, key = '') {
+  if (fc.total != null) { worldTotal = fc.total; worldShown = Array.isArray(fc.features) ? fc.features.length : 0; worldKey = key; }
   return fc.features;
 }
-async function features(url, setTotal = false, get = fetch) {
+// totalKey: null per le richieste senza totale della vista, altrimenti il filtro della richiesta (viewFeatures)
+async function features(url, totalKey = null, get = fetch) {
   const fc = await fetchFc(url, get);
-  return setTotal ? viewFeatures(fc) : fc.features;
+  return totalKey != null ? viewFeatures(fc, totalKey) : fc.features;
 }
 
 // Stato del server; misura anche lo scarto dell'orologio (inizio e fine della richiesta con l'ora del telefono)
@@ -924,7 +929,7 @@ window.addEventListener('online', () => {
 // si contano con clock.now() (la regola di test/ais-logic.test.js vuole l'ora del telefono solo per misurare /api/status).
 // query: parametri della vista (viewQuery, con i filtri); noView: nessun tipo o nessuno stato acceso, nessuna vista.
 // wake: la vista è quella lunga a Render in avvio.
-function worldRequests(probed, query, noView) {
+function worldRequests(probed, query, noView, fkey = '') {
   const server = api(), waking = backends.waking(), world = backends.canTry(clock.now()) && !(waking && wakeView);
   const viewUrl = `${server}/locations?${query}`;
   const skipped = () => { const p = Promise.reject(new Error('server non raggiungibile')); p.catch(() => {}); return p; };
@@ -932,15 +937,15 @@ function worldRequests(probed, query, noView) {
   // include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista
   const ship = selected && $('panel').style.display === 'block' ? includeParam([selected]) : '';
   let view, wake = false;
-  if (noView) { worldTotal = 0; view = Promise.resolve([]); }
+  if (noView) { worldTotal = worldShown = 0; worldKey = fkey; view = Promise.resolve([]); }
   else if (!world) view = skipped();
-  else if (probed?.url === viewUrl) view = Promise.resolve(probed.fc).then(viewFeatures);
+  else if (probed?.url === viewUrl) view = Promise.resolve(probed.fc).then(fc => viewFeatures(fc, fkey));
   else if (waking) {   // Render in avvio: la vista ha WAKE_TIMEOUT_MS (Render la tiene finché non è pronto), una alla volta
     wakeView = wake = true;
-    view = features(viewUrl, true, u => fetchApi(u, WAKE_TIMEOUT_MS)).finally(() => { wakeView = false; });
-  } else view = features(viewUrl, true, fetchApi);
+    view = features(viewUrl, fkey, u => fetchApi(u, WAKE_TIMEOUT_MS)).finally(() => { wakeView = false; });
+  } else view = features(viewUrl, fkey, fetchApi);
   return { server, world, view, wake,
-    inc: !ship ? Promise.resolve([]) : world ? features(`${server}/locations?${ship}`, false, fetchApi) : skipped(),
+    inc: !ship ? Promise.resolve([]) : world ? features(`${server}/locations?${ship}`, null, fetchApi) : skipped(),
     status: world ? loadStatus(server) : Promise.resolve(null) };
 }
 
@@ -951,7 +956,7 @@ async function loadLocations() {
   const urgent = firstRound || visibleAgain;
   firstRound = visibleAgain = false;
   // filtri del giro (punto 9): la vista li porta al server; nessun tipo o nessuno stato acceso → niente vista né Baltico
-  const query = viewQuery(), noneTypes = noTypes, noneStatus = noStatus, noView = noneTypes || noneStatus;
+  const query = viewQuery(), fkey = activeFilterKey(), noneTypes = noTypes, noneStatus = noStatus, noView = noneTypes || noneStatus;
   const probing = recheckPrimary(query, urgent, noView);
   // scheda nascosta su un server di riserva (quota di Render): nessuna richiesta del giro, solo la prova del primo;
   // la mappa resta com'era e alla riapertura (visibilitychange) riparte subito un giro
@@ -960,14 +965,14 @@ async function loadLocations() {
   // la prova urgente si aspetta solo prima delle richieste al server (punto 86): Baltico e attesa dell'orologio partono
   // subito. Il Baltico aspetta l'orologio (al massimo CLOCK_WAIT_MS dal primo giro), perché from= va calcolato con l'ora
   // corretta (anche un tick() chiamato durante l'attesa del primo giro aspetta la stessa promessa)
-  const worldPart = (urgent || probeUrgent ? probing : Promise.resolve(null)).then(p => worldRequests(p, query, noView));
+  const worldPart = (urgent || probeUrgent ? probing : Promise.resolve(null)).then(p => worldRequests(p, query, noView, fkey));
   const status = worldPart.then(w => w.status);
   status.catch(() => {});      // l'esito lo legge allSettled qui sotto
   if (!clockReady) clockReady = Promise.race([status.catch(() => {}), new Promise(r => setTimeout(r, CLOCK_WAIT_MS))]);
   const balticGet = u => fetchApi(u, BALTIC_TIMEOUT_MS);
   // con «ricevute negli ultimi» più breve della finestra il Baltico manda solo quelle (risposta più leggera)
   const balticReq = noView ? Promise.resolve([]) : clockReady.then(() => features(`${BALTIC}/locations?from=${
-    clock.now() - Math.min(WINDOW_MS, filter?.seen != null ? filter.seen * 60000 : Infinity)}`, false, balticGet));
+    clock.now() - Math.min(WINDOW_MS, filter?.seen != null ? filter.seen * 60000 : Infinity)}`, null, balticGet));
   balticReq.catch(() => {});   // idem; e se worldPart lancia, l'errore del Baltico non resta senza gestione
   const { server, world, view, wake, inc: incReq } = await worldPart;
   const [med, inc, baltic, statusResult] = await Promise.allSettled([view, incReq, balticReq, status]);
@@ -1076,11 +1081,14 @@ function deselect() {
 // focus torna dove la scheda era stata aperta (pulsante, mappa) se è ancora visibile, altrimenti sul campo di ricerca:
 // senza, chi usa la tastiera lo perderebbe sulla × nascosta.
 // Punto 71: su telefono la scheda si apre a metà sopra il pannello in basso (stessa altezza, sheet.stop) e chiudendola il
-// pannello torna all'altezza di prima; aperta da una riga dell'elenco che nel frattempo è stata ridisegnata, il focus va
-// alla riga nuova della stessa nave (data-mmsi).
+// pannello torna all'altezza di prima (anche se intanto lo schermo è stato girato: sheet.stop resta quella di prima);
+// aperta da una riga dell'elenco che nel frattempo è stata ridisegnata, il focus va alla riga nuova della stessa nave
+// (data-mmsi). Aprendo la scheda si chiudono il popup «N navi qui» e, su telefono, la legenda (coprirebbe la nave).
 let opener = null;
 const focusable = x => !!x && x !== document.body && x.isConnected && x.getClientRects().length > 0;
 function openPanel() {
+  if (pickPopup) map.closePopup();
+  if (isPhone()) $('legend').open = false;
   const shown = $('panel').style.display === 'block';
   if (!shown) { opener = document.activeElement; sheet.before = sheet.stop; }
   $('panel').style.display = 'block';
@@ -1095,7 +1103,9 @@ function closePanel() {
   document.body.classList.remove('panel-open');
   const before = sheet.before;
   sheet.before = null;
-  if (isPhone() && before != null && before !== sheet.stop) setStop(before); else applySheet();
+  if (before == null || before === sheet.stop) applySheet();
+  else if (isPhone()) setStop(before);
+  else { sheet.stop = before; applySheet(); }   // girato in orizzontale: in verticale il pannello torna com'era
   const mmsi = opener?.dataset?.mmsi, again = !focusable(opener) && mmsi ? $('list').querySelector?.(`[data-mmsi="${mmsi}"]`) : null;
   const back = focusable(opener) ? opener : focusable(again) ? again : $('q');
   opener = null;
@@ -1111,7 +1121,7 @@ function select(mmsi, props) {
   if (m) { m.marker.setStyle(markerStyle(m.props, true)).bringToFront(); }
   render(mmsi);
   openPanel();
-  keepVisible(mmsi);   // punto 71: su telefono la nave non resta sotto la scheda
+  keepVisible(mmsi);   // punto 71: la nave non resta sotto la scheda (in basso su telefono, a destra su computer)
   // senza marker (nascosta dai filtri, fuori dalla vista, dalla ricerca): un giro subito la chiede con include= (la nave
   // selezionata non si filtra), invece di aspettare il prossimo aggiornamento
   if (!m) scheduleTick();
@@ -1335,7 +1345,7 @@ $('close').onclick = closePanel;
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || e.defaultPrevented) return;
   if (e.target === $('q') && $('results').style.display === 'block') { hideResults(); return; }
-  if (document.body.classList.contains('vf')) return;
+  if (document.body.classList.contains('vf') || sheet.drag) return;   // durante il trascinamento niente (punto 71)
   if ($('panel').style.display === 'block') { closePanel(); return; }
   if (isPhone() && sheet.stop > 0) { e.preventDefault(); setStop(0); $('sheet-handle').focus(); }
   else if (!isPhone() && document.body.classList.contains('list-open')) { e.preventDefault(); setList(false); $('listbtn').focus(); }
@@ -1496,38 +1506,54 @@ $('registries').onclick = () => { setMode(false); showRegistries(); };
 // Leaflet, toast e legenda). Maniglia (#sheet-handle, e #panel-handle della scheda, che ha la stessa altezza): tocco,
 // Invio o Spazio chiuso→metà, metà→chiuso, aperto→metà; frecce su/giù; trascinamento con i pointer event (pointerdown:
 // altezza massima compensata con translateY; pointermove solo translateY; pointerup: snapStop sulla velocità degli ultimi
-// 100 ms e transizione di 200 ms, salvo prefers-reduced-motion). Computer: #sheet a destra con «Elenco» dell'header
-// (body.list-open), la scheda gli si sovrappone. Righe (listRows, al massimo LIST_MAX) delle navi in mappa (già filtrate,
-// punto 9) nella vista non allargata, alla posizione mostrata (punti 13, 42); ridisegnate a ogni giro e a ogni moveend
-// solo quando l'elenco si vede, e solo se cambiano (il focus resta sulla riga della stessa nave). Il conteggio sempre.
-const SORT_KEY = 'boatradar:ordine', LIST_MAX = 100, STOP_WORDS = ['chiusa', 'a metà', 'aperta'];
+// 100 ms e transizione di 200 ms, salvo prefers-reduced-motion). Durante il trascinamento click, frecce ed Esc non fanno
+// niente e setStop lo termina come annullato; pointercancel e lostpointercapture lo chiudono all'altezza più vicina.
+// Salendo --sheet-h cambia subito, scendendo a fine discesa (sheet.hold): attribuzione, legenda e toast non finiscono mai
+// sotto il pannello, e da chiuso il contenuto si nasconde solo quando è sceso. Computer: #sheet a destra con «Elenco»
+// dell'header (body.list-open), la scheda gli si sovrappone. Righe (listRows, al massimo LIST_MAX) delle navi in mappa
+// (già filtrate, punto 9) nella vista non allargata, alla posizione mostrata (punti 13, 42); ridisegnate a ogni giro e a
+// ogni moveend solo quando l'elenco si vede, se cambiano e non con un dito (o il mouse) premuto nell'elenco (sheet.press:
+// si ridisegnano al rilascio). Il focus resta sulla riga della stessa nave; se sparisce va sulla prima riga, senza righe
+// sulla maniglia (computer: «Elenco»). A elenco chiuso solo il conteggio.
+const SORT_KEY = 'boatradar:ordine', LIST_MAX = 100;
+// nome della maniglia della scheda: cosa fa il tocco (tapStop) da chiusa, a metà, aperta
+const STOP_ACTIONS = ['Alza la scheda a metà', 'Abbassa la scheda', 'Abbassa la scheda a metà'];
 const SORTS = { name: 'Nome', speed: 'Velocità', age: 'Ultimo segnale', type: 'Tipo' };
 const isPhone = () => matchMedia('(max-width: 640px)').matches;
-const sheet = { stop: 0, stops: sheetStops(844, 96), before: null, drag: null, html: '', noClickUntil: -Infinity, animTimer: null,
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sheet = { stop: 0, stops: sheetStops(844, 96), before: null, drag: null, hold: 0, press: false, stale: false, html: '',
+  noClickUntil: -Infinity, animTimer: null,
   // renders/renderMs: righe ridisegnate e durata dell'ultimo calcolo dell'elenco (ms), per le misure (docs/prestazioni.md)
   stats: { renders: 0, renderMs: 0, renderMsMax: 0 } };
 let sortKey = (() => { try { return localStorage.getItem(SORT_KEY); } catch { return null; } })();
-if (!SORTS[sortKey]) sortKey = 'name';
+if (!Object.hasOwn(SORTS, sortKey)) sortKey = 'name';
 $('list-sort').innerHTML = Object.entries(SORTS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
 $('list-sort').value = sortKey;
 
 // altezza del pannello in basso adesso (px): 0 su computer e con VesselFinder
 const sheetHeight = () => (isPhone() && !document.body.classList.contains('vf') ? sheet.stops[sheet.stop] : 0);
-// l'elenco si vede: telefono da metà in su, computer con «Elenco»; mai sotto la scheda aperta
-const listVisible = () => (isPhone() ? sheet.stop >= 1 : document.body.classList.contains('list-open'))
+// l'elenco si vede: telefono da metà in su o mentre si trascina, computer con «Elenco»; mai sotto la scheda aperta
+const listVisible = () => (isPhone() ? sheet.stop >= 1 || !!sheet.drag : document.body.classList.contains('list-open'))
   && $('panel').style.display !== 'block' && !document.body.classList.contains('vf');
 
+// --sheet-h (l'altezza di adesso, o quella di prima finché il pannello scende) e contenuto nascosto da chiuso
+function syncSheetVar() {
+  const phone = isPhone(), h = sheetHeight();
+  document.documentElement.style.setProperty('--sheet-h', (phone && h ? Math.max(h, sheet.hold) : h) + 'px');
+  $('sheet-body').hidden = phone && sheet.stop === 0 && !sheet.drag && !sheet.hold;   // da chiuso il contenuto non si raggiunge col Tab
+  // pannello aperto (anche mentre scende da aperto): la legenda non ha spazio
+  document.body.classList.toggle('sheet-full', phone && h > 0 && Math.max(h, sheet.hold) >= sheet.stops[2]);
+}
 // Altezze ricalcolate (rotazione, header che va a capo) mantenendo la tappa; stato e attributi allineati
 function applySheet() {
   const phone = isPhone();
   if (phone) sheet.stops = sheetStops(window.innerHeight, document.querySelector('header').getBoundingClientRect().bottom);
-  document.documentElement.style.setProperty('--sheet-h', sheetHeight() + 'px');
+  syncSheetVar();
   $('sheet-handle').setAttribute('aria-expanded', String(sheet.stop >= 1));
   $('listbtn').setAttribute('aria-pressed', String(document.body.classList.contains('list-open')));
-  $('panel-handle').setAttribute('aria-label', `Altezza della scheda: ${STOP_WORDS[sheet.stop]}`);
-  $('sheet-body').hidden = phone && sheet.stop === 0 && !sheet.drag;   // da chiuso il contenuto non si raggiunge col Tab
+  $('panel-handle').setAttribute('aria-label', STOP_ACTIONS[sheet.stop]);
+  $('panel-handle').setAttribute('aria-expanded', String(sheet.stop >= 1));
   $('sheet').inert = $('panel').style.display === 'block';   // sotto la scheda aperta: niente focus né clic
-  document.body.classList.toggle('sheet-full', phone && sheet.stop === 2);
   renderList();
 }
 // elementi che si spostano insieme: il pannello e, se aperta, la scheda sopra
@@ -1540,24 +1566,32 @@ function sheetStyle(els, h, off, transition) {
   }
 }
 // Da fromH px (altezza mostrata adesso) all'altezza della tappa attuale, solo con transform: altezza fissa alla maggiore
-// delle due, translateY da una all'altra in 200 ms, poi di nuovo l'altezza di --sheet-h
+// delle due, translateY da una all'altra in 200 ms, poi di nuovo l'altezza di --sheet-h. Scendendo --sheet-h resta fromH
+// fino alla fine (sheet.hold). Gli stili si tolgono sempre a pannello e scheda (la scheda può chiudersi nel frattempo).
 function animateSheet(fromH) {
   clearTimeout(sheet.animTimer);
-  const els = sheetEls(), to = sheetHeight();
-  if (!isPhone() || fromH == null || fromH === to || matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    sheetStyle(els, null, null, '');
+  sheet.hold = 0;
+  const els = sheetEls(), to = sheetHeight(), all = [$('sheet'), $('panel')];
+  if (!isPhone() || fromH == null || fromH === to || reducedMotion()) {
+    sheetStyle(all, null, null, '');
+    syncSheetVar();
     return;
   }
   const H = Math.max(fromH, to);
+  if (to < fromH) sheet.hold = fromH;
+  syncSheetVar();
   sheetStyle(els, H, H - fromH, 'none');
   els[0].getBoundingClientRect();   // posizione di partenza applicata prima della transizione
   sheetStyle(els, H, H - to, 'transform 200ms ease-out');
-  sheet.animTimer = setTimeout(() => sheetStyle(sheetEls(), null, null, ''), 220);
+  sheet.animTimer = setTimeout(() => { sheet.hold = 0; sheetStyle(all, null, null, ''); applySheet(); }, 220);
 }
-// Nuova tappa (0 chiuso, 1 metà, 2 aperto); from: altezza mostrata adesso, se non è quella della tappa di prima
+// Nuova tappa (0 chiuso, 1 metà, 2 aperto); from: altezza mostrata adesso, se non è quella della tappa di prima. Un
+// trascinamento in corso finisce come annullato (dall'altezza a cui era); il popup «N navi qui» si chiude se il pannello
+// sale (coprirebbe le sue righe).
 function setStop(i, { from } = {}) {
-  const prev = sheetHeight();
+  const d = cancelDrag(), prev = d ? d.h : sheetHeight();
   sheet.stop = Math.max(0, Math.min(2, i));
+  if (sheetHeight() > prev && pickPopup) map.closePopup();
   applySheet();
   animateSheet(from ?? prev);
 }
@@ -1570,79 +1604,116 @@ function setList(on) {
 
 // Trascinamento della maniglia (solo telefono). Un tocco (puntatore mai spostato di 6 px, anche se tenuto giù a lungo:
 // chi preme piano non deve trascinare per sbaglio) lo fa il click che segue, come Invio e Spazio; dopo un trascinamento
-// il click si ignora (noClickUntil).
+// il click si ignora (noClickUntil). Un secondo puntatore si ignora.
 function dragStart(e) {
   if (!isPhone() || sheet.drag || (e.button != null && e.button !== 0)) return;
   clearTimeout(sheet.animTimer);
-  const t = perfNow(), h = sheetHeight(), open = sheet.stops[2], els = sheetEls();
-  try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch { /* il puntatore è già andato */ }
-  sheet.drag = { id: e.pointerId, y0: e.clientY, h0: h, h, t0: t, samples: [{ t, y: e.clientY }], els, open, moved: false };
-  $('sheet-body').hidden = false;
+  sheet.hold = 0;
+  const t = perfNow(), h = sheetHeight(), open = sheet.stops[2], els = sheetEls(), target = e.currentTarget || e.target;
+  try { target?.setPointerCapture?.(e.pointerId); } catch { /* il puntatore è già andato */ }
+  sheet.drag = { id: e.pointerId, target, y0: e.clientY, h0: h, h, t0: t, samples: [{ t, y: e.clientY }], els, open, moved: false };
   sheetStyle(els, open, open - h, 'none');
+  syncSheetVar();   // contenuto visibile mentre sale
+  renderList();     // righe di adesso, non quelle dell'ultima volta che l'elenco si vedeva
 }
-function dragMove(e) {
-  const d = sheet.drag;
-  if (!d || e.pointerId !== d.id) return;
-  const t = perfNow();
-  d.samples.push({ t, y: e.clientY });
+function dragTo(d, y, t) {
+  d.samples.push({ t, y });
   while (d.samples.length > 2 && t - d.samples[0].t > 100) d.samples.shift();
-  if (Math.abs(e.clientY - d.y0) >= 6) d.moved = true;
-  d.h = Math.max(sheet.stops[0], Math.min(d.open, d.h0 - (e.clientY - d.y0)));
+  if (Math.abs(y - d.y0) >= 6) d.moved = true;
+  d.h = Math.max(sheet.stops[0], Math.min(d.open, d.h0 - (y - d.y0)));
   const off = `translateY(${d.open - d.h}px)`;
   for (const x of d.els) x.style.transform = off;
 }
+function dragMove(e) {
+  const d = sheet.drag;
+  if (d && e.pointerId === d.id) dragTo(d, e.clientY, perfNow());
+}
+// Trascinamento finito senza tappa nuova (annullato da setStop, o mai partito davvero): stili tolti
+function cancelDrag() {
+  const d = sheet.drag;
+  if (!d) return null;
+  sheet.drag = null;
+  if (d.moved) sheet.noClickUntil = perfNow() + 400;
+  sheetStyle(d.els, null, null, '');
+  try { d.target?.releasePointerCapture?.(d.id); } catch { /* già rilasciato */ }
+  return d;
+}
+// pointerup: tappa sulla velocità; pointercancel e lostpointercapture (puntatore perso, per esempio il sistema che si
+// prende il gesto): la tappa più vicina, senza velocità
 function dragEnd(e) {
   const d = sheet.drag;
   if (!d || e.pointerId !== d.id) return;
+  const t = perfNow(), up = e.type === 'pointerup';
+  if (up && Number.isFinite(e.clientY)) dragTo(d, e.clientY, t);
   sheet.drag = null;
-  const t = perfNow();
-  if (e.type === 'pointerup' && !d.moved) { sheetStyle(d.els, null, null, ''); applySheet(); return; }
+  if (!d.moved) { sheetStyle(d.els, null, null, ''); applySheet(); return; }   // tocco: lo fa il click che segue
   sheet.noClickUntil = t + 400;
-  const first = d.samples[0], v = e.type === 'pointerup' && t > first.t ? (first.y - e.clientY) / (t - first.t) : 0;
+  const first = d.samples[0], v = up && t > first.t ? (first.y - e.clientY) / (t - first.t) : 0;
   setStop(snapStop(d.h, v, sheet.stops), { from: d.h });
 }
 for (const id of ['sheet-handle', 'panel-handle']) {
   const h = $(id);
-  h.addEventListener('click', () => { if (isPhone() && perfNow() >= sheet.noClickUntil) tapStop(); });
+  h.addEventListener('click', () => { if (isPhone() && !sheet.drag && perfNow() >= sheet.noClickUntil) tapStop(); });
   h.addEventListener('keydown', e => {
     if (!isPhone() || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
     e.preventDefault();
-    setStop(sheet.stop + (e.key === 'ArrowUp' ? 1 : -1));
+    if (!sheet.drag) setStop(sheet.stop + (e.key === 'ArrowUp' ? 1 : -1));
   });
   h.addEventListener('pointerdown', dragStart);
   h.addEventListener('pointermove', dragMove);
-  h.addEventListener('pointerup', dragEnd);
-  h.addEventListener('pointercancel', dragEnd);
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) h.addEventListener(type, dragEnd);
 }
 $('listbtn').addEventListener('click', () => setList(!document.body.classList.contains('list-open')));
 window.addEventListener('resize', () => { if (!sheet.drag) applySheet(); });
 new ResizeObserver(() => { if (!sheet.drag) applySheet(); }).observe(document.querySelector('header'));
+// dito o mouse premuto nell'elenco: righe ferme fino al rilascio (poi ridisegnate dopo il click che segue)
+$('list').addEventListener('pointerdown', () => { sheet.press = true; });
+const listRelease = () => {
+  if (!sheet.press) return;
+  sheet.press = false;
+  setTimeout(() => { if (sheet.stale) { sheet.stale = false; renderList(); } }, 0);
+};
+window.addEventListener('pointerup', listRelease);
+window.addEventListener('pointercancel', listRelease);
 
 // Conteggio (sempre) e righe (solo se l'elenco si vede). Navi in mappa nella vista non allargata, alla posizione mostrata.
+// Nota del campione: il server ha mandato meno navi (worldShown) di quante ne ha nei dintorni (worldTotal, vista
+// allargata), per il filtro di adesso (worldKey); le navi del Baltico non contano.
 function renderList() {
   const t0 = perfNow(), b = map.getBounds(), box = boundsBox(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
-  const items = [];
+  const visible = listVisible(), inView = [];
+  let n = 0;
   for (const [mmsi, m] of markers) {
     const ll = m.marker.getLatLng();
     if (!inViewBox(box, ll.lat, ll.lng)) continue;
-    const v = meta.get(mmsi);
-    items.push({ mmsi, name: v?.name, sog: m.props?.sog, ts: m.props?.timestampExternal, type: typeOf(v?.shipType).label, p: m.props });
+    n++;
+    if (visible) inView.push([mmsi, m]);
   }
-  const n = items.length;
+  const sampled = worldKey === activeFilterKey() && worldTotal > worldShown;
   const text = (n ? `${n} ${n === 1 ? 'nave' : 'navi'} in quest'area` : 'Nessuna nave in quest\'area')
-    + (worldTotal > markers.size ? ` · ${worldTotal} in tutto, avvicina per vederle tutte` : '');
+    + (sampled ? ` · ${worldShown} di ${worldTotal} nei dintorni: avvicina per vederle tutte` : '');
   if ($('sheet-count').textContent !== text) { $('sheet-count').textContent = text; $('list-count').textContent = text; }
-  if (!listVisible()) return;
+  if (!visible) return;
+  if (sheet.press) { sheet.stale = true; return; }
+  const items = inView.map(([mmsi, m]) => {
+    const v = meta.get(mmsi);
+    // tipo mancante: null (in fondo nell'ordine «Tipo»); in riga «Altro / sconosciuto»
+    return { mmsi, name: v?.name, sog: m.props?.sog, ts: m.props?.timestampExternal, p: m.props,
+      type: v?.shipType == null ? null : typeOf(v.shipType).label };
+  });
   const { rows, more } = listRows(items, sortKey, LIST_MAX), now = clock.now();
   const html = !n ? '<li class="empty">Nessuna nave in quest\'area: sposta la mappa o cambia i filtri.</li>' : rows.map(r => {
     const sog = validSog(r.sog) ? r.sog.toFixed(1).replace('.', ',') + ' kn' : 'velocità n.d.', age = ageWords(r.p, now);
-    return `<li><button type="button" class="row" data-mmsi="${r.mmsi}"${r.mmsi === selected ? ' aria-current="true"' : ''}>`
-      + `${ageDot(r.p, now)}<b>${esc(r.name || 'Senza nome')}</b><small>${esc(`${r.type} · ${sog}${age ? ' · ' + age : ''}`)}</small></button></li>`;
+    return `<li><button type="button" class="row" data-mmsi="${r.mmsi}">`
+      + `${ageDot(r.p, now)}<b>${esc(r.name || 'Senza nome')}</b><small>${esc(`${r.type ?? typeOf().label} · ${sog}${age ? ' · ' + age : ''}`)}</small></button></li>`;
   }).join('');
   if (html !== sheet.html) {
     const a = document.activeElement, keep = a && a !== $('list') && $('list').contains(a) ? a.dataset?.mmsi : null;
     $('list').innerHTML = sheet.html = html;
-    if (keep) $('list').querySelector(`[data-mmsi="${keep}"]`)?.focus();
+    if (keep) {
+      const again = $('list').querySelector(`[data-mmsi="${keep}"]`) || (rows[0] && $('list').querySelector(`[data-mmsi="${rows[0].mmsi}"]`));
+      (again || (isPhone() ? $('sheet-handle') : $('listbtn'))).focus();
+    }
     sheet.stats.renders++;
   }
   $('list-more').textContent = more ? `e altre ${more}: avvicina la mappa o usa i filtri` : '';
@@ -1652,7 +1723,7 @@ function renderList() {
 }
 map.on('moveend', () => renderList());
 $('list-sort').addEventListener('change', e => {
-  sortKey = SORTS[e.target.value] ? e.target.value : 'name';
+  sortKey = Object.hasOwn(SORTS, e.target.value) ? e.target.value : 'name';
   try { localStorage.setItem(SORT_KEY, sortKey); } catch { /* vale solo in memoria */ }
   renderList();
 });
@@ -1669,17 +1740,32 @@ $('list-legend').addEventListener('click', () => {
   $('legend').open = true;
   $('legend-sum').focus();
 });
-// Su telefono sposta la mappa del minimo perché la nave scelta (posizione mostrata, o quella del risultato di ricerca)
-// resti fra il fondo dell'header e la cima della scheda, sopra l'attribuzione di Leaflet (in basso a destra, sopra il
-// pannello: due righe su telefono)
+// Sposta la mappa del minimo perché la nave scelta (posizione mostrata, o quella del risultato di ricerca) resti libera:
+// sotto l'header e, su telefono, sopra la cima più alta fra pannello (o scheda), legenda (la sua pillola; non a pannello
+// aperto, che la nasconde) e attribuzione di Leaflet; su computer a sinistra della scheda o dell'elenco aperti a destra. Mentre il
+// pannello scende --sheet-h è ancora l'altezza di prima (sheet.hold): legenda e attribuzione vanno contate dove finiranno.
+// Con prefers-reduced-motion senza animazione.
 function keepVisible(mmsi) {
-  if (!isPhone()) return;
   const ll = markers.get(mmsi)?.marker.getLatLng() || found.get(mmsi);
   if (!ll) return;
-  const top = document.querySelector('header').getBoundingClientRect().bottom - $('map').getBoundingClientRect().top;
-  const attr = document.querySelector('.leaflet-bottom.leaflet-right')?.getBoundingClientRect().height || 0;
-  const d = panToKeepVisible(map.latLngToContainerPoint(ll), map.getSize(), sheetHeight() + attr, top);
-  if (d.dx || d.dy) map.panBy([d.dx, d.dy]);
+  const m = $('map').getBoundingClientRect(), size = map.getSize();
+  const top = document.querySelector('header').getBoundingClientRect().bottom - m.top;
+  let bottom = 0, right = 0;
+  if (isPhone()) {
+    const held = (parseFloat(document.documentElement.style.getPropertyValue('--sheet-h')) || 0) - sheetHeight();
+    let cover = size.y - sheetHeight();
+    const over = [document.querySelector('.leaflet-bottom.leaflet-right'), sheet.stop !== 2 && $('legend')];
+    for (const x of over.filter(Boolean)) {
+      const r = x.getBoundingClientRect();
+      if (r && r.height > 0 && r.width > 0) cover = Math.min(cover, r.top - m.top + held);
+    }
+    bottom = size.y - cover;
+  } else {
+    const side = $('panel').style.display === 'block' ? $('panel') : document.body.classList.contains('list-open') ? $('sheet') : null;
+    if (side) right = Math.max(0, m.right - side.getBoundingClientRect().left);
+  }
+  const d = panToKeepVisible(map.latLngToContainerPoint(ll), size, bottom, top, 24, right);
+  if (d.dx || d.dy) reducedMotion() ? map.panBy([d.dx, d.dy], { animate: false }) : map.panBy([d.dx, d.dy]);
 }
 applySheet();
 
