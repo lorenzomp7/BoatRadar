@@ -49,10 +49,14 @@ async function until(fn, what, ms = 5000) {
 // fotogrammi in coda; page.rafPending() conta fotogrammi e risvegli in coda (i «cicli» vivi).
 // matchMedia(q) restituisce { matches, addEventListener('change'), addListener }; page.setMedia(q, v) cambia la
 // risposta e manda l'evento change, come il browser (es. prefers-reduced-motion cambiato nelle impostazioni).
+// Punti 25 e 24 (link e «Segui»): href = indirizzo della pagina (crea location e history.replaceState; ogni indirizzo
+// scritto da replaceState in page.urls, e location lo segue; senza href la pagina non ha né location né history, come
+// in alcuni contesti di test); nav = proprietà in più di navigator (es. share e clipboard finti); trackView: setView
+// aggiorna getCenter e zoom della mappa finta (page.setCenter per cambiarli a mano).
 function startPage({ routes, config = {}, session = {}, local = {}, timeScale = TIME_SCALE, media = {},
   size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }),
   manualTime = null, raf = manualTime != null, zoom = 6, bounds = { w: 10, s: 43, e: 12, n: 45 }, canvas = () => ({}),
-  viewport = { w: size.x, h: size.y }, rects = {} }) {
+  viewport = { w: size.x, h: size.y }, rects = {}, href = null, nav = {}, trackView = false }) {
   const realStart = Date.now();
   let manual = manualTime;
   const pageNow = () => (manual != null ? manual : realStart + (Date.now() - realStart) * timeScale);
@@ -123,13 +127,22 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const mapHandlers = new Map();
   // views: argomenti di ogni setView (il primo è la vista iniziale della pagina)
   const views = [];
-  let zoomNow = zoom;
+  let zoomNow = zoom, centerNow = { lat: 44, lng: 11 };
   const box = { getEast: () => bounds.e, getWest: () => bounds.w, getSouth: () => bounds.s, getNorth: () => bounds.n };
-  const map = { views, pans: [], setView(...a) { views.push(a); return this; }, panBy(...a) { this.pans.push(a); return this; },
+  const map = { views, pans: [], panBy(...a) { this.pans.push(a); return this; },
+    setView(...a) {
+      views.push(a);
+      if (trackView) {
+        const c = a[0], ll = Array.isArray(c) ? { lat: c[0], lng: c[1] } : { lat: c.lat, lng: c.lng };
+        if (Number.isFinite(ll.lat) && Number.isFinite(ll.lng)) centerNow = ll;
+        if (Number.isFinite(a[1])) zoomNow = a[1];
+      }
+      return this;
+    },
     invalidateSize() {}, getZoom: () => zoomNow,
     on(ev, fn) { for (const e of ev.split(' ')) mapHandlers.set(e, [...(mapHandlers.get(e) || []), fn]); return this; },
     fire(ev, data = {}) { for (const fn of mapHandlers.get(ev) || []) fn({ type: ev, target: map, ...data }); return this; },
-    getCenter: () => ({ lat: 44, lng: 11 }),
+    getCenter: () => ({ ...centerNow }),
     getBounds: () => ({ ...box, pad: () => ({ ...box }) }),
     getSize: () => ({ x: size.x, y: size.y }),
     latLngToContainerPoint: ll => project(Array.isArray(ll) ? { lat: ll[0], lng: ll[1] } : ll),
@@ -226,7 +239,17 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     requestAnimationFrame: fn => { if (stopped) return 0; rafQueue.set(++rafId, fn); return rafId; },
     cancelAnimationFrame: id => { rafQueue.delete(id); },
   } : {};
+  // location e history (solo con href): replaceState scrive l'indirizzo in urls e aggiorna location
+  const urls = [];
+  const locationOf = u => { const x = new URL(u); return { href: x.href, origin: x.origin, pathname: x.pathname, search: x.search, hash: x.hash }; };
+  const loc = href ? locationOf(href) : null;
+  const history = href ? { state: null, replaceState(state, _title, url) {
+    urls.push(String(url));
+    this.state = state;
+    Object.assign(loc, locationOf(new URL(String(url), loc.href).href));
+  } } : null;
   const ctx = vm.createContext({
+    ...(href && { location: loc, history }),
     ...rafApi, performance: { now: () => pageNow() },
     console, URLSearchParams, URL, Promise, Map, Set, Math, JSON, Number, String, Array, Object, Error, TypeError,
     AbortController, Date: PageDate, fetch, L, document, sessionStorage,
@@ -242,7 +265,7 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     clearTimeout: id => { if (animTimers.delete(id)) return; retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
     ResizeObserver: class { observe() {} }, matchMedia: q => mediaList(q),
-    localStorage, navigator: {}, innerWidth: viewport.w, innerHeight: viewport.h,
+    localStorage, navigator: { ...nav }, innerWidth: viewport.w, innerHeight: viewport.h,
     addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
   ctx.window = ctx;
@@ -274,7 +297,8 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const cssVar = name => el('html').style[name];
   return { ctx, el, get, requests, dispatch, stop, bodyClasses, cssVar, child: childOf, frame, rafPending: () => rafQueue.size + animTimers.size, rafOnly: () => rafQueue.size,
     animTimers: () => [...animTimers.values()].map(t => t.due - pageNow()), setMedia, moves: () => moves,
-    setNow: t => { manual = t; }, advance: ms => { manual += ms; }, setZoom: z => { zoomNow = z; }, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
+    setNow: t => { manual = t; }, advance: ms => { manual += ms; }, setZoom: z => { zoomNow = z; }, setCenter: c => { centerNow = c; },
+    urls, location: loc, history, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }

@@ -108,6 +108,17 @@ Lavora su `main_claude` salvo indicazione diversa.
   `prefers-reduced-motion`): sotto l'header, su telefono sopra la cima più alta di pannello, legenda e attribuzione, su
   computer a sinistra della scheda o dell'elenco (`rightInset`). Esc: popup, risultati, scheda, pannello. Test in
   `test/pannello-logica.test.js` e `test/pagina-pannello.test.js` (anche il trascinamento con pointer event finti).
+- Link condivisibili (punto 25): `?mmsi=…&segui=1#lat,lon,zoom` (`parseLink`, `viewHash`, `linkUrl` di
+  `public/ais-logic.js`: lat oltre ±90 = vista non valida, altrimenti entro ±85,0511; lon normalizzata; zoom intero 1–18;
+  MMSI 1–9 cifre > 0; `segui=1` solo con l'MMSI). Vista iniziale dal link; con `?mmsi=` `select` prima del primo giro
+  (la nave arriva con `include=`, i dati statici da `/api/vessel`), poi `openLinked`: senza vista nel link `setView` sulla
+  nave a zoom almeno 11, sempre `keepVisible`; senza posizione recente l'avviso e la scheda con i dati noti. L'indirizzo
+  segue la pagina (`syncUrl`: `history.replaceState` al più ogni 300 ms con la chiamata finale, in try/catch per il
+  limite di Safari) su `moveend`, scelta e chiusura della scheda, registri; `hashchange` → `setView`. `location` e
+  `history` possono mancare (contesti di test). «Condividi» (`#share` in `#panel-actions`, fuori da `#content`, nascosto
+  nei registri): su schermo touch `navigator.share` (annullato: niente), altrimenti `navigator.clipboard` e «Link
+  copiato», altrimenti l'avviso con il link in un campo da selezionare. Test in `test/link-logica.test.js` e
+  `test/pagina-link.test.js` (`href`, `nav`, `trackView` di `test/pagina-helpers.js`).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -216,7 +227,9 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   spento `#smooth` con un clic vero sulla sua riga (≥ 44 px a 390), resti sull'ultimo fix (punti 13, 63, 42), il pannello con l'elenco (punto 71: a 390 chiuso con il numero e
   l'attribuzione visibile, trascinamenti veri chiuso → metà → aperto → chiuso senza long task, lanci veloci veri, tocco, clic
   su una riga → scheda a metà con la nave fra header e scheda, Esc; a 1280 «Elenco» non coperto dall'header, riga di una nave
-  sotto l'elenco → scheda e nave spostata a sinistra della scheda, Esc) e assenza
+  sotto l'elenco → scheda e nave spostata a sinistra della scheda, Esc), il link `?mmsi=247123450#45.4312,12.3355,14`
+  (punto 25: scheda a zoom 14 con «Condividi» ≥ 44 px e la × libera, indirizzo che segue la mappa, stessa vista
+  ricaricando, clic vero su «Condividi» → «Link copiato» o il link da copiare) e assenza
   di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina

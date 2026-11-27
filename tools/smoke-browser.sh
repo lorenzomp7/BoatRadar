@@ -30,6 +30,9 @@
 #      coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: distanza dal primo fix mai in calo, nave
 #      in movimento, stima entro il suo limite; #smooth spento con un clic vero sulla sua riga (≥ 44 px a 390) e la nave
 #      resta esattamente sull'ultimo fix;
+#   3d. (solo con il server locale, punto 25, vedi link_check) ?mmsi=247123450#45.4312,12.3355,14 apra la scheda di LAGUNA
+#      PRIMA a zoom 14 con «Condividi» da almeno 44 px e la × libera, l'indirizzo segua lo spostamento della mappa,
+#      ricaricando torni la stessa vista con la scheda e un clic vero su «Condividi» mostri «Link copiato» o il link;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
@@ -292,6 +295,60 @@ sheet_desktop() {
   "${AB[@]}" wait --fn "!document.body.classList.contains('list-open') && document.activeElement?.id === 'listbtn'
     && getComputedStyle(document.getElementById('sheet')).display === 'none'" >/dev/null || fail "$name: secondo Esc non chiude l'elenco"
   ok "$name: riga → scheda sopra l'elenco; Esc → elenco (focus sulla riga); Esc → chiuso (focus su «Elenco»)"
+}
+
+# --- link condivisibili (punto 25) -----------------------------------------
+# Solo con il server locale. La pagina aperta da ?mmsi=247123450#45.4312,12.3355,14 mostra la scheda di LAGUNA PRIMA a zoom
+# 14 con «Condividi» (≥ 44 px) e la × libera; spostando la mappa l'indirizzo segue (#vista, ?mmsi= resta); ricaricando si
+# torna alla stessa vista con la scheda; un clic vero su «Condividi» mostra «Link copiato» o il link da copiare.
+# Screenshot con la scheda e i pulsanti.
+LINK_SHIP=247123450
+link_check() {
+  local name="$1"
+  # prima una pagina vuota: dalla stessa pagina agent-browser farebbe una navigazione nello stesso documento (solo
+  # hashchange), senza ricaricarla
+  "${AB[@]}" open about:blank >/dev/null
+  "${AB[@]}" open "${URL}?mmsi=$LINK_SHIP#45.4312,12.3355,14" >/dev/null || fail "$name: link: la pagina non si apre"
+  "${AB[@]}" wait --fn "typeof selected !== 'undefined' && selected === $LINK_SHIP && markers.has($LINK_SHIP)
+    && getComputedStyle(document.getElementById('panel')).display !== 'none' && map.getZoom() === 14" >/dev/null \
+    || { "${AB[@]}" screenshot "$OUT/$name-link-errore.png" >/dev/null || true
+         fail "$name: link: scheda di $LINK_SHIP non aperta a zoom 14 (zoom $(js "map.getZoom()"), selezionata $(js "selected"), in mappa $(js "markers.has($LINK_SHIP)"), indirizzo $(js "location.href"), scheda $(js "document.getElementById('panel').style.display"), avviso $(js "document.getElementById('toast').textContent"))"; }
+  "${AB[@]}" wait 900 >/dev/null   # spostamento della scheda (keepVisible) finito
+  local btns
+  btns=$(js "(() => { const out = [], c = document.getElementById('close').getBoundingClientRect();
+    for (const id of ['share']) { const r = document.getElementById(id).getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (r.height < 44 || r.width < 44) out.push(id + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+      if (e?.closest('button')?.id !== id) out.push('sopra ' + id + ' c\'è ' + (e?.id || e?.tagName));
+      if (r.right > c.left && r.top < c.bottom && r.bottom > c.top) out.push(id + ' sotto la ×'); }
+    const hit = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+    if (hit?.id !== 'close') out.push('sopra la × c\'è ' + (hit?.id || hit?.tagName));
+    return out.length ? out.join('; ') : 'ok'; })()" | tr -d '"')
+  "${AB[@]}" screenshot "$OUT/$name-link-scheda.png" >/dev/null
+  [ "$btns" = ok ] || fail "$name: link: $btns"
+  ok "$name: ?mmsi=$LINK_SHIP#45.4312,12.3355,14 → scheda di $(js "document.querySelector('#content h2')?.textContent" | tr -d '"') a zoom 14, «Condividi» ≥ 44 px, × libera"
+  js "map.setView([45.44, 12.34], 13, { animate: false }), true" >/dev/null
+  "${AB[@]}" wait --fn "location.hash === '#45.44,12.34,13' && location.search === '?mmsi=$LINK_SHIP'" >/dev/null \
+    || fail "$name: link: dopo lo spostamento l'indirizzo è $(js "location.search + location.hash")"
+  "${AB[@]}" reload >/dev/null || fail "$name: link: ricarica non riuscita"
+  "${AB[@]}" wait --fn "typeof selected !== 'undefined' && selected === $LINK_SHIP && map.getZoom() === 13
+    && Math.abs(map.getCenter().lat - 45.44) < 2e-4 && Math.abs(map.getCenter().lng - 12.34) < 2e-4
+    && getComputedStyle(document.getElementById('panel')).display !== 'none'" >/dev/null \
+    || fail "$name: link: ricaricando non torna la stessa vista con la scheda (zoom $(js "map.getZoom()"), centro $(js "map.getCenter()"))"
+  ok "$name: l'indirizzo segue la mappa ($(js "location.search + location.hash" | tr -d '"')) e ricaricando torna la stessa vista con la scheda"
+  "${AB[@]}" wait 900 >/dev/null   # spostamento della scheda dopo la ricarica
+  local sx sy
+  read -r sx sy <<<"$(js "(() => { const r = document.getElementById('share').getBoundingClientRect();
+    return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2); })()" | tr -d '"')"
+  click_at "$sx" "$sy"
+  "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('toast')).display !== 'none'
+    && (/Link copiato/.test(document.getElementById('toast').textContent) || !!document.getElementById('share-url'))" >/dev/null \
+    || fail "$name: «Condividi»: nessun avviso («$(js "document.getElementById('toast').textContent")»)"
+  local shown
+  shown=$(js "document.getElementById('share-url') ? 'link da copiare: ' + document.getElementById('share-url').value : document.getElementById('toast').textContent" | tr -d '"')
+  case "$shown" in *"mmsi=$LINK_SHIP#45.44,12.34,13"*|"Link copiato") ;; *) fail "$name: «Condividi»: $shown" ;; esac
+  "${AB[@]}" screenshot "$OUT/$name-link-condividi.png" >/dev/null
+  ok "$name: clic vero su «Condividi» → $shown"
+  js "(document.getElementById('toast').style.display = 'none', true)" >/dev/null
 }
 
 # --- controlli per ogni dimensione ----------------------------------------
@@ -655,6 +712,9 @@ check() {
 
   # pannello con l'elenco (punto 71): trascinamento vero a telefono, pulsante «Elenco» a computer
   if [ "$(js "matchMedia('(max-width: 640px)').matches")" = true ]; then sheet_phone "$name"; else sheet_desktop "$name"; fi
+
+  # link condivisibili (punto 25): solo con il server locale (la nave della fixture)
+  [ -n "${SMOKE_URL:-}" ] || link_check "$name"
 
   # errori JavaScript e console.error (i warning, come Digitraffic non raggiungibile, non contano)
   local problems

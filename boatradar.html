@@ -60,6 +60,15 @@
   #close { position:absolute; top:4px; right:4px; width:44px; height:44px; display:grid; place-items:center; padding:0;
     background:none; border:0; border-radius:8px; color:var(--muted); font-size:24px; line-height:1; cursor:pointer; }
   #close:hover, #close:focus-visible { color:var(--accent); }
+  /* punti 25 e 24: pulsanti della scheda («Condividi», «Segui») sopra il contenuto, lontani dalla ×; da almeno 44 px */
+  #panel-actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 44px 12px 0; }
+  #panel-actions[hidden] { display:none; }
+  #panel-actions .pbtn { min-height:44px; padding:0 14px; background:#0f1720; border:1px solid var(--line); border-radius:8px;
+    color:var(--text); font:inherit; font-size:14px; cursor:pointer; }
+  #panel-actions .pbtn:hover { border-color:var(--accent); }
+  #panel-actions .pbtn:focus-visible, #toast input:focus-visible { outline:2px solid #7cc4ff; outline-offset:1px; }
+  #toast input { display:block; width:100%; min-height:36px; margin-top:8px; padding:4px 8px; background:#0f1720;
+    border:1px solid var(--line); border-radius:6px; color:var(--text); font:inherit; font-size:13px; }
   #legend { position:absolute; left:12px; bottom:24px; z-index:1000; background:var(--panel); border:1px solid var(--line);
     border-radius:10px; padding:8px 10px; font-size:12px; max-height:calc(100% - 110px); overflow:auto; }
   /* punto 9: un pulsante per tipo (aria-pressed). Spento: anello vuoto, testo attenuato e barrato (non solo il colore) */
@@ -234,7 +243,7 @@
   <button id="mode" class="hbtn" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
 <iframe id="vf" title="Mappa VesselFinder"></iframe>
-<div id="toast"></div>
+<div id="toast" role="status"></div>
 <details id="legend" open>
   <summary id="legend-sum">Legenda e filtri<span id="filter-count"></span></summary>
   <!-- punto 9: un pulsante per tipo di nave (aria-pressed), creati dallo script -->
@@ -283,7 +292,7 @@
     <p id="list-more" hidden></p>
   </div>
 </section>
-<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="content"></div></aside>
+<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="share" class="pbtn">Condividi</button></div><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
@@ -386,7 +395,14 @@ const MID = {201:'Albania',205:'Belgio',209:'Cipro',210:'Cipro',211:'Germania',2
   750:'Guyana',755:'Paraguay',760:'Perù',765:'Suriname',770:'Uruguay',775:'Venezuela'};
 
 const $ = id => document.getElementById(id);
-const map = L.map('map', { preferCanvas:true, zoomControl:false, worldCopyJump:true }).setView([30, 10], 3);
+// Punto 25: link condivisibili ?mmsi=…&segui=1#lat,lon,zoom (parseLink di ais-logic.js). La vista iniziale viene dal link,
+// altrimenti quella di sempre. location e history possono mancare (alcuni contesti di test): allora niente link.
+const { parseLink, viewHash, linkUrl } = AisLogic;
+const LOC = typeof location === 'object' && location ? location : null;
+const HIST = typeof history === 'object' && history && typeof history.replaceState === 'function' ? history : null;
+const LINK = (() => { try { return parseLink(LOC?.search, LOC?.hash); } catch { return { view: null, mmsi: null, follow: false }; } })();
+const map = L.map('map', { preferCanvas:true, zoomControl:false, worldCopyJump:true })
+  .setView(LINK.view ? [LINK.view.lat, LINK.view.lon] : [30, 10], LINK.view ? LINK.view.zoom : 3);
 // pulsanti di zoom con il nome in italiano (title e aria-label: Leaflet li mette in inglese)
 L.control.zoom({ zoomInTitle: 'Ingrandisci', zoomOutTitle: 'Riduci' }).addTo(map);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -1193,6 +1209,7 @@ function closePanel() {
   const back = focusable(opener) ? opener : focusable(again) ? again : $('q');
   opener = null;
   back.focus();
+  syncUrl();   // punto 25: l'indirizzo senza ?mmsi=
 }
 
 // props: posizione nota se la nave non ha (ancora) un marker, es. un risultato di ricerca del server
@@ -1209,6 +1226,8 @@ function select(mmsi, props) {
   // selezionata non si filtra), invece di aspettare il prossimo aggiornamento
   if (!m) scheduleTick();
   if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
+  $('panel-actions').hidden = false;   // punti 25 e 24: «Condividi» e «Segui»
+  syncUrl();
 }
 
 // Punto 10: scelta della nave toccata. Un clic sulla mappa (anche sopra un marker: Leaflet lo passa alla mappa) raccoglie
@@ -1418,7 +1437,9 @@ function showRegistries() {
   $('content').innerHTML = `<h2>Registri</h2>
     <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`
     + registryList();
+  $('panel-actions').hidden = true;   // punti 25 e 24: niente nave, niente «Condividi» né «Segui»
   openPanel();
+  syncUrl();
 }
 
 $('close').onclick = closePanel;
@@ -1539,7 +1560,8 @@ function toast(html) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { $('toast').style.display = 'none'; }, 15000);
 }
-$('toast').onclick = () => { $('toast').style.display = 'none'; };
+// un clic chiude l'avviso, ma non nel campo con il link da copiare (punto 25)
+$('toast').onclick = e => { if (!e?.target?.closest?.('input')) $('toast').style.display = 'none'; };
 
 $('content').addEventListener('click', e => {
   const reg = e.target.closest('[data-registry]');
@@ -1852,6 +1874,60 @@ function keepVisible(mmsi) {
 }
 applySheet();
 
+// --- Link condivisibili (punto 25) ----------------------------------------------------------------------------------
+// L'indirizzo della scheda segue la pagina: #lat,lon,zoom della vista (ricaricando si torna lì) e, con la scheda di una
+// nave aperta, ?mmsi=…; scritto con history.replaceState (nessuna voce nuova nella cronologia) al più ogni URL_WAIT_MS,
+// con la chiamata finale (lo stato di quando parte): Safari lancia oltre 100 chiamate in 30 s, quindi anche try/catch.
+// Chiamata su moveend, scelta e chiusura della scheda, pagina dei registri. Un indirizzo cambiato a mano (hashchange)
+// sposta la mappa. «Condividi»: su schermo touch navigator.share (annullato: niente), altrimenti copia negli appunti con
+// l'avviso «Link copiato», altrimenti l'avviso con il link in un campo da selezionare.
+const URL_WAIT_MS = 300;
+let urlTimer = null;
+function currentLink() {
+  const c = map.getCenter(), open = $('panel').style.display === 'block' && selected != null;
+  return { view: { lat: c.lat, lon: c.lng, zoom: map.getZoom() }, mmsi: open ? selected : null, follow: false };
+}
+function writeUrl() {
+  urlTimer = null;
+  try { HIST.replaceState(HIST.state, '', linkUrl(LOC.pathname, currentLink())); } catch { /* limite di Safari: al prossimo */ }
+}
+function syncUrl() { if (!urlTimer && LOC && HIST) urlTimer = setTimeout(writeUrl, URL_WAIT_MS); }
+map.on('moveend', syncUrl);
+window.addEventListener('hashchange', () => {
+  const v = parseLink('', LOC?.hash).view;
+  if (v) map.setView([v.lat, v.lon], v.zoom);
+});
+// Avvio con ?mmsi= (dopo il primo giro, che ha già chiesto la nave con include=): se il link non aveva una vista, mappa
+// sulla nave (zoom almeno 11); in ogni caso la nave libera da header e scheda (keepVisible: con la vista del link solo lo
+// spostamento minimo). Senza una posizione recente l'avviso, e la scheda resta con i dati noti. Niente se nel frattempo
+// l'utente ha chiuso la scheda o scelto un'altra nave.
+function openLinked({ mmsi, view }) {
+  if (selected !== mmsi || $('panel').style.display !== 'block') return;
+  const m = markers.get(mmsi);
+  if (!m) { toast(`Nessuna posizione recente per la nave con MMSI <b>${esc(mmsi)}</b>: la scheda mostra i dati noti.`); return; }
+  if (!view) map.setView(m.marker.getLatLng(), Math.max(map.getZoom(), 11), { animate: false });
+  keepVisible(mmsi);
+  if (!view) scheduleTick();   // i dati della vista nuova (il giro dopo uno spostamento non è ancora registrato)
+}
+async function shareLink() {
+  const url = linkUrl(LOC ? LOC.href.split(/[?#]/)[0] : '', currentLink()), name = selected != null ? meta.get(selected)?.name : null;
+  if (TOUCH && typeof navigator.share === 'function') {
+    try { await navigator.share({ title: (name ? name + ' · ' : '') + 'BoatRadar', url }); return; }
+    catch (err) { if (err?.name === 'AbortError') return; }   // annullato dall'utente; altri errori: si copia
+  }
+  try {
+    if (typeof navigator.clipboard?.writeText !== 'function') throw new Error('appunti non disponibili');
+    await navigator.clipboard.writeText(url);
+    toast('Link copiato');
+  } catch {
+    toast(`Copia il link: <input id="share-url" readonly aria-label="Link da copiare" value="${esc(url)}">`);
+    const input = $('share-url');
+    input?.focus?.();
+    input?.select?.();
+  }
+}
+$('share').addEventListener('click', shareLink);
+
 // --- Ricerca (punto 12) ---------------------------------------------------------------------------------------------
 // Ordine e punteggio come /api/search (normQuery, searchScore, compareSearch di ais-logic.js). La richiesta parte
 // SEARCH_WAIT_MS dopo l'ultimo tasto e va al server attivo (api(), punto 86) con il timeout di fetchApi; un tasto nuovo
@@ -2023,7 +2099,10 @@ function scheduleTick() { clearTimeout(moveTimer); moveTimer = setTimeout(tick, 
 
 (async () => {
   await loadBalticMeta().catch(err => console.warn(err));
+  // punto 25: la nave del link si apre prima del primo giro, che la chiede già con include= (niente giro in più di select)
+  if (LINK.mmsi) { select(LINK.mmsi); clearTimeout(moveTimer); }
   await tick();
+  if (LINK.mmsi) openLinked(LINK);
   setInterval(tick, REFRESH_MS);
   map.on('moveend', scheduleTick);
   setInterval(() => loadBalticMeta().catch(() => {}), 10 * 60 * 1000);

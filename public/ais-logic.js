@@ -801,6 +801,48 @@
     return { dx: dx || 0, dy: dy || 0 };
   }
 
+  // Punto 25: link condivisibili, ?mmsi=…&segui=1#lat,lon,zoom (test in test/link-logica.test.js). Vista: tre numeri
+  // decimali senza esponente (zoom senza segno); latitudine oltre ±90 = vista non valida, altrimenti portata entro
+  // ±LINK_MAX_LAT (il limite della proiezione di Leaflet); longitudine normalizzata in [−180, 180); zoom arrotondato fra
+  // 1 e 18. MMSI da 1 a 9 cifre, maggiore di 0 (il primo, se ripetuto); segui=1 vale solo con un MMSI valido.
+  const LINK_MAX_LAT = 85.0511;
+  const LINK_NUM = /^-?\d+(\.\d+)?$/, LINK_ZOOM = /^\d+(\.\d+)?$/;
+  const linkView = (lat, lon, zoom) => ({ lat: Math.max(-LINK_MAX_LAT, Math.min(LINK_MAX_LAT, lat)), lon: normLon(lon),
+    zoom: Math.max(1, Math.min(18, Math.round(zoom))) });
+  function queryParam(search, name) {
+    for (const part of search.replace(/^\?/, '').split('&')) {
+      const i = part.indexOf('='), k = i < 0 ? part : part.slice(0, i);
+      if (k !== name) continue;
+      try { return decodeURIComponent((i < 0 ? '' : part.slice(i + 1)).replace(/\+/g, ' ')); } catch { return null; }
+    }
+    return null;
+  }
+  function parseLink(search, hash) {
+    const s = typeof search === 'string' ? search : '', h = typeof hash === 'string' ? hash.replace(/^#/, '') : '';
+    const parts = h.split(','), id = queryParam(s, 'mmsi');
+    let view = null;
+    if (parts.length === 3 && LINK_NUM.test(parts[0]) && LINK_NUM.test(parts[1]) && LINK_ZOOM.test(parts[2])) {
+      const [lat, lon, zoom] = parts.map(Number);
+      if (Math.abs(lat) <= 90) view = linkView(lat, lon, zoom);
+    }
+    const mmsi = id != null && /^\d{1,9}$/.test(id) && Number(id) > 0 ? Number(id) : null;
+    return { view, mmsi, follow: mmsi != null && queryParam(s, 'segui') === '1' };
+  }
+  // '#lat,lon,zoom' con le cifre che servono allo zoom (2 fino a 3, 3 fino a 7, 4 fino a 11, poi 5), senza zeri in coda
+  // né «-0»; '' se la vista non è valida
+  function viewHash(view) {
+    if (!view || ![view.lat, view.lon, view.zoom].every(finite)) return '';
+    const v = linkView(view.lat, view.lon, view.zoom), d = v.zoom <= 3 ? 2 : v.zoom <= 7 ? 3 : v.zoom <= 11 ? 4 : 5;
+    const fmt = x => x.toFixed(d).replace(/\.?0+$/, '').replace(/^-0$/, '0');
+    return `#${fmt(v.lat)},${fmt(v.lon)},${v.zoom}`;
+  }
+  const validLinkMmsi = m => Number.isInteger(m) && m > 0 && m <= 999999999;
+  // Link della pagina: base (percorso o indirizzo intero) + ?mmsi=…[&segui=1] + #vista, solo le parti valide
+  function linkUrl(base, { view = null, mmsi = null, follow = false } = {}) {
+    const ok = validLinkMmsi(mmsi);
+    return (typeof base === 'string' ? base : '') + (ok ? `?mmsi=${mmsi}${follow ? '&segui=1' : ''}` : '') + viewHash(view);
+  }
+
   return { TYPES, typeOf, typeName, validHeading, heading, symbol, stopped, decodeEta, matchesQuery, SOURCE_LABEL, toMs, isNewer, STATIC_FIELDS, mergeFeatures,
     clockSample, createClock, includeParam, DEFAULT_LIMITS, normLimits, validSog, isStill, retentionMs, ageMs, fadeOpacity, ageStyle, formatAge, ageClass,
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
@@ -808,5 +850,6 @@
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
     norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,
-    sheetStops, snapStop, listRows, panToKeepVisible };
+    sheetStops, snapStop, listRows, panToKeepVisible,
+    parseLink, viewHash, linkUrl };
 });
