@@ -33,10 +33,24 @@ async function until(fn, what, ms = 5000) {
 // local: contenuto iniziale di localStorage (page.local, Map), oppure 'throw' per un localStorage che lancia (punto 9,
 // filtri salvati). Gli elementi registrano i loro listener (addEventListener) e page.fireEl(id, type, event) li chiama;
 // setAttribute li scrive in el.attributes.
+// Punti 13, 63, 42 (animazione dei marker): manualTime = ora iniziale della pagina (ms) che resta ferma finché il test
+// non la cambia (page.setNow, page.advance; Date.now e performance.now la seguono; i timer restano veri); raf = coda di
+// requestAnimationFrame (vera di default con manualTime): page.frame() esegue i callback in coda. Senza raf la pagina
+// non ha requestAnimationFrame e l'animazione resta spenta (marker all'ultimo segnale, come prima dei punti 13 e 42).
+// zoom: zoom iniziale della mappa finta (page.setZoom); bounds: area visibile {w, s, e, n} (getBounds, anche pad());
+// canvas: oggetto restituito da L.canvas() (default {}, senza _redraw). page.moves() conta le setLatLng dei marker.
+// I setTimeout dell'animatore (animWake della pagina, quando il prossimo passo è lontano più di ~100 ms) con ora manuale
+// seguono l'ora della pagina: page.frame() esegue prima quelli scaduti (che chiedono un requestAnimationFrame) e poi i
+// fotogrammi in coda; page.rafPending() conta fotogrammi e risvegli in coda (i «cicli» vivi).
+// matchMedia(q) restituisce { matches, addEventListener('change'), addListener }; page.setMedia(q, v) cambia la
+// risposta e manda l'evento change, come il browser (es. prefers-reduced-motion cambiato nelle impostazioni).
 function startPage({ routes, config = {}, session = {}, local = {}, timeScale = TIME_SCALE, media = {},
-  size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }) }) {
+  size = { x: 1000, y: 800 }, project = ll => ({ x: 500 + (ll.lng - 11) * 1e5, y: 400 - (ll.lat - 44) * 1e5 }),
+  manualTime = null, raf = manualTime != null, zoom = 6, bounds = { w: 10, s: 43, e: 12, n: 45 }, canvas = () => ({}) }) {
   const realStart = Date.now();
-  const pageNow = () => realStart + (Date.now() - realStart) * timeScale;
+  let manual = manualTime;
+  const pageNow = () => (manual != null ? manual : realStart + (Date.now() - realStart) * timeScale);
+  let moves = 0;   // setLatLng dei marker (page.moves)
   const elements = new Map();
   const listeners = new Map();   // eventi di document (per visibilitychange)
   const winListeners = new Map();   // eventi di window (per online)
@@ -75,7 +89,7 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   class FakeMarker {
     constructor(latlng, options) { this.latlng = latlng; this.options = { ...options }; }
     on() { return this; } addTo() { return this; } bringToFront() { return this; } redraw() { return this; }
-    bindTooltip() { return this; } closeTooltip() { return this; } setLatLng(ll) { this.latlng = ll; return this; } setStyle(s) { Object.assign(this.options, s); return this; }
+    bindTooltip() { return this; } closeTooltip() { return this; } setLatLng(ll) { moves++; this.latlng = ll; return this; } setStyle(s) { Object.assign(this.options, s); return this; }
     getLatLng() { return { lat: this.latlng[0], lng: this.latlng[1] }; } remove() {}
   }
   // Mappa finta: eventi registrati (fire), dimensioni size e proiezione project(latlng) → punto del contenitore;
@@ -83,11 +97,13 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const mapHandlers = new Map();
   // views: argomenti di ogni setView (il primo è la vista iniziale della pagina)
   const views = [];
-  const map = { views, setView(...a) { views.push(a); return this; }, invalidateSize() {}, getZoom: () => 6,
+  let zoomNow = zoom;
+  const box = { getEast: () => bounds.e, getWest: () => bounds.w, getSouth: () => bounds.s, getNorth: () => bounds.n };
+  const map = { views, setView(...a) { views.push(a); return this; }, invalidateSize() {}, getZoom: () => zoomNow,
     on(ev, fn) { for (const e of ev.split(' ')) mapHandlers.set(e, [...(mapHandlers.get(e) || []), fn]); return this; },
     fire(ev, data = {}) { for (const fn of mapHandlers.get(ev) || []) fn({ type: ev, target: map, ...data }); return this; },
     getCenter: () => ({ lat: 44, lng: 11 }),
-    getBounds: () => ({ pad: () => ({ getEast: () => 12, getWest: () => 10, getSouth: () => 43, getNorth: () => 45 }) }),
+    getBounds: () => ({ ...box, pad: () => ({ ...box }) }),
     getSize: () => ({ x: size.x, y: size.y }),
     latLngToContainerPoint: ll => project(Array.isArray(ll) ? { lat: ll[0], lng: ll[1] } : ll),
     mouseEventToContainerPoint: ev => ({ x: ev.clientX, y: ev.clientY }),
@@ -127,7 +143,7 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   // opzioni passate a L.map e a L.control.zoom (titoli dei pulsanti di zoom)
   const mapOptions = [], zoomOptions = [];
   const L = { map: (id, o) => { mapOptions.push(o); return map; }, tileLayer: () => ({ addTo() {} }),
-    canvas: o => { canvasOptions.push(o); return {}; },
+    canvas: o => { canvasOptions.push(o); return canvas(); },
     control: { zoom: o => { zoomOptions.push(o); return { addTo() { return this; } }; } },
     popup: o => new FakePopup(o), Util: { wrapNum: x => x },
     CircleMarker: { extend(proto) { class M extends FakeMarker {} Object.assign(M.prototype, proto); return M; } } };
@@ -159,23 +175,46 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const boomLocal = () => { throw new Error('SecurityError: localStorage non disponibile'); };
   const localStorage = local === 'throw' ? { getItem: boomLocal, setItem: boomLocal, removeItem: boomLocal }
     : { getItem: k => (localMap.has(k) ? localMap.get(k) : null), setItem: (k, v) => localMap.set(k, String(v)), removeItem: k => localMap.delete(k) };
+  // matchMedia: un oggetto per query, con i listener di change
+  const mediaLists = new Map();
+  const mediaList = q => {
+    if (!mediaLists.has(q)) {
+      const l = { media: q, listeners: [], get matches() { return !!media[q]; },
+        addEventListener(type, fn) { if (type === 'change') this.listeners.push(fn); }, addListener(fn) { this.listeners.push(fn); } };
+      mediaLists.set(q, l);
+    }
+    return mediaLists.get(q);
+  };
+  const setMedia = (q, v) => { media[q] = v; for (const fn of mediaList(q).listeners) fn({ matches: !!v, media: q }); };
   const retryTimers = new Set();   // setTimeout(tick, …) in attesa
   const allTimers = new Set();
   let stopped = false;             // stop(): pagina chiusa, nessun timer parte più (il test può finire)
+  // coda di requestAnimationFrame (raf): id → callback, eseguiti da page.frame()
+  const rafQueue = new Map();
+  let rafId = 0;
+  // risvegli dell'animatore con ora manuale: id → { due, fn }
+  const animTimers = new Map();
+  let animTimerId = 0;
+  const rafApi = raf ? {
+    requestAnimationFrame: fn => { if (stopped) return 0; rafQueue.set(++rafId, fn); return rafId; },
+    cancelAnimationFrame: id => { rafQueue.delete(id); },
+  } : {};
   const ctx = vm.createContext({
+    ...rafApi, performance: { now: () => pageNow() },
     console, URLSearchParams, URL, Promise, Map, Set, Math, JSON, Number, String, Array, Object, Error, TypeError,
     AbortController, Date: PageDate, fetch, L, document, sessionStorage,
     setTimeout: (fn, ms, ...a) => {
       if (stopped) return 0;
+      if (manual != null && fn === ctx.animWake) { animTimers.set(--animTimerId, { due: pageNow() + (ms || 0), fn }); return animTimerId; }
       const isTick = fn === ctx.tick;
       const id = setTimeout((...b) => { retryTimers.delete(id); allTimers.delete(id); if (!stopped) fn(...b); }, (ms || 0) / timeScale, ...a);
       allTimers.add(id);
       if (isTick) retryTimers.add(id);
       return id;
     },
-    clearTimeout: id => { retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
+    clearTimeout: id => { if (animTimers.delete(id)) return; retryTimers.delete(id); allTimers.delete(id); clearTimeout(id); },
     setInterval: () => 0,   // gli aggiornamenti periodici li fa il test chiamando tick()
-    ResizeObserver: class { observe() {} }, matchMedia: q => ({ matches: !!media[q] }),
+    ResizeObserver: class { observe() {} }, matchMedia: q => mediaList(q),
     localStorage, navigator: {},
     addEventListener(type, fn) { if (!winListeners.has(type)) winListeners.set(type, []); winListeners.get(type).push(fn); },
   });
@@ -185,7 +224,13 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   vm.runInContext(pageScript, ctx);
   const get = expr => vm.runInContext(expr, ctx);
   const status = () => el('status').textContent;
-  const stop = () => { stopped = true; for (const id of allTimers) clearTimeout(id); allTimers.clear(); };
+  const stop = () => { stopped = true; for (const id of allTimers) clearTimeout(id); allTimers.clear(); rafQueue.clear(); animTimers.clear(); };
+  // un fotogramma: prima i risvegli dell'animatore scaduti, poi i callback in coda adesso (quelli che chiedono un altro
+  // fotogramma vanno al prossimo); restituisce quanti callback di requestAnimationFrame ha eseguito
+  const frame = () => {
+    for (const [id, t] of [...animTimers]) if (t.due <= pageNow()) { animTimers.delete(id); t.fn(); }
+    const list = [...rafQueue.values()]; rafQueue.clear(); for (const fn of list) fn(pageNow()); return list.length;
+  };
   // scheda nascosta o di nuovo visibile, come fa il browser: document.hidden e poi l'evento visibilitychange
   const setHidden = hidden => { document.hidden = hidden; for (const fn of listeners.get('visibilitychange') || []) fn({ type: 'visibilitychange' }); };
   // evento di window, come lo manda il browser (es. 'online' quando torna la rete)
@@ -199,7 +244,9 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
     e.results = el(id).listeners.filter(l => l.type === type).map(l => l.fn(e));
     return e;
   };
-  return { ctx, el, get, requests, dispatch, stop, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
+  return { ctx, el, get, requests, dispatch, stop, frame, rafPending: () => rafQueue.size + animTimers.size, rafOnly: () => rafQueue.size,
+    animTimers: () => [...animTimers.values()].map(t => t.due - pageNow()), setMedia, moves: () => moves,
+    setNow: t => { manual = t; }, advance: ms => { manual += ms; }, setZoom: z => { zoomNow = z; }, storage, local: localMap, fireEl, retryTimers, pageNow, status, setHidden, fire, tick: () => ctx.tick(), markers: () => get('markers'),
     map, canvasOptions, mapOptions, zoomOptions, keydown, document,
     waitStatus: (re, what = String(re), ms) => until(() => re.test(status()), `${what} (stato: «${status()}»)`, ms) };
 }

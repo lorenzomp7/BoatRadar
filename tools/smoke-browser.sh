@@ -19,6 +19,10 @@
 #      questo nome» (almeno 44 px su telefono, nome accessibile = solo il nome), «2 risultati» nella regione aria-live
 #      nascosta, freccia giù + Invio apra la scheda della prima e Esc la chiuda;
 #   3b. la pagina non abbia errori JavaScript né messaggi console.error;
+#   3c. (solo con il server locale, punti 13, 63, 42) a zoom 14 su LAGUNA PRIMA (247123450, che smoke-server fa avanzare
+#      coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: distanza dal primo fix mai in calo, nave
+#      in movimento, stima entro il suo limite; #smooth spento con un clic vero sulla sua riga (≥ 44 px a 390) e la nave
+#      resta esattamente sull'ultimo fix;
 #   4. (solo con il server locale) con l'orologio della pagina e serverTime 40 min avanti le navi in moto spariscano e
 #      quella ormeggiata della fixture resti tratteggiata, con il pallino rosso e «posizione di 40 min fa» in scheda;
 #   5. (solo con il server locale, punto 86) con due server in window.BOATRADAR_APIS, il primo morto (127.0.0.1:9) e il
@@ -348,6 +352,73 @@ check() {
     cargo_click
     "${AB[@]}" wait --fn "markers.has(247123450) && localStorage.getItem($FKEY) === null" >/dev/null       || fail "$name: il secondo clic su «Cargo» non riporta 247123450 · localStorage $(js "localStorage.getItem($FKEY)")"
     ok "$name: secondo clic su «Cargo» → 247123450 di nuovo in mappa, localStorage vuoto"
+  fi
+
+  # movimento fluido (punti 13, 63, 42): a zoom 14 su LAGUNA PRIMA (247123450, 11,2 kn verso est; smoke-server la fa
+  # avanzare coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: la distanza dal primo fix della
+  # traccia non cala mai, la nave si muove e la stima resta entro il suo limite (122 s sopra 3 kn); con #smooth spento la
+  # nave sta esattamente sull'ultimo fix e non si muove. Solo con il server locale (navi e velocità note).
+  if [ -z "${SMOKE_URL:-}" ]; then
+    js "map.setView(markers.get(247123450).marker.getLatLng(), 14, { animate: false }), true" >/dev/null
+    "${AB[@]}" wait --fn "markers.has(247123450) && markers.get(247123450).track.length > 0 && anim.set.has(247123450)" >/dev/null \
+      || fail "$name: 247123450 non è fra le navi animate (anim.enabled $(js "anim.enabled"), #smooth $(js "document.getElementById('smooth').checked"))"
+    local readings
+    readings=$(js "new Promise(done => {
+      const m = markers.get(247123450), out = [], rad = Math.PI / 180;
+      let first = null;
+      const dist = (a, b) => Math.hypot((b.lon - a.lon) * rad * Math.cos((a.lat + b.lat) / 2 * rad), (b.lat - a.lat) * rad) * AisLogic.R_EARTH;
+      const take = () => {
+        const ll = m.marker.getLatLng(), p = { lat: ll.lat, lon: ll.lng }, last = m.track[m.track.length - 1];
+        const at = AisLogic.positionAt(m.track, anim.T), limit = AisLogic.estimateLimitMs(last.sog);
+        first ??= { ...m.track[0] };
+        out.push({ d: dist(first, p), mode: at.mode, ahead: at.mode === 'estimate' ? at.aheadMs : 0, limit,
+          fromLast: dist(last, p), maxFromLast: last.sog * AisLogic.KN * limit / 1000 });
+        if (out.length < 6) setTimeout(take, 600); else done(out);
+      };
+      // con un solo fix ricevuto da meno di 15 s (pagina appena ricaricata) la riproduzione in differita non l'ha ancora
+      // raggiunto e la nave aspetta sul fix: le letture partono quando la nave è fra due fix o stimata (al massimo 25 s)
+      const t0 = performance.now();
+      const start = () => (AisLogic.positionAt(m.track, anim.T).mode !== 'fix' || performance.now() - t0 > 25000 ? take() : setTimeout(start, 200));
+      start();
+    })")
+    local verdict
+    verdict=$(node -e '
+      const r = JSON.parse(process.argv[1]), bad = [];
+      for (let i = 1; i < r.length; i++) if (r[i].d < r[i - 1].d - 0.01) bad.push(`lettura ${i + 1}: distanza dal primo fix scesa da ${r[i - 1].d.toFixed(2)} a ${r[i].d.toFixed(2)} m`);
+      if (!(r[r.length - 1].d > r[0].d + 1)) bad.push(`la nave non si muove (${r[0].d.toFixed(2)} → ${r[r.length - 1].d.toFixed(2)} m)`);
+      for (const [i, x] of r.entries()) {
+        if (x.ahead > x.limit) bad.push(`lettura ${i + 1}: stima ${x.ahead} ms oltre il limite di ${x.limit} ms`);
+        if (x.mode === "estimate" && x.fromLast > x.maxFromLast + 5) bad.push(`lettura ${i + 1}: ${x.fromLast.toFixed(1)} m dall ultimo fix, limite ${x.maxFromLast.toFixed(1)} m`);
+      }
+      process.stdout.write(bad.length ? "✗ " + bad.join("; ") : r.map(x => x.d.toFixed(1) + " m (" + x.mode + ")").join(" · "));
+    ' "$readings")
+    case "$verdict" in "✗"*) "${AB[@]}" screenshot "$OUT/$name-movimento-errore.png" >/dev/null || true; fail "$name: movimento: ${verdict#✗ }" ;; esac
+    ok "$name: movimento fluido a zoom 14, distanza dal primo fix: $verdict"
+    # interruttore spento con un clic vero sulla sua riga della legenda (almeno 44 px su telefono)
+    open_legend
+    local smx smy smh hits
+    read -r smx smy smh <<<"$(js "$center_of('#legend label.smooth')" | tr -d '"')"
+    hits=$(js "document.elementFromPoint($smx, $smy)?.closest('label')?.className || 'niente'" | tr -d '"')
+    [ "$hits" = smooth ] || { "${AB[@]}" screenshot "$OUT/$name-smooth-errore.png" >/dev/null || true; fail "$name: sopra la riga di #smooth ($smx $smy) c'è $hits"; }
+    if [ "$(js "matchMedia('(max-width: 640px)').matches")" = true ]; then
+      [ "$smh" -ge 44 ] || fail "$name: la riga «Movimento fluido» della legenda è alta $smh px, meno di 44"
+    fi
+    "${AB[@]}" screenshot "$OUT/$name-movimento.png" >/dev/null
+    click_at "$smx" "$smy"
+    "${AB[@]}" wait --fn "!document.getElementById('smooth').checked && !anim.enabled" >/dev/null || fail "$name: il clic sulla riga di #smooth non spegne il movimento"
+    ok "$name: clic vero sulla riga «Movimento fluido» (alta $smh px) → spento"
+    local still
+    still=$(js "new Promise(done => {
+      const m = markers.get(247123450), out = [];
+      const take = () => { const ll = m.marker.getLatLng(), last = m.track[m.track.length - 1];
+        out.push(ll.lat === last.lat && ll.lng === last.lon);
+        if (out.length < 3) setTimeout(take, 1000); else done(out.every(Boolean) && !anim.enabled && localStorage.getItem('boatradar:movimento') === '0'); };
+      take();
+    })")
+    [ "$still" = true ] || fail "$name: con #smooth spento 247123450 non resta sull'ultimo fix (o localStorage non dice '0')"
+    js "(document.getElementById('smooth').click(), true)" >/dev/null
+    [ "$(js "anim.enabled && localStorage.getItem('boatradar:movimento') === '1'")" = true ] || fail "$name: riaccendendo #smooth l'animazione non riparte"
+    ok "$name: #smooth spento → nave ferma sull'ultimo fix per 2 s; riacceso → animazione ripartita · scheda «Posizione»: $(js "/<td>Posizione<\/td><td[^>]*>([^<]*)/.exec(facts(247123450))[1]" | tr -d '"')"
   fi
 
   # ricerca (punto 12): «GEMELLA» scritta con tasti veri → dopo l'attesa 2 righe role="option", entrambe con «2 navi

@@ -66,6 +66,30 @@ Lavora su `main_claude` salvo indicazione diversa.
   prima «Filtri», poi la legenda (dopo gli Esc del popup e della ricerca); su telefono il titolo resta fisso in cima.
   Un cambio di filtro chiude il popup «N navi qui». I giri sono numerati (`roundSeq`): uno più vecchio dell'ultimo avviato
   non tocca marker né riga di stato. Test in `test/pagina-filtri.test.js`.
+- Movimento fluido (punti 13, 63, 42): ogni marker tiene gli ultimi 3 fix (`m.track`, `pushFix`: stessa ora con
+  coordinate diverse sostituisce l'ultimo, come `m.props`) e la posizione disegnata (`m.shown`); la mappa mostra le navi
+  all'ora di riproduzione (ora corretta − 15 s, `ANIM_DELAY_MS`; `playbackTime` riparte dall'ora vera se è avanti più di
+  2 s, es. orologio corretto dopo un primo `/api/status` in errore), calcolata una volta per fotogramma o giro:
+  fra due fix l'interpolazione (rotta mai 360/511: quella valida di b o di a, o null), oltre l'ultimo la stima da velocità
+  e rotta (`positionAt`: al massimo 242 s fino a 3 kn, 122 s oltre, mai per le navi ferme; `final` quando non si sposta
+  più; `rhumbDestination` sempre finita anche ai poli). Età e dissolvenza del punto 8 restano del fix. Un solo ciclo
+  (oggetto `anim`, con `anim.stats`): ogni 3 s sceglie nella vista al massimo `ANIM_MAX` (500) navi in movimento per
+  `animPriority` (la selezionata sempre) e ricalcola le altre in un colpo; negli altri fotogrammi, ogni `frameInterval` ms
+  (ridisegno misurato avvolgendo `renderer._redraw`), muove le scelte con `approach` (mai indietro sotto 300 m verso un
+  bersaglio che avanzerà; verso uno `final` torna senza salti); le navi che escono dalle scelte scivolano alla loro
+  posizione in al più `SETTLE_MS` (`anim.settle`). `setLatLng` solo da 0,5 px e mai con coordinate non finite. Senza navi
+  da muovere nessun fotogramma (un `setTimeout` alla prossima scelta); con il prossimo passo oltre 100 ms un `setTimeout`
+  (`animWake`) e poi un solo `requestAnimationFrame`. Pausa con mappa in movimento e scheda nascosta. Interruttore
+  «Movimento fluido e posizione stimata» (`#smooth` nella legenda, `localStorage['boatradar:movimento']` '1'/'0'; senza
+  scelta acceso, spento con `prefers-reduced-motion`, anche se cambia a pagina aperta; la casella mostra lo stato vero):
+  spento, o senza `requestAnimationFrame`, marker all'ultimo fix e ciclo fermo. Riga «Posizione» in scheda (ultimo
+  segnale / fra due segnali / stimata / segnale precedente, `positionWords`). Test in `test/movimento.test.js` e
+  `test/pagina-movimento.test.js` (ora manuale, coda di `requestAnimationFrame`, risvegli `animWake` e `page.setMedia` di
+  `test/pagina-helpers.js`). `tools/smoke-server.js` fa avanzare le navi lungo la rotta a ogni ripetizione (`--navi N`:
+  navi di `tools/carico.js`; test in `test/smoke-server.test.js`); misura nel browser con `tools/misura-pagina.sh`
+  (ordine alternato spenta/accesa/accesa/spenta e mediane, ridisegni divisi per causa, finestre dei dati dai segni
+  `boatradar:load-start`/`-end`; soglie e perché in `docs/prestazioni.md`, «Pagina»). `ANIM_MAX` 500 e `ANIM_MIN_MS` 16
+  restano finché reggono le soglie sui ridisegni causati dall'animatore; altrimenti `ANIM_MAX` 200 e `ANIM_MIN_MS` 50.
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -170,7 +194,8 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   → scheda di 247555002; con la scheda aperta 30 navi finte nello stesso punto: 15 righe e «e altre 15», tutte
   raggiungibili; punto 10), un clic vero su «Cargo» nella legenda che toglie LAGUNA PRIMA (247123450) e salva il filtro, che
   resta ricaricando, e un secondo clic che la riporta (riga ≥ 44 px a 390; punto 9), la ricerca «GEMELLA» scritta con tasti veri (2 righe con «2 navi con questo nome», freccia
-  giù + Invio apre la scheda, Esc la chiude; punto 12) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
+  giù + Invio apre la scheda, Esc la chiude; punto 12), a zoom 14 che LAGUNA PRIMA avanzi senza mai tornare indietro e,
+  spento `#smooth` con un clic vero sulla sua riga (≥ 44 px a 390), resti sull'ultimo fix (punti 13, 63, 42) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
   passi al secondo dopo due tentativi al primo, con «server di riserva (Render)» nella riga di stato, e che con il

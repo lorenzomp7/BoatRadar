@@ -190,3 +190,117 @@ ogni 1000 navi invece di 0,51 (`classA` e `staticScore` in ogni posizione, circa
 | 2026-11-26 | prima correzioni punto 12 (2b2f80a) | 30000 | 1.73 | 175 | 6000 | 253.6 (1550.5) | 0.9 / 1.6 | 1427 | 57.4 (366) | 0.5 / 0.7 | v22.23.5 |
 | 2026-11-26 | dopo correzioni punto 12 | 30000 | 1.79 | 175.3 | 6000 | 254.6 (1550.5) | 0.7 / 1.1 | 1427 | 57.8 (366) | 0.4 / 0.5 | v22.23.5 |
 <!-- nuove righe sopra questa linea -->
+
+## Pagina
+
+Misura della pagina nel browser (punti 13, 63, 42: movimento fluido e posizione stimata) con `tools/misura-pagina.sh`:
+`server.js` con le navi sintetiche di `tools/carico.js` (`tools/smoke-server.js --navi 30000`, che le fa avanzare
+coerenti con velocità e rotta), `boatradar.html` in agent-browser a 1280×800, per ogni scenario (mondo z3, Rotterdam z9
+e z13) quattro misure da 10 s (`MISURA_SECONDI`) in ordine alternato: animazione spenta, accesa, accesa, spenta. La
+deriva della macchina durante la misura (riscaldamento, altri processi) pesa così uguale sui due stati, e ogni riga della
+tabella è la mediana delle due misure dello stesso stato:
+
+- fps: fotogrammi `requestAnimationFrame` al secondo (della misura, non dell'animatore);
+- ridisegni del canvas al secondo divisi per causa, con i contatori della pagina letti a ogni ridisegno: «dati» se nel
+  frattempo `loadLocations` ha aggiornato i marker (`anim.stats.loads`), «animatore» se l'animatore ha spostato marker
+  (`anim.stats.moved` + `pickMoved`), altrimenti «altri»; dei ridisegni dell'animatore p50 / p95 / massimo e numero di
+  campioni (le due misure unite), dei ridisegni dei dati il p95 (`renderer._redraw`, metodo privato di Leaflet 1.9.4);
+- long task oltre 50 ms fuori dalle finestre dei dati: da 50 ms prima di `loadLocations` (o dalla prima risposta di
+  `/api/locations` o del Baltico del giro, per la lettura del JSON) a 250 ms dopo la sua fine (il ridisegno che segue).
+  La pagina segna inizio e fine con `performance.mark('boatradar:load-start' / 'boatradar:load-end')` e
+  `performance.measure('boatradar:load')`; in tutto, e quante risposte di dati sono arrivate;
+- fotogrammi e risvegli (`setTimeout`) del ciclo dell'animatore al secondo: senza niente da muovere il ciclo non chiede
+  fotogrammi, e con il prossimo passo lontano più di 100 ms aspetta con un `setTimeout`;
+- passi dell'animatore e `setLatLng` dei passi al secondo (comprese le navi che, uscite dalle animate, scivolano alla loro
+  posizione), p95 del passo, durata della scelta delle navi animate (`anim.stats`);
+- `loadLocations`: tempo per unire le fonti e aggiornare i marker, mediana di 10 giri (5 per misura) e scarto
+  interquartile (`anim.stats.loadMs`).
+
+```
+SMOKE_LEAFLET_LOCAL=1 bash tools/misura-pagina.sh --registra "dopo correzioni revisione"
+MISURA_CPU=4 bash tools/misura-pagina.sh     # facoltativo: CPU rallentata 4 volte via CDP
+```
+
+Soglie, e perché (dal 2026-11-27, dopo la revisione dei punti 13, 63, 42):
+
+- fps ≥ 55 (con la CPU 4 volte più lenta, facoltativo, ≥ 30 a zoom 13).
+- Con l'animazione accesa, solo i ridisegni causati dall'animatore: vista mondo ≤ 2/s e p95 ≤ 12 ms, zoom 13 p95 ≤ 6 ms.
+  La misura di prima contava ogni ridisegno: a zoom 3 l'animatore non sposta niente (meno di 0,5 px) e l'unico ridisegno
+  (0,1/s) era quello dei dati arrivati, presente anche ad animazione spenta, con 19-24 ms spenta e 12-14 ms accesa; la
+  soglia «mondo p95 ≤ 12 ms» misurava un solo campione di quel ridisegno, non il movimento (vedi la nota sotto la
+  tabella precedente). Il costo dei dati resta in tabella («Ridisegno dati p95») ma non è del movimento. Il p95 vale con
+  almeno 20 campioni; con meno si usa il massimo (più severo); nessun ridisegno dell'animatore vuol dire nessun costo.
+- Nessun long task > 50 ms fuori dalle finestre dei dati (segni della pagina invece di «entro 1 s da una risposta»).
+- `loadLocations` accesa al massimo 2 ms più che spenta, più metà della somma degli scarti interquartili dei due gruppi
+  di 10 giri. Il test vm (`test/pagina-movimento.test.js`, «loadLocations con 6000 navi») misura il costo per marker
+  senza browser: con l'animazione accesa il giro calcola in più solo `pushFix` e `positionAt` per marker, con l'ora di
+  riproduzione letta una volta per giro (prima `clock.now()`, che ordinava i campioni, per ogni marker): 6,4 contro
+  6,6 µs per marker, cioè nessuna differenza misurabile. Nel browser la differenza fra due misure cambiava segno (+4,0 e
+  −2,4 ms a Rotterdam z9) e gli scarti interquartili dei giri sono di 1-28 ms: una differenza dentro quello scarto è
+  rumore, non un costo dell'animazione.
+
+Se le soglie dei ridisegni dell'animatore non reggono: `ANIM_MAX` 200 e `ANIM_MIN_MS` 50 in `boatradar.html`, poi di
+nuovo la misura (finora non è servito: restano 500 e 16). Headless e senza GPU i numeri servono a confrontare due
+versioni sulla stessa macchina.
+
+### Misura alternata (dal 2026-11-27)
+
+| Data | Versione | Scenario | Animazione | Marker | Animate / in moto | fps | Ridisegni/s: dati · animatore · altri | Ridisegno animatore p50 / p95 / max ms (campioni) | Ridisegno dati p95 ms | Long task > 50 ms fuori dai dati (max ms) · in tutto, risposte | Fotogrammi / risvegli del ciclo al s | Passi/s / setLatLng/s | Passo p95 ms | Scelta ms | loadLocations ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-27 | dopo correzioni revisione (51cac37+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.6 | 0.1 · 0 · 0 | – (0) | 26.6 | 0 (max 0) · 3 (max 90), 4 risposte | 0 / 0 | 0 / 0 | 0 | 3.15 | 56.35 (IQR 16.1, 10 giri) |
+| 2026-11-27 | dopo correzioni revisione (51cac37+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.8 | 0.1 · 0 · 0 | – (0) | 16.3 | 0 (max 0) · 2 (max 54), 4 risposte | 1.9 / 1.3 | 1 / 0 | 0.75 | 6.35 | 46.8 (IQR 25.5, 10 giri) |
+| 2026-11-27 | dopo correzioni revisione (51cac37+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.1 | 0.1 · 0 · 0 | – (0) | 4.1 | 0 (max 0) · 0 (max 0), 4 risposte | 0 / 0 | 0 / 0 | 0 | 2.05 | 13.15 (IQR 3.6, 10 giri) |
+| 2026-11-27 | dopo correzioni revisione (51cac37+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 848.5 | 60.2 | 0.1 · 1.1 · 0 | 3.5 / 5.9 / 7.8 (23) | 4.6 | 0 (max 0) · 0 (max 0), 4 risposte | 2.1 / 1 | 0.9 / 25.5 | 1.2 | 2.8 | 10.15 (IQR 4.3, 10 giri) |
+| 2026-11-27 | dopo correzioni revisione (51cac37+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 · 0 · 0 | – (0) | 1.1 | 0 (max 0) · 0 (max 0), 4 risposte | 0 / 0 | 0 / 0 | 0 | 1.1 | 3.5 (IQR 2.4, 10 giri) |
+| 2026-11-27 | dopo correzioni revisione (51cac37+modifiche) | Rotterdam z13 | accesa | 319.5 | 57.5 / 57.5 | 60.1 | 0.1 · 1.8 · 0 | 0.4 / 0.6 / 1.2 (37) | 0.8 | 0 (max 0) · 0 (max 0), 4 risposte | 2.4 / 2.1 | 1.9 / 40.8 | 0.6 | 0.3 | 4.35 (IQR 2, 10 giri) |
+<!-- nuove righe della pagina (misura alternata) sopra questa linea -->
+
+Nota (2026-11-27, dopo le correzioni della revisione): soglie rispettate con il codice corretto, senza toccare
+`ANIM_MAX` né `ANIM_MIN_MS`. A zoom 3 l'animatore non causa ridisegni (0 campioni: niente sotto mezzo pixel si sposta)
+e il ciclo fa 1,3-1,9 fotogrammi al secondo invece di 60 (risvegli con `setTimeout`). I ridisegni dei dati a zoom 3
+(16-27 ms p95) sono gli stessi ad animazione spenta e accesa. A Rotterdam z9 i `setLatLng`/s dei passi (25,5) sono più
+alti della misura precedente (0,4): dipendono da quante navi superano mezzo pixel nella finestra di 10 s, cioè da quando
+arrivano i fix nuovi; il codice di 51cac37 misurato a mano per 15 s con l'arrivo di fix nuovi ne fa 8,5/s. Il costo resta
+nei ridisegni dell'animatore (1,1/s, p95 5,9 ms), entro le soglie.
+
+### Misura precedente (una misura per stato, tutti i ridisegni)
+
+| Data | Versione | Scenario | Animazione | Marker | Animate / in moto | fps | Ridisegni/s | Ridisegno p50 / p95 ms | Long task > 50 ms fuori dai dati (max ms) · in tutto, risposte nella misura | Passi/s / setLatLng/s | Passo p95 ms | Scelta ms | loadLocations ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.7 | 0.1 | 17.8 / 17.8 | 0 (max 0) · 2 (max 61), 2 risposte | 0 / 0 | 0 | 8.1 | 65.3 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.8 | 0.1 | 11.4 / 11.4 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.7 | 3.1 | 60.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 3.2 / 3.2 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.8 | 19 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 853 | 60 | 0.5 | 2.8 / 6.6 | 0 (max 0) · 0 (max 0), 2 risposte | 0.9 / 0.4 | 1.2 | 0.8 | 7.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0 | 0 / 0 | 0 (max 0) · 0 (max 0), 1 risposte | 0 / 0 | 0 | 0.4 | 2.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 0.4 / 1.1 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 44.2 | 0.6 | 0.3 | 2.2 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.6 | 0.1 | 19.8 / 19.8 | 0 (max 0) · 2 (max 68), 2 risposte | 0 / 0 | 0 | 8.4 | 64.3 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.9 | 0.1 | 9.7 / 9.7 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.6 | 2 | 52.4 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 2.7 / 2.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.5 | 13.9 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60.1 | 0.5 | 0.8 / 3.9 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 1.8 | 1.5 | 9.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 0.7 / 0.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.5 | 4.2 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16), seconda misura (c567540+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60.1 | 1.5 | 0.4 / 1 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.5 | 0.7 | 0.5 | 3.1 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | mondo z3 | spenta | 6000 | 0 / 0 | 57.8 | 0.1 | 54.3 / 54.3 | 0 (max 0) · 2 (max 230), 2 risposte | 0 / 0 | 0 | 14 | 174.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | mondo z3 | accesa | 6000 | 500 / 3578 | 57.7 | 0.1 | 47.5 / 47.5 | 0 (max 0) · 3 (max 213), 2 risposte | 1 / 0 | 6.1 | 13.8 | 162.6 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z9 | spenta | 1437 | 0 / 0 | 59.4 | 0.1 | 23 / 23 | 0 (max 0) · 2 (max 87), 2 risposte | 0 / 0 | 0 | 2.3 | 47.3 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z9 | accesa | 1437 | 500 / 853 | 58.4 | 0.8 | 14.6 / 38.6 | 2 (max 77) · 3 (max 106), 2 risposte | 1 / 14.8 | 6.5 | 3.9 | 56 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z13 | spenta | 320 | 0 / 0 | 60 | 0.1 | 4.5 / 4.5 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 3.2 | 21.8 |
+| 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 2 / 7.3 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.6 | 2.2 | 1.5 | 26.4 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.6 | 0.1 | 22.6 / 22.6 | 0 (max 0) · 2 (max 66), 2 risposte | 0 / 0 | 0 | 3.3 | 60.1 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.7 | 0.1 | 12.2 / 12.2 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.8 | 4.3 | 56 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 3.2 / 3.2 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.7 | 11.1 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60 | 0.5 | 1.4 / 5.5 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 0.8 | 1.5 | 15.1 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 1 / 1 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 1.3 | 9 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60.1 | 1.7 | 0.4 / 1.3 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.4 | 0.5 | 0.4 | 3.6 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.7 | 0.1 | 19.3 / 19.3 | 0 (max 0) · 2 (max 61), 2 risposte | 0 / 0 | 0 | 3.4 | 78.3 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.7 | 0.1 | 13.6 / 13.6 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.8 | 5.3 | 53.3 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.1 | 0.1 | 5.2 / 5.2 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.4 | 9.5 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60 | 0.5 | 1 / 14.2 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 1.1 | 2.6 | 7.1 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 0.7 / 0.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.4 | 5.1 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 0.4 / 0.8 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.1 | 0.4 | 0.2 | 4 |
+<!-- fine della misura precedente -->
+
+Nota (2026-11-27, dopo l'unione con il punto 12): a zoom 3 l'animatore non sposta nessun marker (meno di 0,5 px,
+0 `setLatLng`/s), quindi l'unico ridisegno della misura (0,1/s) è quello dei dati arrivati, presente anche ad animazione
+spenta (19-24 ms, più lento che accesa): la soglia «mondo p95 ≤ 12 ms» (12,2 e 13,6 ms) misura quel ridisegno, non il
+movimento. Anche la differenza di `loadLocations` a Rotterdam z9 cambia segno da una misura all'altra (+4,0, −2,4 ms).
+Una prova con `ANIM_MAX` 200 e `ANIM_MIN_MS` 50 dà gli stessi due scostamenti (12,8 ms; +2,3 ms): restano 500 e 16.

@@ -126,10 +126,12 @@
   // misurano male), 0 senza campioni. now() = ora del telefono − offset (arrotondata al ms), letta a ogni chiamata.
   function createClock({ now = () => Date.now(), keep = 5, maxRtt = 2000 } = {}) {
     const samples = [];
-    const offset = () => {
-      if (!samples.length) return 0;
+    // mediana calcolata a ogni campione nuovo, non a ogni now() (che la pagina chiama spesso)
+    let median = 0;
+    const offset = () => median;
+    const update = () => {
       const s = [...samples].sort((a, b) => a - b), mid = s.length >> 1;
-      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+      median = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
     };
     return {
       add(sample) {
@@ -138,6 +140,7 @@
           || !Number.isFinite(sample.offset)) return;
         samples.push(sample.offset);
         if (samples.length > keep) samples.shift();
+        update();
       },
       offset,
       // intero: l'offset (mediana di metà richieste) può avere ,5 e from= di Digitraffic vuole millisecondi interi
@@ -230,32 +233,39 @@
   const canEstimate = p => estimateLimitMs(p.sog) > 0 && validCog(p.cog) && !isStill(p);
 
   // Punto d'arrivo lungo una lossodromia (rotta a direzione costante) di distM metri con rotta bearingDeg.
-  // Oltre un polo la latitudine si riflette; longitudine in [-180, 180).
+  // Oltre un polo la latitudine si riflette; longitudine in [-180, 180). Ai poli (|lat| = 90, dove la proiezione di
+  // Mercatore va all'infinito) le latitudini della formula della longitudine sono limitate a ±POLE_LAT: risultato
+  // sempre finito (al polo ogni longitudine è lo stesso punto); se non lo fosse resta il punto di partenza.
+  const POLE_LAT = 89.9999 * RAD;
   function rhumbDestination(lat, lon, bearingDeg, distM) {
     const d = distM / R_EARTH, th = bearingDeg * RAD, p1 = lat * RAD;
     let p2 = p1 + d * Math.cos(th);
     if (Math.abs(p2) > Math.PI / 2) p2 = p2 > 0 ? Math.PI - p2 : -Math.PI - p2;
-    const dPsi = Math.log(Math.tan(Math.PI / 4 + p2 / 2) / Math.tan(Math.PI / 4 + p1 / 2));
-    const q = Math.abs(dPsi) > 1e-12 ? (p2 - p1) / dPsi : Math.cos(p1);
+    const c1 = Math.max(-POLE_LAT, Math.min(POLE_LAT, p1)), c2 = Math.max(-POLE_LAT, Math.min(POLE_LAT, p2));
+    const dPsi = Math.log(Math.tan(Math.PI / 4 + c2 / 2) / Math.tan(Math.PI / 4 + c1 / 2));
+    const q = Math.abs(dPsi) > 1e-12 ? (c2 - c1) / dPsi : Math.cos(c1);
     const dLon = d * Math.sin(th) / q;
-    return { lat: p2 / RAD, lon: normLon(lon + dLon / RAD) };
+    const out = { lat: p2 / RAD, lon: normLon(lon + dLon / RAD) };
+    return finite(out.lat) && finite(out.lon) ? out : { lat, lon };
   }
 
-  // Posizione del fix p proiettata all'ora now (punto 13, come Lat_projected di OpenCPN), al massimo estimateLimitMs
+  // Posizione del fix p proiettata all'ora now (punto 13, come Lat_projected di OpenCPN), al massimo estimateLimitMs.
+  // final: true quando la posizione non cambierà più (nave non stimabile, o stima arrivata al suo limite).
   function project(p, now) {
     const out = { lat: p.lat, lon: p.lon, cog: p.cog, sog: p.sog, heading: p.heading, mode: 'fix', aheadMs: 0 };
-    if (!canEstimate(p) || !finite(p.ts)) return out;
-    const aheadMs = Math.min(Math.max(finite(now) ? now - p.ts : 0, 0), estimateLimitMs(p.sog));
+    if (!canEstimate(p) || !finite(p.ts)) return { ...out, final: true };
+    const limit = estimateLimitMs(p.sog), aheadMs = Math.min(Math.max(finite(now) ? now - p.ts : 0, 0), limit);
     const to = aheadMs > 0 ? rhumbDestination(p.lat, p.lon, p.cog, p.sog * KN * aheadMs / 1000) : p;
-    return { ...out, lat: to.lat, lon: to.lon, mode: 'estimate', aheadMs };
+    return { ...out, lat: to.lat, lon: to.lon, mode: 'estimate', aheadMs, ...(aheadMs >= limit && { final: true }) };
   }
 
   // Angolo fra a e b (gradi) alla frazione f, girando dal lato più corto; risultato in [0, 360)
   const lerpAngle = (a, b, f) => (a + (((b - a) % 360 + 540) % 360 - 180) * f + 360) % 360;
 
   // Posizione fra i fix a e b all'ora t (punto 42, come MyShipTracking): lat lineare, lon dal lato corto, rotta e prua
-  // dal lato corto se valide in entrambi (altrimenti quelle di b; la prua arrotondata al grado, come nei messaggi AIS),
-  // velocità lineare se nota in entrambi (altrimenti quella di b). Fuori da [a.ts, b.ts] resta all'estremo.
+  // dal lato corto se valide in entrambi; altrimenti la rotta valida di b o di a (null se nessuna: mai 360 o 511 come
+  // rotta) e la prua di b (arrotondata al grado, come nei messaggi AIS); velocità lineare se nota in entrambi
+  // (altrimenti quella di b). Fuori da [a.ts, b.ts] resta all'estremo.
   function interpolate(a, b, t) {
     const span = b.ts - a.ts;
     const f = span > 0 ? Math.min(1, Math.max(0, (t - a.ts) / span)) || 0 : 1;
@@ -265,24 +275,27 @@
       // agli estremi le coordinate esatte del fix (niente errori di arrotondamento)
       lat: f === 1 ? b.lat : a.lat + (b.lat - a.lat) * f,
       lon: f === 1 ? b.lon : normLon(a.lon + dLon * f),
-      cog: validCog(a.cog) && validCog(b.cog) ? lerpAngle(a.cog, b.cog, f) : b.cog,
+      cog: validCog(a.cog) && validCog(b.cog) ? lerpAngle(a.cog, b.cog, f) : validCog(b.cog) ? b.cog : validCog(a.cog) ? a.cog : null,
       sog: validSog(a.sog) && validSog(b.sog) ? a.sog + (b.sog - a.sog) * f : b.sog,
       heading: ha != null && hb != null ? Math.round(lerpAngle(ha, hb, f)) % 360 : b.heading,
       mode: 'interp', aheadMs: 0,
     };
   }
 
-  // Traccia di una nave (ultimi max fix, dal più vecchio): array nuovo. Un fix non più recente dell'ultimo è ignorato;
-  // un fix senza ora valida, o una traccia il cui ultimo fix non ha ora valida, ricomincia da [fix].
+  // Traccia di una nave (ultimi max fix, dal più vecchio): array nuovo. Un fix più vecchio dell'ultimo è ignorato, come
+  // uno con la stessa ora e le stesse coordinate; con la stessa ora e coordinate diverse (due fonti) sostituisce l'ultimo,
+  // come fa la scheda (m.props). Un fix senza ora valida, o una traccia il cui ultimo fix non ha ora valida, ricomincia
+  // da [fix].
   function pushFix(track, fix, max = 3) {
     const last = track?.length ? track[track.length - 1] : null;
     if (!last || !finite(fix.ts) || !finite(last.ts)) return [fix];
+    if (fix.ts === last.ts && (fix.lat !== last.lat || fix.lon !== last.lon)) return [...track.slice(0, -1), fix];
     if (!(fix.ts > last.ts)) return track.slice();
     return [...track, fix].slice(-max);
   }
 
   // Posizione da mostrare all'ora t (di riproduzione): prima del primo fix il primo, fra due fix interpolate,
-  // oltre l'ultimo la stima del punto 13. Traccia vuota = null.
+  // oltre l'ultimo la stima del punto 13 (final se non si sposterà più, vedi project). Traccia vuota = null.
   function positionAt(track, t) {
     if (!track?.length) return null;
     const first = track[0];
@@ -291,8 +304,14 @@
     return project(track[track.length - 1], t);
   }
 
-  // Ora di riproduzione: now − delayMs (now = clock.now() del punto 43), mai indietro rispetto a prev
-  const playbackTime = (now, delayMs = ANIM_DELAY_MS, prev = -Infinity) => Math.max(prev, now - delayMs);
+  // Ora di riproduzione: now − delayMs (now = clock.now() del punto 43), mai indietro rispetto a prev per piccole
+  // correzioni; se prev è avanti più di maxAheadMs (orologio di sistema saltato avanti e tornato, o corretto indietro
+  // dal primo /api/status valido) riparte da now − delayMs, altrimenti resterebbe avanti finché l'ora vera non lo
+  // raggiunge. I ritorni sotto 300 m li evita approach; le navi non animate vanno al bersaglio.
+  const playbackTime = (now, delayMs = ANIM_DELAY_MS, prev = -Infinity, maxAheadMs = 2000) => {
+    const t = now - delayMs;
+    return prev - t > maxAheadMs ? t : Math.max(prev, t);
+  };
 
   // Metri per pixel di Web Mercator (tile di 256 px) alla latitudine lat e allo zoom zoom
   const metersPerPixel = (lat, zoom) => 156543.03392 * Math.cos(lat * RAD) / 2 ** zoom;
@@ -303,28 +322,31 @@
     return { x: dLon * RAD * Math.cos((a.lat + b.lat) / 2 * RAD) * R_EARTH, y: (b.lat - a.lat) * RAD * R_EARTH, dLon };
   }
   // Posizione da disegnare a questo passo: dalla posizione mostrata shown verso target senza salti (punto 13: all'arrivo
-  // del fix vero). Senza shown o oltre snapM metri salta al target; se il target è dietro (componente lungo target.cog
-  // negativa) entro maxBackM la nave resta ferma invece di tornare indietro; altrimenti fa la frazione dtMs/blendMs
-  // della strada. I campi diversi da lat/lon sono sempre quelli del target.
+  // del fix vero). Senza shown o oltre snapM metri salta al target; se il target è dietro (componente lungo una rotta
+  // valida target.cog negativa) entro maxBackM e si sposterà ancora (non final) la nave resta ferma invece di tornare
+  // indietro, perché il target la raggiungerà; altrimenti (anche verso un target fermo, final) fa la frazione
+  // dtMs/blendMs della strada. I campi diversi da lat/lon sono sempre quelli del target.
   function approach(shown, target, { dtMs, blendMs = 1000, maxBackM = 300, snapM = 5000 } = {}) {
     if (!shown) return { ...target };
     const o = offsetM(shown, target), dist = Math.hypot(o.x, o.y);
     if (!(dist <= snapM)) return { ...target };
-    if (validCog(target.cog) && dist <= maxBackM && o.x * Math.sin(target.cog * RAD) + o.y * Math.cos(target.cog * RAD) < 0)
+    if (!target.final && validCog(target.cog) && dist <= maxBackM && o.x * Math.sin(target.cog * RAD) + o.y * Math.cos(target.cog * RAD) < 0)
       return { ...target, lat: shown.lat, lon: shown.lon };
     const k = !(blendMs > 0) ? 1 : finite(dtMs) && dtMs > 0 ? Math.min(1, dtMs / blendMs) : 0;
     return { ...target, lat: shown.lat + (target.lat - shown.lat) * k, lon: normLon(shown.lon + o.dLon * k) };
   }
 
   // Priorità di animazione (punto 63, allineato a sample.js senza classe e movimento: si animano solo navi in moto):
-  // selezionata +1000; tipo 60-89 +1; lunghezza log2(m / 10) da 0 a 5 (metri interi); -1 ogni 10 min di età, al massimo -3.
+  // selezionata +1000; tipo 60-89 +1; lunghezza log2(m / 10) da 0 a 5 (metri interi); età come agePenalty di sample.js:
+  // -1 ogni 10 min fino a -3 (30 min), poi -1 per ogni ora o frazione in più fino a -8 (ora non valida = -8).
   function animPriority(p, v, isSelected, now) {
     let s = isSelected ? 1000 : 0;
     if (v?.shipType >= 60 && v?.shipType <= 89) s += 1;
     const len = Math.round(v?.length);
     if (len > 0) s += Math.min(5, Math.max(0, Math.log2(len / 10)));
     const age = finite(p.ts) && finite(now) ? Math.max(0, now - p.ts) : Infinity;
-    return s - Math.min(3, Math.floor(age / (10 * MIN_MS)));
+    const oldMs = 30 * MIN_MS;
+    return s - (age <= oldMs ? Math.floor(age / (10 * MIN_MS)) : Math.min(8, 3 + Math.ceil((age - oldMs) / HOUR_MS)));
   }
   // MMSI da animare: items = [{ mmsi, score }], per score decrescente poi MMSI crescente, i primi n
   const pickAnimated = (items, n) => [...items].sort((a, b) => b.score - a.score || a.mmsi - b.mmsi).slice(0, Math.max(0, n)).map(x => x.mmsi);

@@ -84,6 +84,7 @@ test('project: 10 kn verso est con fix di 5 min fa → ferma a 122 s (627,6 m); 
   near(dist(fix, p5), 627.6, 1, 'distanza');
   near(p5.lat, 0, 1e-12, 'verso est la latitudine non cambia');
   assert.equal(p5.cog, 90); assert.equal(p5.sog, 10); assert.equal(p5.heading, 88);
+  assert.equal(p5.final, true, 'al limite: non avanza più');
   const p10 = AL.project(fix, T + 10 * MIN);
   assert.deepEqual(p10, p5, 'oltre il limite la stima non avanza');
   const p1 = AL.project(fix, T + 60000);
@@ -94,7 +95,7 @@ test('project: 10 kn verso est con fix di 5 min fa → ferma a 122 s (627,6 m); 
 test('project: niente stima a 0,1 kn, per navi ferme, ts non valido; fix nel futuro nessuno spostamento', () => {
   const T = 1_700_000_000_000;
   const slow = AL.project({ lat: 43.5, lon: 10.3, sog: 0.1, cog: 90, heading: 511, ts: T }, T + 5 * MIN);
-  assert.deepEqual(slow, { lat: 43.5, lon: 10.3, cog: 90, sog: 0.1, heading: 511, mode: 'fix', aheadMs: 0 });
+  assert.deepEqual(slow, { lat: 43.5, lon: 10.3, cog: 90, sog: 0.1, heading: 511, mode: 'fix', aheadMs: 0, final: true });
   assert.equal(AL.project({ lat: 43.5, lon: 10.3, sog: 2, cog: 90, navStat: 1, ts: T }, T + MIN).mode, 'fix', 'all\'ancora');
   assert.equal(AL.project({ lat: 43.5, lon: 10.3, sog: 10, cog: 90, ts: -Infinity }, T).mode, 'fix', 'ts mancante');
   assert.equal(AL.project({ lat: 43.5, lon: 10.3, sog: 10, cog: 90, ts: NaN }, T).mode, 'fix');
@@ -127,13 +128,14 @@ test('interpolate: a metà fra due fix il punto medio, velocità lineare, rotta 
   assert.equal(same.lat, 43.1); assert.equal(same.lon, 10.2);
 });
 
-test('interpolate: antimeridiano dal lato corto; rotta o prua non valida → quella di b; prua intera', () => {
+test('interpolate: antimeridiano dal lato corto; rotta non valida in b → quella valida di a, prua non valida → quella di b; prua intera', () => {
   const a = { lat: 0, lon: 179.9, sog: 10, cog: 90, heading: 511, ts: 0 };
   const b = { lat: 0, lon: -179.9, sog: 102.3, cog: 360, heading: 91, ts: 10 };
   const m = AL.interpolate(a, b, 5);
   assert.ok(Math.abs(Math.abs(m.lon) - 180) < 1e-9, `lon vicino a ±180: ${m.lon}`);
   assert.ok(m.lon >= -180 && m.lon < 180, String(m.lon));
-  assert.equal(m.cog, 360, 'cog di b'); assert.equal(m.heading, 91, 'prua di b'); assert.equal(m.sog, 102.3, 'sog di b');
+  // rotta non valida in b: quella valida di a (mai 360 o 511 come rotta); prua non valida in a: quella di b
+  assert.equal(m.cog, 90, 'cog valida di a'); assert.equal(m.heading, 91, 'prua di b'); assert.equal(m.sog, 102.3, 'sog di b');
   const h = AL.interpolate({ ...a, heading: 10 }, { ...b, heading: 13 }, 5);
   assert.equal(h.heading, 12, 'prua interpolata arrotondata al grado (resta valida per validHeading)');
 });
@@ -183,7 +185,7 @@ test('positionAt: prima del primo fix, fra due, oltre l\'ultimo (stima del punto
 test('playbackTime: ora − ritardo, mai indietro rispetto al passo precedente', () => {
   assert.equal(AL.playbackTime(100000), 85000);
   assert.equal(AL.playbackTime(100000, 10000), 90000);
-  assert.equal(AL.playbackTime(100000, 15000, 90000), 90000, 'orologio corretto all\'indietro: resta fermo');
+  assert.equal(AL.playbackTime(100000, 15000, 86500), 86500, 'orologio corretto all\'indietro di 1,5 s: resta fermo');
   let prev = -Infinity;
   for (const now of [100000, 101000, 99000, 105000, 104000]) {
     const t = AL.playbackTime(now, 15000, prev);
@@ -252,10 +254,24 @@ test('animPriority: selezionata prima di tutto, poi tipo 60-89, lunghezza, età 
   assert.equal(AL.animPriority(p, { length: 5 }, false, T), 0, 'mai negativa');
   assert.equal(AL.animPriority(p, { length: 40.4 }, false, T), 2, 'lunghezza arrotondata al metro');
   assert.equal(AL.animPriority({ ts: T - 25 * MIN }, {}, false, T), -2, '-1 ogni 10 min');
-  assert.equal(AL.animPriority({ ts: T - 300 * MIN }, {}, false, T), -3, 'al massimo -3');
-  assert.equal(AL.animPriority({ ts: -Infinity }, {}, false, T), -3, 'ora non valida = vecchia');
+  // penalità d'età come sample.js (punti 8 e 62): -1 ogni 10 min fino a -3 (30 min), poi -1 per ora o frazione fino a -8
+  assert.equal(AL.animPriority({ ts: T - 30 * MIN }, {}, false, T), -3, '30 min esatti');
+  assert.equal(AL.animPriority({ ts: T - 30 * MIN - 1 }, {}, false, T), -4, 'oltre 30 min: un\'ora o frazione in più');
+  assert.equal(AL.animPriority({ ts: T - 90 * MIN }, {}, false, T), -4, '1 h 30 min esatti');
+  assert.equal(AL.animPriority({ ts: T - 90 * MIN - 1 }, {}, false, T), -5);
+  assert.equal(AL.animPriority({ ts: T - 300 * MIN }, {}, false, T), -8, 'al massimo -8');
+  assert.equal(AL.animPriority({ ts: T - 6000 * MIN }, {}, false, T), -8);
+  assert.equal(AL.animPriority({ ts: -Infinity }, {}, false, T), -8, 'ora non valida = vecchia');
   assert.equal(AL.animPriority({ ts: T + MIN }, {}, false, T), 0, 'ora nel futuro: nessuna penalità');
   assert.equal(AL.animPriority(p, null, false, T), 0, 'senza dati statici');
+});
+
+test('animPriority: stessa penalità d\'età di agePenalty di sample.js', () => {
+  const { agePenalty } = require('../sample.js');
+  const T = 1_700_000_000_000;
+  for (const age of [0, 1, 9 * MIN, 10 * MIN, 29 * MIN, 30 * MIN, 30 * MIN + 1, 61 * MIN, 90 * MIN, 91 * MIN, 150 * MIN,
+    210 * MIN, 270 * MIN, 330 * MIN, 360 * MIN, 1e9])
+    assert.equal(AL.animPriority({ ts: T - age }, {}, false, T), 0 - agePenalty(age) + 0, `età ${age} ms`);
 });
 
 test('pickAnimated: punteggio decrescente, poi MMSI crescente, primi n', () => {
@@ -293,4 +309,124 @@ test('inViewBox e boundsBox: area della vista, anche attraverso l\'antimeridiano
   assert.equal(AL.inViewBox(anti, 0, 0), false);
   assert.deepEqual(AL.boundsBox(-400, -100, 400, 100), [-180, -90, 180, 90], 'più di un giro: mondo');
   assert.deepEqual(AL.boundsBox(-190, -95, -170, 95), [170, -90, -170, 90], 'lat limitata a ±90');
+});
+
+// --- Correzioni da revisione e QA (casi avversari) -------------------------------------------------------
+const T1 = 1_800_000_000_000;
+const fx = (lat, lon, ts, o = {}) => ({ lat, lon, sog: 10, cog: 90, heading: 90, navStat: 0, ts, ...o });
+const inRange = lon => lon >= -180 && lon < 180;
+
+test('antimeridiano: stima oltre 180 e interpolazione 179,9995 → -179,9995 dal lato corto (mai da 0)', () => {
+  const p = fx(0, 179.999, T1, { sog: 20 });
+  const e = AL.project(p, T1 + 120000);
+  assert.equal(e.mode, 'estimate');
+  assert.ok(inRange(e.lon) && e.lon < 0, `oltre l'antimeridiano: ${e.lon}`);
+  near(dist(p, e), 20 * AL.KN * 120, 1, 'distanza della stima');
+  const a = fx(0, 179.9995, T1), b = fx(0, -179.9995, T1 + 15000);
+  for (const f of [0.1, 0.25, 0.5, 0.75, 0.9]) {
+    const q = AL.interpolate(a, b, T1 + 15000 * f);
+    assert.ok(inRange(q.lon) && Math.abs(q.lon) > 179.99, `f ${f}: lon ${q.lon}`);
+  }
+  // target dietro (rotta 90, a ovest attraverso 180) entro 300 m: resta ferma
+  const back = AL.approach({ lat: 0, lon: -179.9995 }, { ...fx(0, 179.9995, T1), mode: 'interp' }, { dtMs: 500 });
+  assert.deepEqual([back.lat, back.lon], [0, -179.9995]);
+});
+
+test('polo: rhumbDestination, project e approach vicino e sul polo restano finiti (mai NaN)', () => {
+  for (const [lat, brg] of [[89.999, 0], [89.99, 45], [90, 90], [90, 0], [-90, 180], [-90, 90], [-89.999, 200], [89.9999, 359]]) {
+    const d = AL.rhumbDestination(lat, 10, brg, 2000);
+    assert.ok(Number.isFinite(d.lat) && Number.isFinite(d.lon), `${lat}/${brg}: ${JSON.stringify(d)}`);
+    assert.ok(Math.abs(d.lat) <= 90 && inRange(d.lon), `${lat}/${brg}: ${JSON.stringify(d)}`);
+  }
+  for (const lat of [-90, 90, 89.9]) {
+    const e = AL.project(fx(lat, 0, T1, { cog: 30 }), T1 + 60000);
+    assert.ok(Number.isFinite(e.lat) && Number.isFinite(e.lon) && Math.abs(e.lat) <= 90, `${lat}: ${JSON.stringify(e)}`);
+  }
+  assert.ok(Number.isFinite(AL.metersPerPixel(89.9999, 14)) && AL.metersPerPixel(89.9999, 14) > 0);
+  const r = AL.approach({ lat: 89.99, lon: 0 }, { lat: 89.99, lon: 180, cog: 0 }, { dtMs: 500 });
+  assert.ok(Number.isFinite(r.lat) && Number.isFinite(r.lon));
+});
+
+test('COG 360, 511, assente, null, negativa, testo, NaN: nessuna stima; interpolate non restituisce mai una rotta non valida', () => {
+  for (const cog of [360, 511, undefined, null, -1, '90', NaN, Infinity]) {
+    const p = fx(44, 11, T1, { cog });
+    assert.equal(AL.canEstimate(p), false, `cog ${cog}`);
+    const e = AL.project(p, T1 + 60000);
+    assert.equal(e.mode, 'fix', `cog ${cog}`);
+    assert.deepEqual([e.lat, e.lon], [44, 11]);
+  }
+  assert.equal(AL.canEstimate(fx(44, 11, T1, { cog: 359.9 })), true);
+  assert.equal(AL.canEstimate(fx(44, 11, T1, { cog: 0 })), true);
+  assert.equal(AL.interpolate(fx(44, 11, T1, { cog: 360 }), fx(44, 11.01, T1 + 15000, { cog: 80 }), T1 + 7500).cog, 80, 'quella valida di b');
+  assert.equal(AL.interpolate(fx(44, 11, T1), fx(44, 11.01, T1 + 15000, { cog: 511 }), T1 + 7500).cog, 90, 'b 511: quella valida di a');
+  assert.equal(AL.interpolate(fx(44, 11, T1, { cog: 360 }), fx(44, 11.01, T1 + 15000, { cog: 511 }), T1 + 7500).cog, null, 'nessuna valida: null');
+});
+
+test('SOG 102,3 (non disponibile), negativa, sopra 102,3, testo: nessuna stima; 102,2 → 122 s', () => {
+  for (const sog of [102.3, 103, -1, -0.1, '10', null, undefined, NaN, 0.5, 0]) {
+    assert.equal(AL.estimateLimitMs(sog), 0, `sog ${sog}`);
+    assert.equal(AL.project(fx(44, 11, T1, { sog }), T1 + 60000).mode, 'fix', `sog ${sog}`);
+  }
+  assert.equal(AL.estimateLimitMs(102.2), 122000);
+  assert.equal(AL.estimateLimitMs(0.51), 242000);
+  assert.equal(AL.interpolate(fx(44, 11, T1, { sog: 102.3 }), fx(44, 11.01, T1 + 15000, { sog: 12 }), T1 + 7500).sog, 12);
+});
+
+test('pushFix: stesso ts con coordinate diverse (due fonti) sostituisce l\'ultimo; più vecchio ignorato; senza ora ricomincia', () => {
+  let t = AL.pushFix([], fx(44, 11, T1));
+  t = AL.pushFix(t, fx(44, 11.01, T1 + 15000));
+  const snap = JSON.stringify(t);
+  const same = AL.pushFix(t, fx(44, 11.01, T1 + 15000, { sog: 11 }));
+  assert.equal(JSON.stringify(same), snap, 'stesso ts e stesse coordinate: ignorato');
+  const other = AL.pushFix(t, fx(44, 11.02, T1 + 15000));
+  assert.deepEqual(other.map(f => [f.lon, f.ts]), [[11, T1], [11.02, T1 + 15000]], 'sostituito l\'ultimo, stessa lunghezza');
+  assert.equal(JSON.stringify(AL.pushFix(other, fx(44, 10.9, T1 + 5000))), JSON.stringify(other), 'più vecchio: ignorato');
+  assert.equal(JSON.stringify(t), snap, 'originale invariato');
+  const t4 = AL.pushFix(t, fx(44, 11.05, NaN));
+  assert.equal(t4.length, 1);
+  const p = AL.positionAt(t4, T1 + 60000);
+  assert.deepEqual([p.lat, p.lon, p.mode], [44, 11.05, 'fix']);
+  assert.equal(AL.pushFix(t4, fx(44, 11.06, T1 + 30000)).length, 1);
+});
+
+test('nave che si ferma: oltre il fix fermo resta lì (final), nessuna stima; all\'ancora con 2 kn ferma', () => {
+  const tr = [fx(44, 11, T1), fx(44, 11.001, T1 + 15000), fx(44, 11.0015, T1 + 30000, { sog: 0, navStat: 5 })];
+  const p = AL.positionAt(tr, T1 + 30000 + 200000);
+  assert.deepEqual([p.lat, p.lon, p.mode, p.final], [44, 11.0015, 'fix', true]);
+  assert.equal(AL.positionAt([fx(44, 11, T1), fx(44, 11.001, T1 + 15000, { sog: 0.4 })], T1 + 100000).final, true);
+  assert.equal(AL.positionAt([fx(44, 11, T1), fx(44, 11.001, T1 + 15000, { sog: 2, navStat: 1 })], T1 + 100000).mode, 'fix');
+  // stima al suo limite: non avanza più (final); prima del limite e fra due fix no
+  assert.equal(AL.positionAt([fx(44, 11, T1)], T1 + 200000).final, true, 'stima ferma a 122 s');
+  assert.equal(AL.positionAt([fx(44, 11, T1)], T1 + 60000).final, undefined);
+  assert.equal(AL.positionAt(tr, T1 + 20000).final, undefined, 'fra due fix');
+  assert.equal(AL.positionAt(tr, T1 - 1000).final, undefined, 'prima del primo fix: la nave ripartirà');
+});
+
+test('approach verso un bersaglio fermo (final) dietro la stima entro 300 m: torna indietro senza salti, mai bloccata', () => {
+  const shown = { lat: 44, lon: 11.0025 };
+  const stop = AL.positionAt([fx(44, 11, T1, { sog: 0, navStat: 5 })], T1 + 60000);
+  const d0 = dist(shown, stop);
+  assert.ok(d0 > 150 && d0 < 300, `distanza ${d0}`);
+  // non final (la nave ripartirà): ferma
+  const held = AL.approach(shown, { ...stop, final: undefined }, { dtMs: 100 });
+  assert.deepEqual([held.lat, held.lon], [shown.lat, shown.lon]);
+  let s = shown, maxStep = 0;
+  for (let i = 0; i < 100; i++) {
+    const n = AL.approach(s, stop, { dtMs: 100 });
+    maxStep = Math.max(maxStep, dist(s, n));
+    s = n;
+  }
+  assert.ok(dist(s, stop) < 0.1, `dopo 10 s di passi è a ${dist(s, stop).toFixed(2)} m dal punto in cui si è fermata`);
+  assert.ok(maxStep <= d0 * 0.1 + 1e-6, `passo massimo ${maxStep.toFixed(1)} m (un decimo per 100 ms)`);
+});
+
+test('playbackTime: l\'orologio che salta avanti e poi torna (o è corretto indietro) fa ripartire l\'ora oltre 2 s di anticipo', () => {
+  let T = AL.playbackTime(T1);
+  T = AL.playbackTime(T1 + 600000, AL.ANIM_DELAY_MS, T);   // orologio della pagina avanti di 10 min per un attimo
+  assert.equal(T, T1 + 600000 - AL.ANIM_DELAY_MS);
+  T = AL.playbackTime(T1 + 1000, AL.ANIM_DELAY_MS, T);     // corretto: riparte dall'ora vera
+  assert.equal(T, T1 + 1000 - AL.ANIM_DELAY_MS);
+  assert.equal(AL.playbackTime(100000, 15000, 87000), 87000, '2 s esatti avanti: resta');
+  assert.equal(AL.playbackTime(100000, 15000, 87001), 85000, 'più di 2 s: riparte');
+  assert.equal(AL.playbackTime(100000, 15000, 90000, 10000), 90000, 'maxAheadMs diverso');
 });
