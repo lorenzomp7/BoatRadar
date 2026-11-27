@@ -250,7 +250,8 @@ sheet_desktop() {
   read -r bx by _bh <<<"$(js "(() => { const r = document.getElementById('listbtn').getBoundingClientRect();
     return Math.round(r.left + r.width / 2) + ' ' + Math.round(r.top + r.height / 2) + ' 0'; })()" | tr -d '"')"
   click_at "$bx" "$by"
-  "${AB[@]}" wait --fn "document.body.classList.contains('list-open') && document.querySelectorAll('#list .row').length > 0" >/dev/null \
+  # la riga della nave, non solo una riga qualsiasi: prima dei dati c'è la riga «Nessuna nave in quest'area»
+  "${AB[@]}" wait --fn "document.body.classList.contains('list-open') && document.querySelector('#list .row[data-mmsi=\"247123450\"]')" >/dev/null \
     || fail "$name: il clic su «Elenco» non apre l'elenco"
   local cov
   cov=$(js "(() => { const s = document.getElementById('sheet').getBoundingClientRect(), h = document.querySelector('header').getBoundingClientRect(), out = [];
