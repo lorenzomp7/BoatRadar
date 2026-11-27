@@ -128,6 +128,8 @@
   #panel summary { cursor:pointer; padding:8px 0; font-size:13px; }
   #panel summary:hover { color:var(--accent); }
   #panel td.wait { color:var(--muted); font-size:12px; font-style:italic; width:auto; }
+  /* punto 23: titolo del gruppo «Viaggio» nella tabella della scheda */
+  #panel tr.group th { text-align:left; font-weight:600; font-size:12.5px; padding:14px 0 5px; border-bottom:1px solid var(--line); }
   #panel .vfmore { border-color:#2c4a63; }
   #panel tr.owned td { color:var(--accent); font-weight:600; }
   /* punto 10: popup di scelta fra navi sovrapposte, scuro come la scheda; righe e × da almeno 44 px */
@@ -351,8 +353,10 @@ let wakeView = false;    // vista a Render in avvio in corso (fino a WAKE_TIMEOU
 const clock = createClock();
 
 // Lotto B (punti 27, 44, 46, 23): scheda nave. Bandiera e tipo di MMSI (le stazioni costiere, gli AtoN e i dispositivi di
-// soccorso non battono bandiera), stato dichiarato contro velocità (punto 44) e carico pericoloso (punto 46), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
-const { mmsiKind, flagOf, mmsiWords, statusWords, hazardCategory } = AisLogic;
+// soccorso non battono bandiera), stato dichiarato contro velocità (punto 44), carico pericoloso (punto 46) e gruppo
+// «Viaggio» con l'ETA completa dell'anno (punto 23), da public/ais-logic.js (test in test/scheda-logica.test.js e test/pagina-scheda.test.js).
+const { mmsiKind, flagOf, mmsiWords, statusWords, hazardCategory, etaWords, voyageTitle } = AisLogic;
+const ND = 'n.d.';   // valore non disponibile in scheda (punto 23: mai «—»)
 // true se l'MMSI è di una nave (o di una sua imbarcazione ausiliaria): solo allora la scheda ha la riga «Bandiera»
 const hasFlag = mmsi => ['ship', 'auxiliary'].includes(mmsiKind(mmsi).kind);
 
@@ -1304,14 +1308,17 @@ function facts(mmsi) {
   const v = meta.get(mmsi) || {};
   const p = propsOf(mmsi);
   const imo = v.imo && v.imo > 0 ? v.imo : null;
-  const two = n => String(n).padStart(2, '0');
-  const MONTHS = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
-  const eta = v.eta ? `${two(v.eta.day)} ${MONTHS[v.eta.month - 1]}` + (v.eta.hour != null ? `, ${two(v.eta.hour)}:${two(v.eta.minute ?? 0)} UTC` : '') : null;
   const sog = p.sog != null && p.sog < 102.3 ? p.sog.toFixed(1) + ' kn' : null;
   const cog = p.cog != null && p.cog < 360 ? p.cog.toFixed(1) + '°' : null;
   const hdg = validHeading(p.heading);
-  const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? '—' : val)}</td></tr>`;
+  // punto 23: «n.d.» (non disponibile) per ogni valore mancante, come chiede la skill ais-api-change
+  const row = (k, val) => `<tr><td>${k}</td><td>${esc(val == null || val === '' ? ND : val)}</td></tr>`;
   const waiting = !v.staticTs && !imo && !v.callSign && v.shipType == null;
+  // gruppo «Viaggio» (punto 23): dati del messaggio statico dichiarati dall'equipaggio, con la loro età; ETA con l'anno
+  const now = clock.now(), eta = etaWords(v.eta, now), draught = v.draught ? v.draught.toFixed(1) + ' m' : null;
+  const voyage = v.destination || eta || draught
+    ? row('Prossimo porto', v.destination) + row('ETA', eta && `${eta.date} (${eta.rel})`) + row('Pescaggio', draught)
+    : v.staticTs ? '<tr><td colspan="2" class="wait">Dati di viaggio non trasmessi dalla nave</td></tr>' : '';
   return `
       ${savedOwner(mmsi) ? `<tr class="owned"><td>Proprietario</td><td>${esc(savedOwner(mmsi))}</td></tr>` : ''}
       ${waiting ? '<tr><td colspan="2" class="wait">Tipo, IMO, dimensioni e porto di arrivo non sono ancora arrivati: le navi li trasmettono ogni 6 minuti, la scheda si completa da sola.</td></tr>' : ''}
@@ -1320,17 +1327,15 @@ function facts(mmsi) {
       ${row('IMO', imo)}
       ${row('MMSI', mmsi)}
       ${row('Nominativo', v.callSign)}
-      ${row('Prossimo porto', v.destination)}
-      ${row('ETA', eta)}
-      ${row('Velocità / Rotta', sog || cog ? `${sog || '—'} / ${cog || '—'}` : null)}
+      ${row('Velocità / Rotta', sog || cog ? `${sog || ND} / ${cog || ND}` : null)}
       ${row('Prua', hdg != null ? hdg + '°' : null)}
       ${row('Stato', statusWords(p.navStat, p.sog))}
       ${hazardCategory(v.shipType) ? row('Carico', `pericoloso o inquinante, categoria ${hazardCategory(v.shipType)} (dichiarato)`) : ''}
-      ${row('Dimensioni', v.length ? `${v.length} × ${v.width || '—'} m` : null)}
-      ${row('Pescaggio', v.draught ? v.draught.toFixed(1) + ' m' : null)}
+      ${row('Dimensioni', v.length ? `${v.length} × ${v.width || ND} m` : null)}
       <tr><td>Posizione</td><td id="pos-mode">${esc(positionWords(mmsi))}</td></tr>
-      <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : '—'}</td></tr>
-      ${row('Fonte', SOURCE_LABEL[p.source])}`;
+      <tr><td>Ultimo segnale</td><td>${ageText(p) ? ageDot(p) + esc(ageText(p)) : ND}</td></tr>
+      ${row('Fonte', SOURCE_LABEL[p.source])}
+      ${voyage ? `<tr class="group"><th colspan="2" scope="colgroup">${esc(voyageTitle(v.staticTs, now))}</th></tr>${voyage}` : ''}`;
 }
 
 function render(mmsi) {
@@ -1343,7 +1348,7 @@ function render(mmsi) {
   }
   const v = meta.get(mmsi) || {};
   // sottotitolo: bandiera per le navi, tipo di MMSI per le stazioni («Stazione costiera · Italia»)
-  const flag = hasFlag(mmsi) ? 'bandiera ' + (flagOf(mmsi) || '—') : mmsiWords(mmsi);
+  const flag = hasFlag(mmsi) ? 'bandiera ' + (flagOf(mmsi) || ND) : mmsiWords(mmsi);
   // punto 46: carico pericoloso anche in testo, non solo con un colore
   const hazard = hazardCategory(v.shipType) ? ` · ⚠ Carico pericoloso cat. ${hazardCategory(v.shipType)}` : '';
   const imo = v.imo && v.imo > 0 ? v.imo : null;

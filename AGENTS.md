@@ -124,6 +124,12 @@ Lavora su `main_claude` salvo indicazione diversa.
   `hazard=1` di `/api/locations` (`parseFilter`/`passesFilter`, in coda a `filterKey`: le chiavi di prima non cambiano;
   altri valori = nessun filtro) e casella `#f-hazard` «Solo carichi pericolosi o inquinanti» nel pannello «Filtri».
   `tools/carico.js` ha i tipi 71 e 84 per misurare `--filtro "hazard=1"`.
+  Punto 23: `etaTime(eta, now)` (l'anno fra y−1, y, y+1 che mette la data esistente in [now − 30 giorni, now + 335
+  giorni), `etaWords` («2 gen 2027, 08:00 UTC (tra 5 h 20 min)», «tra N giorni», «già passata»; senza ora solo la data) e
+  `voyageTitle`; in scheda «n.d.» per ogni valore mancante (mai «—», anche nel sottotitolo) e, in fondo, il gruppo
+  «Viaggio (dichiarato dalla nave, 2 h fa)» con Prossimo porto, ETA e Pescaggio, o «Dati di viaggio non trasmessi dalla
+  nave» se sono arrivati i dati statici ma nessuno dei tre. Nel browser: passo 2 bis di `tools/smoke-browser.sh`
+  (scheda di LAGUNA PRIMA, screenshot `diagnosi/smoke/<desktop|telefono>-scheda.png`).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`

@@ -5,6 +5,9 @@
 #   1. compaiano le navi;
 #   2. un clic del mouse su una nave apra la scheda con il suo MMSI, e un clic vero sulla × (almeno 44×44 px)
 #      o Esc la chiudano, lasciando il focus su un elemento visibile;
+#   2 bis. (solo con il server locale, lotto B, punti 27, 44, 46, 23) la scheda di LAGUNA PRIMA (247123450) abbia il gruppo
+#      «Viaggio (dichiarato dalla nave, …)» con l'ETA completa dell'anno, «Bandiera» Italia e nessun «—» (screenshot
+#      $name-scheda.png con il gruppo in vista);
 #   3. (punto 10) un clic vero sulle due navi sovrapposte della fixture (GEMELLA, 247555001 e 247555002, a 10 m a
 #      Genova) apra il popup «2 navi qui» con due righe e la × da almeno 44 px e il focus sulla prima, Esc lo chiuda, e un clic
 #      vero sulla seconda riga apra la scheda di 247555002; la nave isolata del punto 2 apre la scheda senza popup; poi,
@@ -322,6 +325,31 @@ check() {
   [ "$(js "!document.querySelector('.leaflet-popup.pick')")" = true ] || fail "$name: il clic sulla nave $mmsi apre il popup di scelta invece della scheda"
   ok "$name: il clic sulla nave $mmsi apre la scheda ($(js "document.querySelector('#content h2')?.textContent || ''"))"
   "${AB[@]}" screenshot "$OUT/$name.png" >/dev/null
+
+  # scheda nave (lotto B, punti 27, 44, 46, 23): LAGUNA PRIMA della fixture, con i dati statici arrivati da /api/vessel,
+  # ha il gruppo «Viaggio (dichiarato dalla nave, …)», «Bandiera» Italia e nessun «—» (i mancanti sono «n.d.»). Solo con
+  # il server locale (dati noti). Screenshot della scheda con il gruppo «Viaggio» in vista.
+  if [ -z "${SMOKE_URL:-}" ] && [ "$mmsi" = 247123450 ]; then
+    "${AB[@]}" wait --fn "document.getElementById('content').textContent.includes('Viaggio (dichiarato dalla nave')" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-scheda-errore.png" >/dev/null || true; fail "$name: la scheda di LAGUNA PRIMA non ha il gruppo «Viaggio»"; }
+    local card
+    card=$(js "(() => { const c = document.getElementById('content'), t = c.textContent;
+      const flag = [...c.querySelectorAll('#facts tr')].find(r => r.cells[0]?.textContent === 'Bandiera')?.cells[1]?.textContent;
+      const group = c.querySelector('#facts tr.group th');
+      if (t.includes('—')) return 'trovato «—» nella scheda';
+      if (flag !== 'Italia') return 'Bandiera: ' + flag;
+      if (!/^Viaggio \\(dichiarato dalla nave, /.test(group?.textContent || '')) return 'titolo: ' + group?.textContent;
+      if (!/\\d{4}/.test([...c.querySelectorAll('#facts tr')].find(r => r.cells[0]?.textContent === 'ETA')?.cells[1]?.textContent || '')) return 'ETA senza anno';
+      group.scrollIntoView({ block: 'center' });
+      return 'ok ' + group.textContent; })()" | tr -d '"')
+    case "$card" in ok*) ;; *) "${AB[@]}" screenshot "$OUT/$name-scheda-errore.png" >/dev/null || true; fail "$name: scheda: $card (screenshot in $OUT/)" ;; esac
+    "${AB[@]}" wait 200 >/dev/null
+    "${AB[@]}" screenshot "$OUT/$name-scheda.png" >/dev/null
+    # di nuovo in cima: la × (controllata qui sotto) scorre con la scheda
+    js "(() => { for (let e = document.getElementById('facts'); e; e = e.parentElement) e.scrollTop = 0; scrollTo(0, 0); return true; })()" >/dev/null
+    "${AB[@]}" wait 200 >/dev/null
+    ok "$name: scheda di LAGUNA PRIMA con «${card#ok }», bandiera Italia, ETA con l'anno e nessun «—»"
+  fi
 
   # × della scheda: almeno 44×44 px, raggiungibile con un clic vero anche con una riga di stato lunga
   # (l'header non deve coprirla), e dopo la chiusura il focus resta su un elemento visibile

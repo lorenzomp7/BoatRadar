@@ -564,6 +564,56 @@
     return [2, 4, 6, 7, 8, 9].includes(tens) && unit >= 1 && unit <= 4 ? HAZARD[unit - 1] : null;
   }
 
+  // Punto 23: ETA con l'anno. L'AIS manda mese, giorno, ora e minuto UTC senza anno (decodeEta, etaOf di server.js):
+  // fra gli anni y−1, y e y+1 (y = anno UTC di now) vale la data esistente (niente 29/2 negli anni non bisestili né 31/4)
+  // nella finestra [now − 30 giorni, now + 335 giorni), lunga 365 giorni, quindi al più una. Ora mancante = inizio del
+  // giorno, minuto mancante = 0. → ms UTC, o null.
+  const DAY_MS = 24 * HOUR_MS;
+  function etaTime(eta, now) {
+    if (!eta || !finite(now)) return null;
+    const { month, day } = eta;
+    if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+    const hour = Number.isInteger(eta.hour) && eta.hour >= 0 && eta.hour <= 23 ? eta.hour : 0;
+    const minute = Number.isInteger(eta.hour) && Number.isInteger(eta.minute) && eta.minute >= 0 && eta.minute <= 59 ? eta.minute : 0;
+    const y = new Date(now).getUTCFullYear();
+    for (const year of [y - 1, y, y + 1]) {
+      const t = Date.UTC(year, month - 1, day, hour, minute), d = new Date(t);
+      if (d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) continue;
+      if (t >= now - 30 * DAY_MS && t < now + 335 * DAY_MS) return t;
+    }
+    return null;
+  }
+  const MONTHS = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+  const two = n => String(n).padStart(2, '0');
+  // Riga «ETA»: { date: '2 gen 2027, 08:00 UTC', rel } con rel «tra 5 h 20 min» sotto le 48 h, poi «tra N giorni», o
+  // «già passata»; senza ora solo la data e i giorni di calendario («oggi», «domani», «tra N giorni»). null se etaTime è null.
+  function etaWords(eta, now) {
+    const t = etaTime(eta, now);
+    if (t == null) return null;
+    const d = new Date(t), hasHour = Number.isInteger(eta.hour) && eta.hour >= 0 && eta.hour <= 23;
+    const date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+      + (hasHour ? `, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC` : '');
+    let rel;
+    if (!hasHour) {
+      const today = new Date(now), days = Math.round((t - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) / DAY_MS);
+      rel = days < 0 ? 'già passata' : days === 0 ? 'oggi' : days === 1 ? 'domani' : `tra ${days} giorni`;
+    } else {
+      const diff = t - now;
+      if (diff < 0) rel = 'già passata';
+      else if (diff < MIN_MS) rel = 'tra meno di 1 min';
+      else if (diff < 48 * HOUR_MS) {
+        const min = Math.floor(diff / MIN_MS), h = Math.floor(min / 60), m = min % 60;
+        rel = 'tra ' + [h && `${h} h`, m && `${m} min`].filter(Boolean).join(' ');
+      } else rel = `tra ${Math.floor(diff / DAY_MS)} giorni`;
+    }
+    return { date, rel };
+  }
+  // Titolo del gruppo «Viaggio» della scheda: dati dichiarati dalla nave (messaggio statico), con la loro età se nota
+  function voyageTitle(staticTs, now) {
+    const age = formatAge(ageMs(staticTs, now));
+    return `Viaggio (dichiarato dalla nave${age ? ', ' + age : ''})`;
+  }
+
   // Punto 86: server della pagina da config.js (cfg = window). BOATRADAR_APIS = [{url, name, sleeps}] o stringhe, nell'ordine
   // di preferenza (prima la VM, poi Render che si addormenta); se non dà nessun indirizzo valido BOATRADAR_API, poi '/api'
   // (server.js della pagina stessa). Indirizzi senza / finale, doppioni e voci non valide (né http(s):// né /percorso,
@@ -912,6 +962,7 @@
     KN, R_EARTH, ANIM_DELAY_MS, estimateLimitMs, canEstimate, rhumbDestination, project, lerpAngle, interpolate, pushFix, positionAt, playbackTime, metersPerPixel, approach, animPriority, pickAnimated, frameInterval, inViewBox, boundsBox,
     NAV_GROUPS, navGroup, parseFilter, filterKey, passesFilter, filterCount,
     MID_NAMES, MMSI_KIND_LABEL, mmsiKind, flagOf, mmsiWords, NAV_STATUS_LABEL, effectiveStatus, statusWords, hazardCategory,
+    etaTime, etaWords, voyageTitle,
     apiList, createRecheck, createFailover, networkDown,
     pickRadius, canvasTolerance, nearbyMarkers, pickTouch, PICK_MAX_ROWS, pickLimit, PICK_MIN_HEIGHT, pickMaxHeight,
     norm, normQuery, scoreFields, searchScore, compareSearch, insertTop, twinsText, homonymCounts, resultLine,

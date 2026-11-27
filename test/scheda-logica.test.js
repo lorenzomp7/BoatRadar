@@ -110,3 +110,48 @@ test('hazardCategory: categorie X, Y, Z, OS dalle unità 1-4 delle decine 2, 4, 
   for (const t of [70, 80, 31, 34, 51, 95, 99, 0, 1, 14, 100, 71.5, -71, '71', null, undefined, NaN])
     assert.equal(AL.hazardCategory(t), null, String(t));
 });
+
+// --- Punto 23: ETA con l'anno e titolo del viaggio --------------------------------------------------------------------
+const U = (y, mo, d, h = 0, mi = 0) => Date.UTC(y, mo - 1, d, h, mi);
+const E = (month, day, hour = null, minute = null) => ({ month, day, hour, minute });
+test('etaTime: l\'anno è quello che mette l\'ETA fra 30 giorni fa e 335 giorni avanti', () => {
+  assert.equal(AL.etaTime(E(1, 2, 8, 0), U(2026, 12, 30, 12)), U(2027, 1, 2, 8), '2 gennaio visto il 30 dicembre: anno dopo');
+  assert.equal(AL.etaTime(E(12, 30, 8, 0), U(2027, 1, 2, 12)), U(2026, 12, 30, 8), '30 dicembre visto il 2 gennaio: anno prima');
+  assert.equal(AL.etaTime(E(10, 17, 12, 0), U(2026, 11, 27, 10)), U(2027, 10, 17, 12), '41 giorni passati: anno dopo');
+  assert.equal(AL.etaTime(E(10, 29, 12, 0), U(2026, 11, 27, 10)), U(2026, 10, 29, 12), '29 giorni passati: quest\'anno');
+  assert.equal(AL.etaTime(E(12, 1, 12, 0), U(2026, 11, 27, 10)), U(2026, 12, 1, 12));
+  assert.equal(AL.etaTime(E(2, 29, 0, 0), U(2026, 11, 27, 10)), null, '29 febbraio senza un anno bisestile valido');
+  assert.equal(AL.etaTime(E(2, 29, 0, 0), U(2027, 12, 1)), U(2028, 2, 29), '29 febbraio 2028');
+  assert.equal(AL.etaTime(E(4, 31, 0, 0), U(2026, 11, 27)), null, '31 aprile non esiste');
+  assert.equal(AL.etaTime(E(12, 1), U(2026, 11, 27, 10)), U(2026, 12, 1), 'ora mancante: inizio del giorno');
+  assert.equal(AL.etaTime(E(12, 1, 6), U(2026, 11, 27, 10)), U(2026, 12, 1, 6), 'minuto mancante: 0');
+  for (const e of [E(0, 1, 0, 0), E(13, 1, 0, 0), E(5, 0), E(5, 32), null, undefined, {}, E(1.5, 2)])
+    assert.equal(AL.etaTime(e, U(2026, 11, 27)), null, JSON.stringify(e));
+  assert.equal(AL.etaTime(E(12, 1), NaN), null, 'ora attuale non valida');
+});
+
+test('etaWords: data con anno e ora UTC, quanto manca (ore e minuti sotto le 48 h, poi giorni) o «già passata»', () => {
+  assert.deepEqual(AL.etaWords(E(1, 2, 8, 0), U(2027, 1, 2, 2, 40)), { date: '2 gen 2027, 08:00 UTC', rel: 'tra 5 h 20 min' });
+  assert.deepEqual(AL.etaWords(E(12, 30, 8, 0), U(2027, 1, 2, 12)), { date: '30 dic 2026, 08:00 UTC', rel: 'già passata' });
+  assert.deepEqual(AL.etaWords(E(12, 1, 12, 0), U(2026, 11, 27, 10)), { date: '1 dic 2026, 12:00 UTC', rel: 'tra 4 giorni' });
+  assert.equal(AL.etaWords(E(11, 29, 9, 59), U(2026, 11, 27, 10)).rel, 'tra 47 h 59 min');
+  assert.equal(AL.etaWords(E(11, 29, 10, 0), U(2026, 11, 27, 10)).rel, 'tra 2 giorni');
+  assert.equal(AL.etaWords(E(11, 27, 10, 30), U(2026, 11, 27, 10)).rel, 'tra 30 min');
+  assert.equal(AL.etaWords(E(11, 27, 13, 0), U(2026, 11, 27, 10)).rel, 'tra 3 h');
+  assert.equal(AL.etaWords(E(11, 27, 10, 0), U(2026, 11, 27, 10, 0)).rel, 'tra meno di 1 min');
+  // senza ora: solo la data, e i giorni di calendario
+  assert.deepEqual(AL.etaWords(E(12, 1), U(2026, 11, 27, 10)), { date: '1 dic 2026', rel: 'tra 4 giorni' });
+  assert.equal(AL.etaWords(E(11, 27), U(2026, 11, 27, 23)).rel, 'oggi');
+  assert.equal(AL.etaWords(E(11, 28), U(2026, 11, 27, 23)).rel, 'domani');
+  assert.equal(AL.etaWords(E(11, 26), U(2026, 11, 27, 1)).rel, 'già passata');
+  assert.equal(AL.etaWords(E(2, 29, 0, 0), U(2026, 11, 27)), null);
+});
+
+test('voyageTitle: «Viaggio (dichiarato dalla nave, 2 h fa)», senza età se l\'ora non è valida', () => {
+  const now = U(2026, 11, 27, 10);
+  assert.equal(AL.voyageTitle(now - 2 * 3600000, now), 'Viaggio (dichiarato dalla nave, 2 h fa)');
+  assert.equal(AL.voyageTitle(now - 5 * 60000, now), 'Viaggio (dichiarato dalla nave, 5 min fa)');
+  assert.equal(AL.voyageTitle(now - 1000, now), 'Viaggio (dichiarato dalla nave, adesso)');
+  assert.equal(AL.voyageTitle(undefined, now), 'Viaggio (dichiarato dalla nave)');
+  assert.equal(AL.voyageTitle('x', now), 'Viaggio (dichiarato dalla nave)');
+});

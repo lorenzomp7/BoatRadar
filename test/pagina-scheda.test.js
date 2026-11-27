@@ -111,3 +111,46 @@ test('pagina: filtro hazard=1 salvato → casella spuntata e pannello «Filtri»
   await until(() => views(page).length > 0, 'vista');
   assert.match(views(page).at(-1).url, /&hazard=1$/);
 });
+
+// --- Punto 23 --------------------------------------------------------------------------------------------------------
+test('pagina: «n.d.» per i valori mancanti, mai «—», anche nel sottotitolo', async () => {
+  const page = await ready();
+  // stazione senza dati statici: nessuna velocità, rotta, prua, stato, dimensioni
+  const html = card(page, COAST, { name: 'GENOVA RADIO' });
+  assert.doesNotMatch(html, /—/);
+  assert.match(html, /<td>Velocità \/ Rotta<\/td><td>n\.d\.<\/td>/);
+  assert.doesNotMatch(page.get(`facts(${COAST})`), /—/, 'neanche nell\'aggiornamento periodico');
+  page.get(`markers.get(${SHIP}).props = { mmsi: ${SHIP}, sog: 8, cog: 360, timestampExternal: ${T0 - 1000} }`);
+  const ship = card(page, SHIP, { name: 'LAGUNA PRIMA', shipType: 70, length: 150, staticTs: T0 - 600000 });
+  assert.doesNotMatch(ship, /—/);
+  assert.equal(cell(ship, 'Velocità / Rotta'), '8.0 kn / n.d.');
+  assert.equal(cell(ship, 'Dimensioni'), '150 × n.d. m');
+  // nave con MID 300 (valido, non in tabella) e senza posizione: bandiera e ultimo segnale n.d.
+  const unknown = card(page, 300123456, { name: 'SENZA BANDIERA', shipType: 70, staticTs: T0 - 600000 });
+  assert.equal(cell(unknown, 'Bandiera'), 'n.d.');
+  assert.match(unknown, /<div class="sub" id="sub">Nave cargo · bandiera n\.d\.<\/div>/);
+  assert.equal(cell(unknown, 'Ultimo segnale'), 'n.d.', 'nessuna posizione');
+});
+
+test('pagina: gruppo «Viaggio (dichiarato dalla nave, 1 h fa)» con prossimo porto, ETA con anno e pescaggio', async () => {
+  const page = await ready();
+  const html = card(page, SHIP, { name: 'LAGUNA PRIMA', shipType: 70, destination: 'VENEZIA', draught: 7.4,
+    eta: { month: 11, day: 27, hour: 15, minute: 20 }, staticTs: T0 - 3600000 });
+  assert.match(html, /<th colspan="2" scope="colgroup">Viaggio \(dichiarato dalla nave, 1 h fa\)<\/th>/);
+  assert.equal(cell(html, 'Prossimo porto'), 'VENEZIA');
+  assert.equal(cell(html, 'ETA'), '27 nov 2026, 15:20 UTC (tra 5 h 20 min)');
+  assert.equal(cell(html, 'Pescaggio'), '7.4 m');
+  assert.doesNotMatch(html, /non trasmessi/);
+});
+
+test('pagina: senza destinazione, ETA né pescaggio → «Dati di viaggio non trasmessi» solo con i dati statici arrivati', async () => {
+  const page = await ready();
+  let html = card(page, SHIP, { name: 'LAGUNA PRIMA', shipType: 70, staticTs: T0 - 3600000 });
+  assert.match(html, /Viaggio \(dichiarato dalla nave, 1 h fa\)/);
+  assert.match(html, /<td colspan="2" class="wait">Dati di viaggio non trasmessi dalla nave<\/td>/);
+  assert.equal(cell(html, 'Prossimo porto'), undefined);
+  html = card(page, LIBERIA, { name: 'MONROVIA' });
+  assert.doesNotMatch(html, /non trasmessi/, 'dati statici non ancora arrivati');
+  assert.doesNotMatch(html, /Viaggio \(/);
+  assert.match(html, /non sono ancora arrivati/);
+});
