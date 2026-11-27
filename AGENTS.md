@@ -73,9 +73,14 @@ Lavora su `main_claude` salvo indicazione diversa.
   `requestAnimationFrame` (oggetto `anim`, con `anim.stats`): ogni 3 s sceglie nella vista al massimo `ANIM_MAX` (500)
   navi in movimento per `animPriority` (la selezionata sempre) e ricalcola le altre in un colpo; negli altri fotogrammi,
   ogni `frameInterval` ms (ridisegno misurato avvolgendo `renderer._redraw`), muove le scelte con `approach`;
-  `setLatLng` solo da 0,5 px. Pausa con mappa in movimento e scheda nascosta. Spento con `prefers-reduced-motion` o senza
-  `requestAnimationFrame` (marker all'ultimo fix). Test in `test/pagina-movimento.test.js` (ora manuale e coda di
-  `requestAnimationFrame` di `test/pagina-helpers.js`).
+  `setLatLng` solo da 0,5 px. Pausa con mappa in movimento e scheda nascosta. Interruttore «Movimento fluido e posizione
+  stimata» (`#smooth` nella legenda, `localStorage['boatradar:movimento']` '1'/'0'; senza scelta acceso, spento con
+  `prefers-reduced-motion`): spento, o senza `requestAnimationFrame`, marker all'ultimo fix e ciclo fermo. Riga
+  «Posizione» in scheda (ultimo segnale / fra due segnali / stimata, `positionWords`). Test in
+  `test/pagina-movimento.test.js` (ora manuale e coda di `requestAnimationFrame` di `test/pagina-helpers.js`).
+  `tools/smoke-server.js` fa avanzare le navi lungo la rotta a ogni ripetizione (`--navi N`: navi di `tools/carico.js`;
+  test in `test/smoke-server.test.js`); misura nel browser con `tools/misura-pagina.sh` (tabella «Pagina» in
+  `docs/prestazioni.md`; se le soglie non reggono `ANIM_MAX` 200 e `ANIM_MIN_MS` 50).
 - `vesselfinder.html`: mappa alternativa con il widget VesselFinder.
 - `config.js` (solo su Pages, scritto da `tools/config-pages.js` in `pages.yml` con le variabili
   `API_HOST`/`VM_HOST` e `RENDER_HOST`): elenco dei server in `window.BOATRADAR_APIS`
@@ -180,7 +185,8 @@ Funziona anche nelle sessioni cloud e in GitHub Actions.
   → scheda di 247555002; con la scheda aperta 30 navi finte nello stesso punto: 15 righe e «e altre 15», tutte
   raggiungibili; punto 10), un clic vero su «Cargo» nella legenda che toglie LAGUNA PRIMA (247123450) e salva il filtro, che
   resta ricaricando, e un secondo clic che la riporta (riga ≥ 44 px a 390; punto 9), la ricerca «GEMELLA» scritta con tasti veri (2 righe con «2 navi con questo nome», freccia
-  giù + Invio apre la scheda, Esc la chiude; punto 12) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
+  giù + Invio apre la scheda, Esc la chiude; punto 12), a zoom 14 che LAGUNA PRIMA avanzi senza mai tornare indietro e con
+  `#smooth` spento resti sull'ultimo fix (punti 13, 63, 42) e assenza di errori JavaScript; poi, con l'orologio della pagina e `serverTime` 40 min avanti, che le navi in moto spariscano e
   quella ormeggiata resti tratteggiata con il pallino rosso in scheda (punto 8); infine, con `window.BOATRADAR_APIS`
   di prova (primo server morto su 127.0.0.1:9, secondo il server di prova; `SMOKE_APIS` per cambiarli), che la pagina
   passi al secondo dopo due tentativi al primo, con «server di riserva (Render)» nella riga di stato, e che con il

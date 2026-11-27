@@ -236,4 +236,22 @@ nuovo la misura. Headless e senza GPU i numeri servono a confrontare due version
 | 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z9 | accesa | 1437 | 500 / 853 | 58.4 | 0.8 | 14.6 / 38.6 | 2 (max 77) · 3 (max 106), 2 risposte | 1 / 14.8 | 6.5 | 3.9 | 56 |
 | 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z13 | spenta | 320 | 0 / 0 | 60 | 0.1 | 4.5 / 4.5 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 3.2 | 21.8 |
 | 2026-11-26 | punti 13, 63, 42 (ANIM_MAX 500, minMs 16) (c567540+modifiche) · CPU 4× | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 2 / 7.3 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.6 | 2.2 | 1.5 | 26.4 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.6 | 0.1 | 22.6 / 22.6 | 0 (max 0) · 2 (max 66), 2 risposte | 0 / 0 | 0 | 3.3 | 60.1 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.7 | 0.1 | 12.2 / 12.2 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.8 | 4.3 | 56 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.2 | 0.1 | 3.2 / 3.2 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.7 | 11.1 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60 | 0.5 | 1.4 / 5.5 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 0.8 | 1.5 | 15.1 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 1 / 1 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 1.3 | 9 |
+| 2026-11-27 | dopo l'unione con il punto 12 (821d964+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60.1 | 1.7 | 0.4 / 1.3 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.4 | 0.5 | 0.4 | 3.6 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | mondo z3 | spenta | 6000 | 0 / 0 | 59.7 | 0.1 | 19.3 / 19.3 | 0 (max 0) · 2 (max 61), 2 risposte | 0 / 0 | 0 | 3.4 | 78.3 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | mondo z3 | accesa | 6000 | 500 / 3578 | 59.7 | 0.1 | 13.6 / 13.6 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0 | 0.8 | 5.3 | 53.3 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z9 | spenta | 1437 | 0 / 0 | 60.1 | 0.1 | 5.2 / 5.2 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.4 | 9.5 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z9 | accesa | 1437 | 500 / 839 | 60 | 0.5 | 1 / 14.2 | 0 (max 0) · 0 (max 0), 2 risposte | 1 / 0.4 | 1.1 | 2.6 | 7.1 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z13 | spenta | 320 | 0 / 0 | 60.2 | 0.1 | 0.7 / 0.7 | 0 (max 0) · 0 (max 0), 2 risposte | 0 / 0 | 0 | 0.4 | 5.1 |
+| 2026-11-27 | dopo l'unione con il punto 12, seconda misura (821d964+modifiche) | Rotterdam z13 | accesa | 321 | 59 / 59 | 60 | 2 | 0.4 / 0.8 | 0 (max 0) · 0 (max 0), 2 risposte | 1.9 / 43.1 | 0.4 | 0.2 | 4 |
 <!-- nuove righe della pagina sopra questa linea -->
+
+Nota (2026-11-27, dopo l'unione con il punto 12): a zoom 3 l'animatore non sposta nessun marker (meno di 0,5 px,
+0 `setLatLng`/s), quindi l'unico ridisegno della misura (0,1/s) è quello dei dati arrivati, presente anche ad animazione
+spenta (19-24 ms, più lento che accesa): la soglia «mondo p95 ≤ 12 ms» (12,2 e 13,6 ms) misura quel ridisegno, non il
+movimento. Anche la differenza di `loadLocations` a Rotterdam z9 cambia segno da una misura all'altra (+4,0, −2,4 ms).
+Una prova con `ANIM_MAX` 200 e `ANIM_MIN_MS` 50 dà gli stessi due scostamenti (12,8 ms; +2,3 ms): restano 500 e 16.

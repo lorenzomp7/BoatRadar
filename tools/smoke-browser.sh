@@ -353,50 +353,6 @@ check() {
     ok "$name: secondo clic su «Cargo» → 247123450 di nuovo in mappa, localStorage vuoto"
   fi
 
-  # ricerca (punto 12): «GEMELLA» scritta con tasti veri → dopo l'attesa 2 righe role="option", entrambe con «2 navi
-  # con questo nome» (le due omonime della fixture), righe da almeno 44 px su telefono; freccia giù rende attiva la
-  # prima (aria-activedescendant), Invio apre la sua scheda e chiude l'elenco, Esc chiude la scheda. Solo con il server locale.
-  if [ -z "${SMOKE_URL:-}" ]; then
-    "${AB[@]}" focus "#q" >/dev/null
-    "${AB[@]}" keyboard type "GEMELLA" >/dev/null
-    "${AB[@]}" wait --fn "document.querySelectorAll('#results [role=option][data-mmsi]').length === 2
-      && getComputedStyle(document.getElementById('results')).display !== 'none'" >/dev/null \
-      || { "${AB[@]}" screenshot "$OUT/$name-ricerca-errore.png" >/dev/null || true
-           fail "$name: «GEMELLA» non dà 2 risultati · righe: $(js "document.getElementById('results').textContent")"; }
-    local found
-    found=$(js "(() => { const rows = [...document.querySelectorAll('#results [role=option][data-mmsi]')], out = [];
-      if (document.getElementById('q').getAttribute('aria-expanded') !== 'true') out.push('aria-expanded non true');
-      const live = document.getElementById('search-live');
-      if (live.textContent !== '2 risultati') out.push('aria-live «' + live.textContent + '»');
-      if (live.getBoundingClientRect().width > 1) out.push('regione aria-live visibile');
-      for (const r of rows) {
-        const label = document.getElementById(r.getAttribute('aria-labelledby'));
-        if (label?.textContent !== 'GEMELLA') out.push(r.dataset.mmsi + ' nome accessibile «' + label?.textContent + '»');
-        if (!r.textContent.includes('2 navi con questo nome')) out.push(r.dataset.mmsi + ' senza «2 navi con questo nome»');
-        if (matchMedia('(max-width: 640px)').matches && r.getBoundingClientRect().height < 44) out.push(r.dataset.mmsi + ' alta ' + Math.round(r.getBoundingClientRect().height) + ' px');
-      }
-      return out.length ? out.join('; ') : 'ok ' + rows.map(r => r.dataset.mmsi + ' (' + r.querySelector('small').textContent + ', ' + Math.round(r.getBoundingClientRect().height) + ' px)').join(' · '); })()" | tr -d '"')
-    "${AB[@]}" screenshot "$OUT/$name-ricerca.png" >/dev/null
-    case "$found" in ok*) ;; *) fail "$name: ricerca «GEMELLA»: $found (screenshot in $OUT/)" ;; esac
-    ok "$name: ricerca «GEMELLA» → 2 righe con «2 navi con questo nome»: ${found#ok }"
-    "${AB[@]}" press ArrowDown >/dev/null
-    local first
-    first=$(js "document.querySelector('#results [role=option][data-mmsi]').dataset.mmsi" | tr -d '"')
-    [ "$(js "document.getElementById('q').getAttribute('aria-activedescendant')")" = "\"res-$first\"" ] \
-      || fail "$name: freccia giù: riga attiva $(js "document.getElementById('q').getAttribute('aria-activedescendant')"), attesa res-$first"
-    [ "$(js "document.getElementById('res-$first').getAttribute('aria-selected')")" = '"true"' ] || fail "$name: la prima riga non è aria-selected"
-    "${AB[@]}" press Enter >/dev/null
-    "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none'
-      && document.getElementById('content').textContent.includes('$first')
-      && getComputedStyle(document.getElementById('results')).display === 'none'" >/dev/null \
-      || { "${AB[@]}" screenshot "$OUT/$name-ricerca-errore.png" >/dev/null || true; fail "$name: freccia giù + Invio non apre la scheda di $first"; }
-    ok "$name: freccia giù + Invio → scheda di $first, elenco chiuso"
-    "${AB[@]}" press Escape >/dev/null
-    "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none'" >/dev/null || fail "$name: Esc non chiude la scheda aperta dalla ricerca"
-    ok "$name: Esc chiude la scheda aperta dalla ricerca"
-    "${AB[@]}" fill "#q" "" >/dev/null
-  fi
-
   # movimento fluido (punti 13, 63, 42): a zoom 14 su LAGUNA PRIMA (247123450, 11,2 kn verso est; smoke-server la fa
   # avanzare coerente con velocità e rotta) 6 letture della posizione mostrata in 3 s: la distanza dal primo fix della
   # traccia non cala mai, la nave si muove e la stima resta entro il suo limite (122 s sopra 3 kn); con #smooth spento la
@@ -450,6 +406,50 @@ check() {
     js "(document.getElementById('smooth').click(), true)" >/dev/null
     [ "$(js "anim.enabled && localStorage.getItem('boatradar:movimento') === '1'")" = true ] || fail "$name: riaccendendo #smooth l'animazione non riparte"
     ok "$name: #smooth spento → nave ferma sull'ultimo fix per 2 s; riacceso → animazione ripartita · scheda «Posizione»: $(js "/<td>Posizione<\/td><td[^>]*>([^<]*)/.exec(facts(247123450))[1]" | tr -d '"')"
+  fi
+
+  # ricerca (punto 12): «GEMELLA» scritta con tasti veri → dopo l'attesa 2 righe role="option", entrambe con «2 navi
+  # con questo nome» (le due omonime della fixture), righe da almeno 44 px su telefono; freccia giù rende attiva la
+  # prima (aria-activedescendant), Invio apre la sua scheda e chiude l'elenco, Esc chiude la scheda. Solo con il server locale.
+  if [ -z "${SMOKE_URL:-}" ]; then
+    "${AB[@]}" focus "#q" >/dev/null
+    "${AB[@]}" keyboard type "GEMELLA" >/dev/null
+    "${AB[@]}" wait --fn "document.querySelectorAll('#results [role=option][data-mmsi]').length === 2
+      && getComputedStyle(document.getElementById('results')).display !== 'none'" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-ricerca-errore.png" >/dev/null || true
+           fail "$name: «GEMELLA» non dà 2 risultati · righe: $(js "document.getElementById('results').textContent")"; }
+    local found
+    found=$(js "(() => { const rows = [...document.querySelectorAll('#results [role=option][data-mmsi]')], out = [];
+      if (document.getElementById('q').getAttribute('aria-expanded') !== 'true') out.push('aria-expanded non true');
+      const live = document.getElementById('search-live');
+      if (live.textContent !== '2 risultati') out.push('aria-live «' + live.textContent + '»');
+      if (live.getBoundingClientRect().width > 1) out.push('regione aria-live visibile');
+      for (const r of rows) {
+        const label = document.getElementById(r.getAttribute('aria-labelledby'));
+        if (label?.textContent !== 'GEMELLA') out.push(r.dataset.mmsi + ' nome accessibile «' + label?.textContent + '»');
+        if (!r.textContent.includes('2 navi con questo nome')) out.push(r.dataset.mmsi + ' senza «2 navi con questo nome»');
+        if (matchMedia('(max-width: 640px)').matches && r.getBoundingClientRect().height < 44) out.push(r.dataset.mmsi + ' alta ' + Math.round(r.getBoundingClientRect().height) + ' px');
+      }
+      return out.length ? out.join('; ') : 'ok ' + rows.map(r => r.dataset.mmsi + ' (' + r.querySelector('small').textContent + ', ' + Math.round(r.getBoundingClientRect().height) + ' px)').join(' · '); })()" | tr -d '"')
+    "${AB[@]}" screenshot "$OUT/$name-ricerca.png" >/dev/null
+    case "$found" in ok*) ;; *) fail "$name: ricerca «GEMELLA»: $found (screenshot in $OUT/)" ;; esac
+    ok "$name: ricerca «GEMELLA» → 2 righe con «2 navi con questo nome»: ${found#ok }"
+    "${AB[@]}" press ArrowDown >/dev/null
+    local first
+    first=$(js "document.querySelector('#results [role=option][data-mmsi]').dataset.mmsi" | tr -d '"')
+    [ "$(js "document.getElementById('q').getAttribute('aria-activedescendant')")" = "\"res-$first\"" ] \
+      || fail "$name: freccia giù: riga attiva $(js "document.getElementById('q').getAttribute('aria-activedescendant')"), attesa res-$first"
+    [ "$(js "document.getElementById('res-$first').getAttribute('aria-selected')")" = '"true"' ] || fail "$name: la prima riga non è aria-selected"
+    "${AB[@]}" press Enter >/dev/null
+    "${AB[@]}" wait --fn "getComputedStyle(document.getElementById('panel')).display !== 'none'
+      && document.getElementById('content').textContent.includes('$first')
+      && getComputedStyle(document.getElementById('results')).display === 'none'" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-ricerca-errore.png" >/dev/null || true; fail "$name: freccia giù + Invio non apre la scheda di $first"; }
+    ok "$name: freccia giù + Invio → scheda di $first, elenco chiuso"
+    "${AB[@]}" press Escape >/dev/null
+    "${AB[@]}" wait --fn "document.getElementById('panel').style.display === 'none'" >/dev/null || fail "$name: Esc non chiude la scheda aperta dalla ricerca"
+    ok "$name: Esc chiude la scheda aperta dalla ricerca"
+    "${AB[@]}" fill "#q" "" >/dev/null
   fi
 
   # errori JavaScript e console.error (i warning, come Digitraffic non raggiungibile, non contano)
