@@ -806,7 +806,8 @@
   // ±LINK_MAX_LAT (il limite della proiezione di Leaflet); longitudine normalizzata in [−180, 180); zoom arrotondato fra
   // 1 e 18. MMSI da 1 a 9 cifre, maggiore di 0 (il primo, se ripetuto); segui=1 vale solo con un MMSI valido.
   const LINK_MAX_LAT = 85.0511;
-  const LINK_NUM = /^-?\d+(\.\d+)?$/, LINK_ZOOM = /^\d+(\.\d+)?$/;
+  // al più 4 cifre intere e 10 decimali (zoom 2 intere): un numero lungo (es. 400 cifre → Infinity) non arriva a Number()
+  const LINK_NUM = /^-?\d{1,4}(\.\d{1,10})?$/, LINK_ZOOM = /^\d{1,2}(\.\d{1,10})?$/;
   const linkView = (lat, lon, zoom) => ({ lat: Math.max(-LINK_MAX_LAT, Math.min(LINK_MAX_LAT, lat)), lon: normLon(lon),
     zoom: Math.max(1, Math.min(18, Math.round(zoom))) });
   function queryParam(search, name) {
@@ -823,7 +824,10 @@
     let view = null;
     if (parts.length === 3 && LINK_NUM.test(parts[0]) && LINK_NUM.test(parts[1]) && LINK_ZOOM.test(parts[2])) {
       const [lat, lon, zoom] = parts.map(Number);
-      if (Math.abs(lat) <= 90) view = linkView(lat, lon, zoom);
+      if ([lat, lon, zoom].every(finite) && Math.abs(lat) <= 90) {
+        const v = linkView(lat, lon, zoom);
+        if ([v.lat, v.lon, v.zoom].every(finite)) view = v;
+      }
     }
     const mmsi = id != null && /^\d{1,9}$/.test(id) && Number(id) > 0 ? Number(id) : null;
     return { view, mmsi, follow: mmsi != null && queryParam(s, 'segui') === '1' };
@@ -846,9 +850,13 @@
   // Punto 24: «Segui». Spostamento { dx, dy } (px interi, per map.panBy) che riporta la nave pt al centro dell'area libera
   // free = { left, top, right, bottom } (punti del contenitore della mappa, senza header, pannello o scheda), solo se è
   // uscita dalla zona centrale: il rettangolo rientrato di margin × larghezza (e altezza) per lato. margin 0,5 = la nave si
-  // centra sempre. Area vuota (pannello aperto fin sotto l'header): zona vuota, la nave va a metà. Dati non validi: 0.
-  function followPan(pt, free, { margin = 0.25 } = {}) {
+  // centra sempre. Area libera più stretta o più bassa di 2 × min px (44: un bersaglio per lato; es. pannello aperto fin
+  // sotto l'header, area negativa): nessuno spostamento, che a ogni scelta porterebbe la nave dove non si vede. Dati non
+  // validi: 0.
+  function followPan(pt, free, { margin = 0.25, min = 44 } = {}) {
     if (!pt || !free || ![pt.x, pt.y, free.left, free.top, free.right, free.bottom].every(finite)) return { dx: 0, dy: 0 };
+    const side = finite(min) ? Math.max(0, min) : 44;
+    if (free.right - free.left < 2 * side || free.bottom - free.top < 2 * side) return { dx: 0, dy: 0 };
     const k = finite(margin) ? Math.max(0, Math.min(0.5, margin)) : 0.25;
     const inside = (v, a, b) => { const w = b - a, lo = a + w * k, hi = b - w * k; return lo <= hi && v >= lo && v <= hi; };
     if (inside(pt.x, free.left, free.right) && inside(pt.y, free.top, free.bottom)) return { dx: 0, dy: 0 };

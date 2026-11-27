@@ -173,21 +173,104 @@ test('telefono: area libera fra header e scheda a metà', async () => {
   assert.equal(JSON.stringify(page.map.pans.at(-1)[0]), JSON.stringify([0, 100]));
 });
 
-test('trascinare la mappa spegne «Segui» con l\'avviso; poi nessuno spostamento', async () => {
+test('trascinare la mappa spegne «Segui» a fine trascinamento (oltre 10 px) con l\'avviso; durante nessuno spostamento', async () => {
   const state = { features: [fix(A, 44, 11, T0)] };
   const page = await ready(state);
   page.get(`select(${A})`);
   clickFollow(page);
   endPan(page);
-  page.map.fire('dragstart');
-  assert.equal(pressed(page), 'false');
-  assert.match(page.el('toast').innerHTML, /Segui disattivato: hai spostato la mappa/);
+  page.map.fire('movestart'); page.map.fire('dragstart');
   const n = page.map.pans.length;
   await moveA(page, state, 11.004);
+  assert.equal(page.map.pans.length, n, 'durante il trascinamento «Segui» non sposta la mappa');
+  assert.equal(pressed(page), 'true', 'deciso a fine trascinamento');
+  page.map.fire('dragend', { distance: 50 }); page.map.fire('moveend');
+  assert.equal(pressed(page), 'false');
+  assert.match(page.el('toast').innerHTML, /Segui disattivato: hai spostato la mappa/);
+  await moveA(page, state, 11.008);
   assert.equal(page.map.pans.length, n);
 });
 
-test('frecce sulla mappa spengono «Segui» con l\'avviso; zoom (tasto +, zoomstart/zoomend) e altri tasti no', async () => {
+test('trascinamento di pochi px (tocco) o pizzico a due dita (zoomstart durante il trascinamento): «Segui» resta acceso', async () => {
+  const state = { features: [fix(A, 44, 11, T0)] };
+  const page = await ready(state);
+  page.get(`select(${A})`);
+  clickFollow(page);
+  endPan(page);
+  page.map.fire('movestart'); page.map.fire('dragstart'); page.map.fire('dragend', { distance: 4 }); page.map.fire('moveend');
+  assert.equal(pressed(page), 'true', '4 px: un tocco');
+  // pizzico: il primo dito parte come trascinamento, poi il secondo avvia lo zoom (Leaflet: zoomstart di TouchZoom)
+  page.map.fire('movestart'); page.map.fire('dragstart'); page.map.fire('zoomstart');
+  page.map.fire('dragend', { distance: 80 }); page.map.fire('zoomend'); page.map.fire('moveend');
+  assert.equal(pressed(page), 'true', 'pizzico: zoom, non uno spostamento');
+  assert.notEqual(page.el('toast').style.display, 'block', 'nessun avviso');
+  // il trascinamento dopo, senza zoom, lo spegne (lo stato del pizzico non resta)
+  page.map.fire('movestart'); page.map.fire('dragstart'); page.map.fire('dragend', { distance: 80 }); page.map.fire('moveend');
+  assert.equal(pressed(page), 'false');
+});
+
+test('map.stop() mai chiamato (in Leaflet manda un moveend); con la mappa in movimento (es. keepVisible) il controllo aspetta il moveend', async () => {
+  const state = { features: [fix(A, 44, 11, T0)] };
+  const page = await ready(state);
+  page.get(`select(${A})`);
+  clickFollow(page);
+  endPan(page);
+  page.map.fire('movestart');   // spostamento animato di un altro (es. keepVisible) in corso
+  const n = page.map.pans.length;
+  await moveA(page, state, 11.004);
+  assert.equal(page.map.pans.length, n, 'mappa in movimento: nessuno spostamento sopra un altro');
+  page.map.fire('moveend');
+  await until(() => page.map.pans.length === n + 1, 'spostamento al moveend');
+  assert.equal(page.map.stops, 0, 'nessun map.stop()');
+});
+
+test('popup «N navi qui» aperto: nessuno spostamento di «Segui»', async () => {
+  const state = { features: [fix(A, 44, 11, T0)] };
+  const page = await ready(state);
+  page.get(`select(${A})`);
+  clickFollow(page);
+  endPan(page);
+  page.get('pickPopup = { getElement() { return null; } }');
+  const n = page.map.pans.length;
+  await moveA(page, state, 11.004);
+  assert.equal(page.map.pans.length, n);
+  page.get('pickPopup = null');
+  page.get('followCheck()');
+  assert.equal(page.map.pans.length, n + 1);
+});
+
+test('telefono con il pannello aperto fin sotto l\'header (area libera negativa): nessuno spostamento a ogni giro', async () => {
+  const state = { features: [fix(A, 44, 11, T0)] };
+  const page = await ready(state, { ...PHONE, base: ll => ({ x: 195 + (ll.lng - 11) * 1e5, y: 300 - (ll.lat - 44) * 1e5 }) });
+  page.get(`select(${A})`);
+  page.get('setStop(2)');
+  const { top, bottom, size } = page.get('freeArea()');
+  assert.ok(size.y - bottom - top < 88, `area libera alta ${size.y - bottom - top} px`);
+  const n = page.map.pans.length;
+  clickFollow(page);
+  assert.equal(pressed(page), 'true');
+  // ogni spostamento (se ci fosse) finisce con il suo moveend prima del giro dopo
+  for (const lon of [11.001, 11.002, 11.003, 11.004, 11.005]) { endPan(page); await moveA(page, state, lon, 43.998); }
+  assert.equal(page.map.pans.length, n, 'premuto e 5 giri: nessuno spostamento');
+});
+
+test('hashchange con «Segui» acceso: spento con l\'avviso se la vista cambia; stessa vista: resta', async () => {
+  const state = { features: [fix(A, 44, 11, T0)] };
+  const page = await ready(state, { href: 'https://lorenzo.example/boatradar/', trackView: true });
+  page.get(`select(${A})`);
+  clickFollow(page);
+  endPan(page);
+  page.location.hash = '#30,10,3';   // la vista di adesso
+  page.fire('hashchange');
+  assert.equal(pressed(page), 'true', 'stessa vista');
+  page.location.hash = '#40.5,14.25,10';
+  page.fire('hashchange');
+  assert.equal(pressed(page), 'false');
+  assert.match(page.el('toast').innerHTML, /Segui disattivato/);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.map.views.at(-1))), [[40.5, 14.25], 10]);
+});
+
+test('frecce con il focus sulla mappa spengono «Segui» con l\'avviso; zoom (tasto +, zoomstart/zoomend), altri tasti e frecce su pulsanti no', async () => {
   const state = { features: [fix(A, 44, 11, T0)] };
   const page = await ready(state);
   page.get(`select(${A})`);
@@ -195,6 +278,8 @@ test('frecce sulla mappa spengono «Segui» con l\'avviso; zoom (tasto +, zoomst
   endPan(page);
   page.dispatch('map', 'keydown', { key: '+' });
   page.dispatch('map', 'keydown', { key: 'Tab' });
+  // frecce con il focus su un pulsante di zoom, sul popup o sull'attribuzione (dentro #map): non spostano la mappa
+  for (const id of ['zoom-in', 'popup-row', 'attribution']) page.dispatch('map', 'keydown', { key: 'ArrowLeft', target: page.el(id) });
   page.map.fire('zoomstart'); page.map.fire('zoomend'); page.map.fire('moveend');
   assert.equal(pressed(page), 'true', 'lo zoom lascia «Segui» acceso');
   page.dispatch('map', 'keydown', { key: 'ArrowLeft' });
@@ -275,7 +360,7 @@ test('link: segui=1 nell\'indirizzo con «Segui» acceso, tolto spegnendolo e ch
 
 test('marcatura: #follow con aria-pressed prima di «Condividi» in #panel-actions; stato premuto non solo col colore', () => {
   const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'boatradar.html'), 'utf8');
-  assert.match(html, /<div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="follow" class="pbtn" aria-pressed="false"[^>]*>Segui<\/button><button type="button" id="share" class="pbtn">Condividi<\/button><\/div>/);
+  assert.match(html, /<div id="panel-head"><\/div><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="follow" class="pbtn" aria-pressed="false"[^>]*>Segui<\/button><button type="button" id="share" class="pbtn">Condividi<\/button><\/div>/);
   assert.match(html, /#panel-actions \.pbtn\[aria-pressed="true"\] \{[^}]*background:var\(--accent\)/);
   assert.match(html, /#panel-actions \.pbtn\[aria-pressed="true"\]::before \{ content:'✓ '; content:'✓ ' \/ ''; \}/, 'segno di spunta, nascosto ai lettori di schermo');
 });

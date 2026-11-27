@@ -60,8 +60,9 @@
   #close { position:absolute; top:4px; right:4px; width:44px; height:44px; display:grid; place-items:center; padding:0;
     background:none; border:0; border-radius:8px; color:var(--muted); font-size:24px; line-height:1; cursor:pointer; }
   #close:hover, #close:focus-visible { color:var(--accent); }
-  /* punti 25 e 24: pulsanti della scheda («Condividi», «Segui») sopra il contenuto, lontani dalla ×; da almeno 44 px */
-  #panel-actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 44px 12px 0; }
+  /* punti 25 e 24: pulsanti della scheda («Segui», «Condividi») sotto nome e sottotitolo (#panel-head), prima dei dati, nello
+     stesso ordine del DOM; da almeno 44 px, lontani dalla × (che resta in alto a destra, sopra il titolo) */
+  #panel-actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
   #panel-actions[hidden] { display:none; }
   #panel-actions .pbtn { min-height:44px; padding:0 14px; background:#0f1720; border:1px solid var(--line); border-radius:8px;
     color:var(--text); font:inherit; font-size:14px; cursor:pointer; }
@@ -246,7 +247,8 @@
   <button id="mode" class="hbtn" title="Passa alla mappa di VesselFinder">🌍 VesselFinder</button>
 </header>
 <iframe id="vf" title="Mappa VesselFinder"></iframe>
-<div id="toast" role="status"></div>
+<div id="toast"></div>
+<div id="toast-live" class="sr-only" role="status" aria-live="polite"></div>
 <details id="legend" open>
   <summary id="legend-sum">Legenda e filtri<span id="filter-count"></span></summary>
   <!-- punto 9: un pulsante per tipo di nave (aria-pressed), creati dallo script -->
@@ -295,7 +297,7 @@
     <p id="list-more" hidden></p>
   </div>
 </section>
-<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="follow" class="pbtn" aria-pressed="false" title="Tiene la nave al centro della mappa">Segui</button><button type="button" id="share" class="pbtn">Condividi</button></div><div id="content"></div></aside>
+<aside id="panel"><button type="button" id="panel-handle" aria-controls="panel" aria-expanded="true" aria-label="Abbassa la scheda"><span class="grip" aria-hidden="true"></span></button><button id="close" aria-label="Chiudi la scheda" title="Chiudi la scheda">×</button><div id="panel-head"></div><div id="panel-actions" role="group" aria-label="Azioni sulla nave" hidden><button type="button" id="follow" class="pbtn" aria-pressed="false" title="Tiene la nave al centro della mappa">Segui</button><button type="button" id="share" class="pbtn">Condividi</button></div><div id="content"></div></aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="config.js"></script>
@@ -1032,7 +1034,7 @@ function worldRequests(probed, query, noView, fkey = '') {
   const skipped = () => { const p = Promise.reject(new Error('server non raggiungibile')); p.catch(() => {}); return p; };
   // vista: uguale per tutti gli utenti, servita dalla cache del server; la nave selezionata (scheda aperta) a parte con
   // include=, fuori dalla cache, così resta in mappa ed è aggiornata anche lontano dalla vista
-  const ship = selected && $('panel').style.display === 'block' ? includeParam([selected]) : '';
+  const ship = askSelected() && $('panel').style.display === 'block' ? includeParam([selected]) : '';
   let view, wake = false;
   if (noView) { worldTotal = worldShown = 0; worldKey = fkey; view = Promise.resolve([]); }
   else if (!world) view = skipped();
@@ -1041,7 +1043,7 @@ function worldRequests(probed, query, noView, fkey = '') {
     wakeView = wake = true;
     view = features(viewUrl, fkey, u => fetchApi(u, WAKE_TIMEOUT_MS)).finally(() => { wakeView = false; });
   } else view = features(viewUrl, fkey, fetchApi);
-  return { server, world, view, wake,
+  return { server, world, view, wake, asked: !!ship,
     inc: !ship ? Promise.resolve([]) : world ? features(`${server}/locations?${ship}`, null, fetchApi) : skipped(),
     status: world ? loadStatus(server) : Promise.resolve(null) };
 }
@@ -1072,7 +1074,7 @@ async function loadLocations() {
   const balticReq = noView ? Promise.resolve([]) : clockReady.then(() => features(`${BALTIC}/locations?from=${
     clock.now() - Math.min(WINDOW_MS, filter?.seen != null ? filter.seen * 60000 : Infinity)}`, null, balticGet));
   balticReq.catch(() => {});   // idem; e se worldPart lancia, l'errore del Baltico non resta senza gestione
-  const { server, world, view, wake, inc: incReq } = await worldPart;
+  const { server, world, view, wake, asked, inc: incReq } = await worldPart;
   const [med, inc, baltic, statusResult] = await Promise.allSettled([view, incReq, balticReq, status]);
   // solo la richiesta della vista decide il passaggio a un altro server; dopo un errore un solo tentativo programmato.
   // Senza rete dalla parte dell'utente (offline, o anche il Baltico fallito con errore di rete) l'errore non conta.
@@ -1170,9 +1172,11 @@ async function loadLocations() {
   syncStatusReset();
   renderList();   // punto 71: conteggio ed elenco a ogni giro (le righe solo se l'elenco si vede)
   // dati statici della nave aperta non ancora arrivati: li richiedo a ogni aggiornamento finché ci sono
-  if (selected && !meta.get(selected)?.staticTs) await loadDetail(selected);
+  if (askSelected() && !meta.get(selected)?.staticTs) await loadDetail(selected);
   // scheda aggiornata a ogni giro (età), anche senza marker: con le ultime properties dice «posizione scaduta»
   if (selected) render(selected);
+  // punto 25: nave del link arrivata, o giro riuscito (vista e include=) senza di lei
+  linkRound(world && !noView && asked && med.status === 'fulfilled' && inc.status === 'fulfilled');
   followCheck();   // punto 24: con l'animazione spenta «Segui» lavora solo qui, a ogni giro
 }
 
@@ -1234,6 +1238,7 @@ function select(mmsi, props) {
   // senza marker (nascosta dai filtri, fuori dalla vista, dalla ricerca): un giro subito la chiede con include= (la nave
   // selezionata non si filtra), invece di aspettare il prossimo aggiornamento
   if (!m) scheduleTick();
+  linkDead = null;   // punto 25: scelta dall'utente, anche la nave di un link chiuso si chiede di nuovo
   if (!meta.get(mmsi)?.staticTs) loadDetail(mmsi).then(() => selected === mmsi && render(mmsi));
   $('panel-actions').hidden = false;   // punti 25 e 24: «Condividi» e «Segui»
   syncUrl();
@@ -1405,9 +1410,11 @@ function render(mmsi) {
       ${keys.map(k => registryButton(k, ids)).join('')}</details>`;
   $('content').dataset.mmsi = mmsi;
   $('content').dataset.known = imo ? 'imo' : '';
+  // titolo e sottotitolo in #panel-head, prima dei pulsanti «Segui» e «Condividi» (#panel-actions): per i lettori di
+  // schermo prima il nome della nave, poi le azioni, poi i dati; #content si riscrive senza toccare i pulsanti
+  $('panel-head').innerHTML = `<h2>${esc(v.name || 'Senza nome')}</h2>
+    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>`;
   $('content').innerHTML = `
-    <h2>${esc(v.name || 'Senza nome')}</h2>
-    <div class="sub" id="sub">${esc(typeName(v.shipType) || typeOf(v.shipType).label)} · bandiera ${esc(flag)}</div>
     <table id="facts">${facts(mmsi)}</table>
     <a class="link vfmore" target="_blank" rel="noopener" href="https://www.vesselfinder.com/vessels/details/${imo || mmsi}">📷 Foto, stazza, anno di costruzione e porti
       <small>Dati che il segnale AIS non trasmette: scheda completa su VesselFinder</small></a>
@@ -1444,9 +1451,9 @@ function showRegistries() {
   setFollow(false);   // punto 24
   deselect();
   $('content').dataset.mmsi = '';
-  $('content').innerHTML = `<h2>Registri</h2>
-    <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`
-    + registryList();
+  $('panel-head').innerHTML = `<h2>Registri</h2>
+    <div class="sub">Dove cercare proprietari e armatori. Dalla scheda di una nave gli stessi registri si aprono con IMO o MMSI già copiato.</div>`;
+  $('content').innerHTML = registryList();
   $('panel-actions').hidden = true;   // punti 25 e 24: niente nave, niente «Condividi» né «Segui»
   openPanel();
   syncUrl();
@@ -1563,15 +1570,41 @@ $('content').addEventListener('input', e => {
   $('facts').innerHTML = facts(selected);
 });
 
-let toastTimer;
-function toast(html) {
+// Avviso in basso per TOAST_MS. Il testo va anche in #toast-live (sr-only, role="status", sempre presente): una regione
+// che passa da display:none non viene annunciata. Con il focus dentro l'avviso (il campo del link di «Condividi», punto
+// 25) resta aperto; chiudendolo con il focus dentro (clic o Esc) il focus va su back (es. #share), se si vede.
+const TOAST_MS = 15000;
+let toastTimer, liveTimer, toastBack = null;
+const toastHasFocus = () => { const a = document.activeElement; return !!a && a !== $('toast') && $('toast').contains(a); };
+function toast(html, { back = null } = {}) {
   $('toast').innerHTML = html;
   $('toast').style.display = 'block';
+  toastBack = back;
+  // testo dell'avviso (dal DOM; senza DOM vero, dall'HTML senza tag), svuotato e riscritto: lo stesso testo si riannuncia
+  const text = ($('toast').textContent || String(html).replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+  $('toast-live').textContent = '';
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => { $('toast-live').textContent = text; }, 100);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $('toast').style.display = 'none'; }, 15000);
+  const later = () => { toastTimer = setTimeout(() => (toastHasFocus() ? later() : hideToast()), TOAST_MS); };
+  later();
 }
-// un clic chiude l'avviso, ma non nel campo con il link da copiare (punto 25)
-$('toast').onclick = e => { if (!e?.target?.closest?.('input')) $('toast').style.display = 'none'; };
+function hideToast() {
+  const inside = toastHasFocus(), back = toastBack;
+  clearTimeout(toastTimer);
+  $('toast').style.display = 'none';
+  toastBack = null;
+  if (inside && back && back.getClientRects().length) back.focus();
+}
+// un clic chiude l'avviso, ma non nel campo con il link da copiare (punto 25); Esc con il focus nell'avviso lo chiude
+// (prima degli altri Esc: la scheda resta aperta)
+$('toast').onclick = e => { if (!e?.target?.closest?.('input')) hideToast(); };
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !toastHasFocus()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  hideToast();
+}, true);
 
 $('content').addEventListener('click', e => {
   const reg = e.target.closest('[data-registry]');
@@ -1894,37 +1927,63 @@ applySheet();
 // L'indirizzo della scheda segue la pagina: #lat,lon,zoom della vista (ricaricando si torna lì) e, con la scheda di una
 // nave aperta, ?mmsi=…; scritto con history.replaceState (nessuna voce nuova nella cronologia) al più ogni URL_WAIT_MS,
 // con la chiamata finale (lo stato di quando parte): Safari lancia oltre 100 chiamate in 30 s, quindi anche try/catch.
-// Chiamata su moveend, scelta e chiusura della scheda, pagina dei registri. Un indirizzo cambiato a mano (hashchange)
-// sposta la mappa. «Condividi»: su schermo touch navigator.share (annullato: niente), altrimenti copia negli appunti con
-// l'avviso «Link copiato», altrimenti l'avviso con il link in un campo da selezionare.
-const URL_WAIT_MS = 300;
-let urlTimer = null;
+// Se replaceState lancia lo stesso, si riprova dopo URL_RETRY_MS (al più URL_RETRIES volte di fila, poi alla prossima
+// chiamata). Chiamata su moveend, scelta e chiusura della scheda, pagina dei registri. Un indirizzo cambiato a mano
+// (hashchange) sposta la mappa e, se la vista cambia, spegne «Segui» (con l'avviso); mai un errore. «Condividi»: su
+// schermo touch navigator.share (annullato: niente), altrimenti copia negli appunti con l'avviso «Link copiato»,
+// altrimenti l'avviso con il link in un campo da selezionare (che resta finché il focus è dentro; Esc lo chiude).
+const URL_WAIT_MS = 300, URL_RETRY_MS = 1500, URL_RETRIES = 5;
+let urlTimer = null, urlFails = 0;
 function currentLink() {
   const c = map.getCenter(), open = $('panel').style.display === 'block' && selected != null;
   return { view: { lat: c.lat, lon: c.lng, zoom: map.getZoom() }, mmsi: open ? selected : null, follow: open && follow };
 }
 function writeUrl() {
   urlTimer = null;
-  try { HIST.replaceState(HIST.state, '', linkUrl(LOC.pathname, currentLink())); } catch { /* limite di Safari: al prossimo */ }
+  try { HIST.replaceState(HIST.state, '', linkUrl(LOC.pathname, currentLink())); urlFails = 0; }
+  catch { if (++urlFails <= URL_RETRIES) urlTimer = setTimeout(writeUrl, URL_RETRY_MS); else urlFails = 0; }   // limite di Safari
 }
 function syncUrl() { if (!urlTimer && LOC && HIST) urlTimer = setTimeout(writeUrl, URL_WAIT_MS); }
 map.on('moveend', syncUrl);
 window.addEventListener('hashchange', () => {
-  const v = parseLink('', LOC?.hash).view;
-  if (v) map.setView([v.lat, v.lon], v.zoom);
+  try {
+    const v = parseLink('', LOC?.hash).view;
+    if (!v) return;
+    const c = map.getCenter(), same = viewHash(v) === viewHash({ lat: c.lat, lon: c.lng, zoom: map.getZoom() });
+    if (same) return;
+    if (follow) setFollow(false, 'hash');   // punto 24: la vista l'ha scelta l'utente
+    map.setView([v.lat, v.lon], v.zoom);
+  } catch (err) { console.warn('hashchange:', err); }
 });
-// Avvio con ?mmsi= (dopo il primo giro, che ha già chiesto la nave con include=): se il link non aveva una vista, mappa
-// sulla nave (zoom almeno 11); in ogni caso la nave libera da header e scheda (keepVisible: con la vista del link solo lo
-// spostamento minimo). Senza una posizione recente l'avviso, e la scheda resta con i dati noti. Niente se nel frattempo
-// l'utente ha chiuso la scheda o scelto un'altra nave.
-function openLinked({ mmsi, view }) {
-  if (selected !== mmsi || $('panel').style.display !== 'block') return;
-  const m = markers.get(mmsi);
-  if (!m) { toast(`Nessuna posizione recente per la nave con MMSI <b>${esc(mmsi)}</b>: la scheda mostra i dati noti.`); return; }
-  if (!view) map.setView(m.marker.getLatLng(), Math.max(map.getZoom(), 11), { animate: false });
-  keepVisible(mmsi);
-  if (!view) scheduleTick();   // i dati della vista nuova (il giro dopo uno spostamento non è ancora registrato)
+// Avvio con ?mmsi= (linkPending): il link resta in sospeso finché la nave non arriva in mappa alla fine di un giro
+// (linkRound, anche dopo giri falliti: VM giù prima del passaggio a Render, include= in errore, giro superato, scheda
+// nascosta su un server di riserva). Allora, se il link non aveva una vista, mappa sulla nave (zoom almeno 11); in ogni
+// caso la nave libera da header e scheda (keepVisible: con la vista del link solo lo spostamento minimo) e, con segui=1,
+// «Segui» acceso. L'avviso «Nessuna posizione recente» solo dopo un giro con vista e include= riusciti senza la nave (la
+// scheda resta con i dati noti); dopo LINK_MAX_MISSES giri così il link si chiude (linkDead): niente più include= né
+// /api/vessel per quella nave, finché l'utente non la sceglie di nuovo (select). Niente se nel frattempo l'utente ha
+// chiuso la scheda o scelto un'altra nave.
+const LINK_MAX_MISSES = 3;
+let linkPending = LINK.mmsi ? { ...LINK, misses: 0 } : null, linkDead = null;
+function linkRound(ok) {
+  const l = linkPending;
+  if (!l) return;
+  if (selected !== l.mmsi || $('panel').style.display !== 'block') { linkPending = null; return; }
+  const m = markers.get(l.mmsi);
+  if (m) {
+    linkPending = null;
+    if (!l.view) map.setView(m.marker.getLatLng(), Math.max(map.getZoom(), 11), { animate: false });
+    keepVisible(l.mmsi);
+    if (!l.view) scheduleTick();   // i dati della vista nuova (il giro dopo uno spostamento non è ancora registrato)
+    if (l.follow) setFollow(true);   // punto 24
+    return;
+  }
+  if (!ok) return;
+  if (++l.misses === 1) toast(`Nessuna posizione recente per la nave con MMSI <b>${esc(l.mmsi)}</b>: la scheda mostra i dati noti.`);
+  if (l.misses >= LINK_MAX_MISSES) { linkPending = null; linkDead = l.mmsi; }
 }
+// la nave selezionata si chiede con include= e /api/vessel, tranne quella di un link chiuso (linkDead)
+const askSelected = () => selected != null && selected !== linkDead;
 async function shareLink() {
   const url = linkUrl(LOC ? LOC.href.split(/[?#]/)[0] : '', currentLink()), name = selected != null ? meta.get(selected)?.name : null;
   if (TOUCH && typeof navigator.share === 'function') {
@@ -1936,10 +1995,11 @@ async function shareLink() {
     await navigator.clipboard.writeText(url);
     toast('Link copiato');
   } catch {
-    toast(`Copia il link: <input id="share-url" readonly aria-label="Link da copiare" value="${esc(url)}">`);
+    toast(`Copia il link: <input id="share-url" readonly aria-label="Link da copiare" value="${esc(url)}">`, { back: $('share') });
     const input = $('share-url');
     input?.focus?.();
     input?.select?.();
+    input?.setSelectionRange?.(0, url.length);   // iOS: select() da solo non seleziona
   }
 }
 $('share').addEventListener('click', shareLink);
@@ -1950,14 +2010,22 @@ $('share').addEventListener('click', shareLink);
 // (freeArea: sotto l'header, sopra la scheda su telefono, a sinistra della scheda su computer) e la riporta al centro
 // (followPan di ais-logic.js); premendo «Segui» la nave si centra subito (force). Chiamato alla fine di animFrame dopo
 // una scelta (ogni 3 s, mai nei passi), alla fine di loadLocations (ad animazione spenta solo lì) e dopo lo zoom; mai
-// durante il trascinamento del pannello, a scheda del browser nascosta, durante l'animazione dello zoom né mentre il suo
-// spostamento è in corso (followPanning, fino al moveend). Il moveend di uno spostamento di «Segui» non fa un giro se la
-// vista chiesta l'ultima volta (lastAsked, già allargata del 20 %) copre ancora la mappa (con l'antimeridiano sempre il
-// giro): niente richieste in più, l'animatore riparte (moveend) e l'elenco aggiorna solo il conteggio (scheda aperta).
-// Si spegne trascinando la mappa o con le frecce sulla mappa (avviso), scegliendo un'altra nave, chiudendo la scheda,
-// aprendo i registri; lo zoom lo lascia acceso. Nel link come segui=1 (currentLink).
-const FOLLOW_MS = 800;
+// durante il trascinamento del pannello o della mappa, a scheda del browser nascosta, con il popup «N navi qui» aperto,
+// durante l'animazione dello zoom, mentre il suo spostamento è in corso (followPanning, fino al moveend) né mentre la
+// mappa si sta muovendo (mapMoving, fra movestart e moveend: allora il controllo si ripete al moveend). Nessun map.stop():
+// in Leaflet 1.9.4 stop() manda sempre un moveend (setZoom → setView → panBy([0, 0])), anche a mappa ferma, che farebbe un
+// giro. Il moveend di uno spostamento di «Segui» non fa un giro se la vista chiesta l'ultima volta (lastAsked, già
+// allargata del 20 %) copre ancora la mappa (con l'antimeridiano sempre il giro): niente richieste in più, l'animatore
+// riparte (moveend) e l'elenco aggiorna solo il conteggio (scheda aperta). Si spegne (avviso) trascinando la mappa per
+// più di FOLLOW_DRAG_PX (deciso a fine trascinamento: un pizzico a due dita che parte come trascinamento manda zoomstart
+// e non lo spegne), con le frecce con il focus sulla mappa o cambiando la vista nell'indirizzo; senza avviso scegliendo
+// un'altra nave, chiudendo la scheda, aprendo i registri; lo zoom lo lascia acceso. Nel link come segui=1 (currentLink).
+const FOLLOW_MS = 800, FOLLOW_DRAG_PX = 10, MOVE_STUCK_MS = 5000;
 let follow = false, followPanning = false, lastMoveFollow = false, lastAsked = null;
+// mapMoving: movestart senza ancora il suo moveend (da moveAt; oltre MOVE_STUCK_MS non conta più, per non bloccare
+// «Segui» se un moveend si perde); followRetry: un controllo saltato perché la mappa si muoveva; userDrag: trascinamento
+// della mappa in corso ({ pinch } se nel frattempo è partito uno zoom)
+let mapMoving = false, moveAt = 0, followRetry = false, userDrag = null;
 // calls: chiamate a followCheck; pans: spostamenti; skipped: giri risparmiati dopo uno spostamento coperto
 const followStats = { calls: 0, pans: 0, skipped: 0 };
 function askedBox() {
@@ -1971,35 +2039,49 @@ function viewCovered(a = lastAsked) {
 }
 function followCheck(force = false) {
   followStats.calls++;
-  if (!follow || selected == null || followPanning || sheet.drag || document.hidden || map._animatingZoom
+  if (!follow || selected == null || followPanning || sheet.drag || userDrag || pickPopup || document.hidden || map._animatingZoom
     || $('panel').style.display !== 'block' || document.body.classList.contains('vf')) return;
+  if (mapMoving && perfNow() - moveAt < MOVE_STUCK_MS) { followRetry = true; return; }   // es. keepVisible in corso
   const m = markers.get(selected);
   if (!m) return;
   const { size, top, bottom, right } = freeArea();
+  // area libera troppo piccola (es. pannello aperto fin sotto l'header): followPan restituisce 0
   const d = followPan(map.latLngToContainerPoint(m.marker.getLatLng()), { left: 0, top, right: size.x - right, bottom: size.y - bottom },
     { margin: force ? 0.5 : 0.25 });
   if (!d.dx && !d.dy) return;
-  // uno spostamento ancora in corso (es. keepVisible) si ferma prima: il suo moveend non deve azzerare followPanning
-  map.stop();
   followPanning = true;
   followStats.pans++;
   map.panBy([d.dx, d.dy], reducedMotion() ? { animate: false } : { duration: FOLLOW_MS / 1000 });
 }
-// why: 'drag' o 'keys' (l'utente ha spostato la mappa) → avviso
+// why: 'drag' o 'keys' (l'utente ha spostato la mappa) o 'hash' (vista cambiata nell'indirizzo) → avviso
 function setFollow(on, why = '') {
   const was = follow;
   follow = !!on && selected != null;
   $('follow').setAttribute('aria-pressed', String(follow));
   if (was && !follow && (why === 'drag' || why === 'keys')) toast('Segui disattivato: hai spostato la mappa');
+  if (was && !follow && why === 'hash') toast('Segui disattivato: hai cambiato la vista nell\'indirizzo');
   if (follow && !was) followCheck(true);
   if (follow !== was) syncUrl();
 }
 $('follow').addEventListener('click', () => setFollow(!follow));
 // il moveend di uno spostamento di «Segui» (letto dal gestore che programma il giro, registrato dopo)
-map.on('moveend', () => { lastMoveFollow = followPanning; followPanning = false; });
-map.on('dragstart', () => { followPanning = false; if (follow) setFollow(false, 'drag'); });
+map.on('movestart', () => { mapMoving = true; moveAt = perfNow(); });
+map.on('moveend', () => {
+  lastMoveFollow = followPanning; followPanning = false; mapMoving = false;
+  if (followRetry) { followRetry = false; setTimeout(followCheck, 0); }   // dopo gli altri gestori di moveend
+});
+// trascinamento: «Segui» si spegne solo alla fine, se la mappa si è spostata davvero e non è partito uno zoom (pizzico)
+map.on('dragstart', () => { followPanning = false; userDrag = { pinch: false }; });
+map.on('zoomstart', () => { if (userDrag) userDrag.pinch = true; });
+map.on('dragend', e => {
+  const d = userDrag;
+  userDrag = null;
+  const dist = Number.isFinite(e?.distance) ? e.distance : Infinity;
+  if (follow && d && !d.pinch && dist > FOLLOW_DRAG_PX) setFollow(false, 'drag');
+});
 map.on('zoomend', () => setTimeout(followCheck, 0));   // dopo il moveend dello zoom
-$('map').addEventListener('keydown', e => { if (follow && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) setFollow(false, 'keys'); });
+// frecce con il focus sulla mappa (non sui pulsanti di zoom, sul popup o sull'attribuzione, che stanno dentro #map)
+$('map').addEventListener('keydown', e => { if (follow && e.target === $('map') && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) setFollow(false, 'keys'); });
 
 // --- Ricerca (punto 12) ---------------------------------------------------------------------------------------------
 // Ordine e punteggio come /api/search (normQuery, searchScore, compareSearch di ais-logic.js). La richiesta parte
@@ -2174,9 +2256,7 @@ function scheduleTick() { clearTimeout(moveTimer); moveTimer = setTimeout(tick, 
   await loadBalticMeta().catch(err => console.warn(err));
   // punto 25: la nave del link si apre prima del primo giro, che la chiede già con include= (niente giro in più di select)
   if (LINK.mmsi) { select(LINK.mmsi); clearTimeout(moveTimer); }
-  await tick();
-  if (LINK.mmsi) openLinked(LINK);
-  if (LINK.follow && selected === LINK.mmsi && $('panel').style.display === 'block') setFollow(true);   // punto 24
+  await tick();   // la nave del link: linkRound alla fine di ogni giro, finché non arriva
   setInterval(tick, REFRESH_MS);
   // punto 24: dopo uno spostamento di «Segui» il giro solo se la mappa esce dalla vista chiesta l'ultima volta
   map.on('moveend', () => { if (lastMoveFollow && viewCovered()) followStats.skipped++; else scheduleTick(); });

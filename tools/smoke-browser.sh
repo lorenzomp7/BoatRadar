@@ -307,6 +307,45 @@ sheet_desktop() {
 # (#vista, ?mmsi= resta); ricaricando si torna alla stessa vista con la scheda; un clic vero su «Condividi» mostra «Link
 # copiato» o il link da copiare. Screenshot con la scheda e i pulsanti.
 LINK_SHIP=247123450
+# Richieste /locations?bbox dopo uno spostamento fatto da «Segui» perché la nave scorre (non da uno spostamento
+# dell'utente): a zoom 17 la nave (11,2 kn verso est) messa da script 6 px dentro il bordo destro della zona centrale ne
+# esce da sola; nella finestra da poco prima dello spostamento di «Segui» a 1,2 s dopo il suo moveend devono partire
+# tante richieste quante ne vuole la vista chiesta l'ultima volta (0 se la copre ancora, 1 se no: lastMoveFollow e
+# viewCovered() letti al moveend). Un map.stop() prima dello spostamento ne farebbe una in più (il suo moveend).
+# Un giro periodico (ogni 15 s) può capitare nella finestra: allora si ripete la misura, al più 3 volte.
+follow_requests_check() {
+  local name="$1" try res
+  js "(() => { if (window.__frq) return true; window.__frq = { bbox: [], pans: [], ends: [] };
+    const f = window.fetch; window.fetch = (u, o) => { if (String(u).includes('/locations?bbox')) __frq.bbox.push(performance.now()); return f(u, o); };
+    const pb = map.panBy; map.panBy = function (...a) { if (followPanning) __frq.pans.push(performance.now()); return pb.apply(this, a); };
+    map.on('moveend', () => { if (lastMoveFollow) __frq.ends.push({ t: performance.now(), covered: viewCovered() }); });
+    return true; })()" >/dev/null
+  for try in 1 2 3; do
+    # nave a zoom 17, 20 px dentro il bordo destro della zona centrale (a ~7 px/s ne esce in ~3 s), a metà altezza
+    # dell'area libera: spostamenti dell'utente senza animazione, il loro giro parte dopo 300 ms, ben prima di «Segui»
+    local n0; n0=$(js "__frq.pans.length")
+    js "(() => { map.setView(markers.get($LINK_SHIP).marker.getLatLng(), 17, { animate: false });
+      const { size, top, bottom, right } = freeArea(), p = map.latLngToContainerPoint(markers.get($LINK_SHIP).marker.getLatLng());
+      const r = size.x - right, x = r - r / 4 - 20, y = (top + size.y - bottom) / 2;
+      map.panBy([Math.round(p.x - x), Math.round(p.y - y)], { animate: false }); __frq.place = performance.now(); return true; })()" >/dev/null
+    "${AB[@]}" wait --fn "__frq.pans.length > $n0 && !followPanning && __frq.ends.length && __frq.ends.at(-1).t > __frq.pans.at(-1)" >/dev/null \
+      || { "${AB[@]}" screenshot "$OUT/$name-segui-errore.png" >/dev/null || true
+           fail "$name: «Segui»: la nave che scorre non ha fatto spostare la mappa (spostamenti $(js "followStats.pans"), nave $(js "$zone_js"))"; }
+    "${AB[@]}" wait 1200 >/dev/null
+    res=$(js "(() => { const t0 = __frq.pans.at(-1) - 50, end = __frq.ends.at(-1), got = __frq.bbox.filter(t => t >= t0 && t <= end.t + 1200).length;
+      if (t0 - __frq.place < 900) return 'presto: spostamento ' + Math.round(t0 + 50 - __frq.place) + ' ms dopo la messa in posizione';
+      return (got === (end.covered ? 0 : 1) ? 'ok ' : 'no ') + got + ' richieste /locations?bbox, attese ' + (end.covered ? 0 : 1)
+        + (end.covered ? ' (vista chiesta che copre ancora la mappa)' : ' (vista non più coperta)') + ', giri risparmiati finora ' + followStats.skipped; })()" | tr -d '"')
+    case "$res" in ok*) break ;; esac
+    echo "· $name: «Segui»: misura $try: $res (forse un giro periodico), ripeto"
+  done
+  case "$res" in ok*) ;; *) fail "$name: «Segui»: dopo uno spostamento di «Segui» $res" ;; esac
+  "${AB[@]}" screenshot "$OUT/$name-segui-scorre.png" >/dev/null
+  ok "$name: «Segui» con la nave che scorre: spostamento della mappa e ${res#ok }"
+  # torna alla vista del link (zoom 14) per i controlli dopo
+  js "(map.setView(markers.get($LINK_SHIP).marker.getLatLng(), 14, { animate: false }), true)" >/dev/null
+  "${AB[@]}" wait 900 >/dev/null
+}
 link_check() {
   local name="$1"
   # prima una pagina vuota: dalla stessa pagina agent-browser farebbe una navigazione nello stesso documento (solo
@@ -330,7 +369,7 @@ link_check() {
     return out.length ? out.join('; ') : 'ok'; })()" | tr -d '"')
   "${AB[@]}" screenshot "$OUT/$name-link-scheda.png" >/dev/null
   [ "$btns" = ok ] || fail "$name: link: $btns"
-  ok "$name: ?mmsi=$LINK_SHIP&segui=1#45.4312,12.3355,14 → scheda di $(js "document.querySelector('#content h2')?.textContent" | tr -d '"') a zoom 14, «Segui» acceso, «Segui» e «Condividi» ≥ 44 px, × libera"
+  ok "$name: ?mmsi=$LINK_SHIP&segui=1#45.4312,12.3355,14 → scheda di $(js "document.querySelector('#panel-head h2')?.textContent" | tr -d '"') a zoom 14, «Segui» acceso, «Segui» e «Condividi» ≥ 44 px, × libera"
   # posizione della nave sullo schermo rispetto all'area libera (freeArea): 'ok' se nella zona centrale (25 % per lato)
   local zone_js="(() => { const { size, top, bottom, right } = freeArea(), p = map.latLngToContainerPoint(markers.get($LINK_SHIP).marker.getLatLng());
     const l = 0, r = size.x - right, t = top, b = size.y - bottom, w = r - l, h = b - t;
@@ -350,6 +389,7 @@ link_check() {
   [ "$ms" -le 4000 ] || fail "$name: «Segui»: la nave torna al centro in $ms ms, oltre 4 s"
   ok "$name: «Segui»: mappa spostata da script, nave $before → $(js "$zone_js" | tr -d '"') in $ms ms, «Segui» acceso"
   "${AB[@]}" wait 900 >/dev/null   # fine dello spostamento di «Segui» e dell'indirizzo
+  follow_requests_check "$name"
   local hash0; hash0=$(js "location.hash" | tr -d '"')
   local dx dy
   read -r dx dy <<<"$(js "(() => { const m = document.getElementById('map').getBoundingClientRect(), { size, top, bottom, right } = freeArea();
@@ -425,7 +465,7 @@ check() {
     && document.getElementById('content').textContent.includes('$mmsi')" >/dev/null \
     || { "${AB[@]}" screenshot "$OUT/$name-errore.png" >/dev/null || true; fail "$name: il clic sulla nave $mmsi non apre la scheda (screenshot in $OUT/)"; }
   [ "$(js "!document.querySelector('.leaflet-popup.pick')")" = true ] || fail "$name: il clic sulla nave $mmsi apre il popup di scelta invece della scheda"
-  ok "$name: il clic sulla nave $mmsi apre la scheda ($(js "document.querySelector('#content h2')?.textContent || ''"))"
+  ok "$name: il clic sulla nave $mmsi apre la scheda ($(js "document.querySelector('#panel-head h2')?.textContent || ''"))"
   "${AB[@]}" screenshot "$OUT/$name.png" >/dev/null
 
   # × della scheda: almeno 44×44 px, raggiungibile con un clic vero anche con una riga di stato lunga
@@ -523,7 +563,7 @@ check() {
       && document.getElementById('content').textContent.includes('$srow') && !document.querySelector('.leaflet-popup.pick')" >/dev/null \
       || { "${AB[@]}" screenshot "$OUT/$name-sovrapposte-errore.png" >/dev/null || true; fail "$name: il clic sulla seconda riga non apre la scheda di $srow"; }
     [ "$srow" = 247555002 ] || fail "$name: la seconda riga è $srow, attesa 247555002"
-    ok "$name: clic sulla seconda riga → scheda di $srow ($(js "document.querySelector('#content h2')?.textContent || ''"))"
+    ok "$name: clic sulla seconda riga → scheda di $srow ($(js "document.querySelector('#panel-head h2')?.textContent || ''"))"
 
     # molte navi nello stesso punto con la scheda aperta (correzioni da revisione del punto 10): 30 marker finti
     # aggiunti a markers nella parte libera della mappa (sotto l'header, fuori dalla scheda), poi un clic vero lì: popup

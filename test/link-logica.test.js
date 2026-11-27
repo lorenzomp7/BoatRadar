@@ -44,6 +44,19 @@ test('parseLink: testo non valido → vista null', () => {
   assert.equal(AL.parseLink('', 12345).view, null, 'non stringa');
 });
 
+test('parseLink: numeri lunghi (Number() → Infinity o cifre a centinaia) → vista null, mai coordinate non finite', () => {
+  const nines = '9'.repeat(400);
+  for (const h of [`#10,${nines},5`, `#${nines},10,5`, `#10,10,${nines}`, `#10,-${nines},5`, `#10,10.${nines},5`,
+    '#10,12345,5', '#10,10,123', '#1.12345678901,10,5'])
+    assert.equal(AL.parseLink('', h).view, null, h.slice(0, 40));
+  // fino a 4 cifre intere e 10 decimali (zoom: 2 cifre intere): validi; 9999 → −81 (normalizzata)
+  assert.deepEqual(AL.parseLink('', '#10.1234567890,9999,18'), { view: { lat: 10.123456789, lon: -81, zoom: 18 }, mmsi: null, follow: false });
+  for (const h of ['#10,9999,5', '#-85.0511,-9999.5,1', '#0,0,99.5']) {
+    const v = AL.parseLink('', h).view;
+    assert.ok(v && [v.lat, v.lon, v.zoom].every(Number.isFinite), h);
+  }
+});
+
 test('parseLink: MMSI da 1 a 9 cifre maggiore di 0; segui=1 vale solo con l\'MMSI', () => {
   for (const s of ['?mmsi=0', '?mmsi=000', '?mmsi=1234567890', '?mmsi=-5', '?mmsi=12a', '?mmsi=1.5', '?mmsi=', '?mmsi=%20%201',
     '?mmsi=1e5'])
@@ -119,9 +132,13 @@ test('followPan: margin', () => {
   assert.deepEqual(AL.followPan({ x: 195, y: 259 }, PHONE_FREE, { margin: 0.5 }), { dx: 0, dy: 0 });
 });
 
-test('followPan: area vuota (pannello aperto fin sotto l\'header) o dati non validi', () => {
-  // area con altezza negativa: il centro è a metà fra le due cime
-  assert.deepEqual(AL.followPan({ x: 195, y: 700 }, { left: 0, top: 120, right: 390, bottom: 80 }), { dx: 0, dy: 600 });
+test('followPan: area libera troppo piccola (meno di 2 × 44 px per lato, pannello aperto fin sotto l\'header) o dati non validi → 0', () => {
+  // area con altezza negativa o piccola: nessuno spostamento (prima la nave andava «a metà» a ogni scelta)
+  assert.deepEqual(AL.followPan({ x: 195, y: 700 }, { left: 0, top: 120, right: 390, bottom: 80 }), { dx: 0, dy: 0 });
+  assert.deepEqual(AL.followPan({ x: 195, y: 700 }, { left: 0, top: 120, right: 390, bottom: 207 }), { dx: 0, dy: 0 }, 'alta 87 px');
+  assert.deepEqual(AL.followPan({ x: 500, y: 150 }, { left: 0, top: 100, right: 87, bottom: 800 }), { dx: 0, dy: 0 }, 'larga 87 px');
+  assert.deepEqual(AL.followPan({ x: 195, y: 700 }, { left: 0, top: 120, right: 390, bottom: 208 }), { dx: 0, dy: 536 }, 'alta 88 px: sì');
+  assert.deepEqual(AL.followPan({ x: 195, y: 700 }, { left: 0, top: 120, right: 390, bottom: 300 }, { min: 100 }), { dx: 0, dy: 0 }, 'min');
   for (const [pt, free] of [[null, PHONE_FREE], [{ x: NaN, y: 1 }, PHONE_FREE], [{ x: 1, y: 1 }, null], [{ x: 1, y: 1 }, { left: 0, top: 0 }]])
     assert.deepEqual(AL.followPan(pt, free), { dx: 0, dy: 0 }, JSON.stringify([pt, free]));
 });

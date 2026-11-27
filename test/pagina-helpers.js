@@ -43,7 +43,8 @@ async function until(fn, what, ms = 5000) {
 // iniziali per id (es. { header: { bottom: 96 } }), prima che parta la pagina; document.body.classList vero
 // (page.bodyClasses); document.documentElement e style.setProperty (variabili CSS, page.cssVar); el.querySelector e
 // el.contains per i figli [data-mmsi="N"] scritti in innerHTML (page.child; un innerHTML nuovo li scollega:
-// isConnected false); map.panBy registrato in page.map.pans; page.dispatch passa anche key e altri campi dell'evento.
+// isConnected false); map.panBy registrato in page.map.pans (panBy([0, 0]) e stop() mandano moveend, come Leaflet);
+// page.dispatch passa anche key e altri campi dell'evento.
 // I setTimeout dell'animatore (animWake della pagina, quando il prossimo passo è lontano più di ~100 ms) con ora manuale
 // seguono l'ora della pagina: page.frame() esegue prima quelli scaduti (che chiedono un requestAnimationFrame) e poi i
 // fotogrammi in coda; page.rafPending() conta fotogrammi e risvegli in coda (i «cicli» vivi).
@@ -129,7 +130,11 @@ function startPage({ routes, config = {}, session = {}, local = {}, timeScale = 
   const views = [];
   let zoomNow = zoom, centerNow = { lat: 44, lng: 11 };
   const box = { getEast: () => bounds.e, getWest: () => bounds.w, getSouth: () => bounds.s, getNorth: () => bounds.n };
-  const map = { views, pans: [], panBy(...a) { this.pans.push(a); return this; }, stop() { return this; },
+  // panBy e stop come Leaflet 1.9.4: panBy([0, 0]) manda solo moveend; stop() (setZoom → setView → panBy([0, 0])) manda
+  // sempre un moveend, anche a mappa ferma (page.map.stops conta le chiamate)
+  const map = { views, pans: [], stops: 0,
+    panBy(...a) { const o = a[0] || [0, 0]; if (!o[0] && !o[1]) return this.fire('moveend'); this.pans.push(a); return this; },
+    stop() { this.stops++; return this.fire('moveend'); },
     setView(...a) {
       views.push(a);
       if (trackView) {
