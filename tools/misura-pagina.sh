@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # Misura della pagina nel browser (punti 13, 63, 42): quanto costa il movimento fluido con molte navi.
 # Avvia server.js con le navi sintetiche di tools/carico.js (tools/smoke-server.js --navi, che le fa avanzare coerenti
-# con velocità e rotta), apre boatradar.html con agent-browser a 1280×800 e, per ogni scenario, con l'animazione spenta
-# e accesa, misura per MISURA_SECONDI secondi: fotogrammi al secondo (requestAnimationFrame), ridisegni del canvas al
-# secondo e loro p50/p95 (renderer._redraw), long task oltre 50 ms (fuori dall'arrivo dei dati, cioè non entro 1 s
-# dalla fine di una risposta di /api/locations o del Baltico), passi e setLatLng dell'animatore (anim.stats), e il tempo
-# di loadLocations per aggiornare i marker (mediana di 5 giri). Scenari: mondo a zoom 3 (6000 marker, il campione del
+# con velocità e rotta), apre boatradar.html con agent-browser a 1280×800 e, per ogni scenario, misura quattro volte in
+# ordine alternato (animazione spenta, accesa, accesa, spenta) per MISURA_SECONDI secondi: fotogrammi al secondo
+# (requestAnimationFrame della misura), ridisegni del canvas divisi per causa (dati arrivati, animatore, altri) con
+# p50/p95/max, long task oltre 50 ms fuori dalle finestre dei dati (segni 'boatradar:load-start'/'boatradar:load-end'
+# di loadLocations e risposte di /api/locations e del Baltico), fotogrammi e risvegli del ciclo dell'animatore, passi e
+# setLatLng (anim.stats), e il tempo di loadLocations per aggiornare i marker (5 giri per misura, 10 per stato).
+# Ogni riga è la mediana delle due misure dello stesso stato. Scenari: mondo a zoom 3 (6000 marker, il campione del
 # server), Rotterdam a zoom 9 e a zoom 13.
 #
 #   bash tools/misura-pagina.sh                          # stampa la tabella e controlla le soglie
 #   bash tools/misura-pagina.sh --registra "dopo punto 13"   # e aggiunge le righe a docs/prestazioni.md («Pagina»)
 #
-# Soglie (docs/prestazioni.md, «Pagina»): fps ≥ 55 (con MISURA_CPU: ≥ 30 a zoom 13); con l'animazione accesa mondo
-# ≤ 2 ridisegni/s e p95 ≤ 12 ms, zoom 13 p95 ≤ 6 ms; nessun long task > 50 ms fuori dall'arrivo dei dati;
-# loadLocations con l'animazione accesa al massimo 2 ms più che spenta.
+# Soglie (docs/prestazioni.md, «Pagina», con il perché): fps ≥ 55 (con MISURA_CPU: ≥ 30 a zoom 13); con l'animazione
+# accesa, ridisegni causati dall'animatore: mondo ≤ 2/s e p95 ≤ 12 ms, zoom 13 p95 ≤ 6 ms (p95 con almeno 20 campioni,
+# altrimenti il massimo); nessun long task > 50 ms fuori dai dati; loadLocations (mediana di 10 giri) accesa al massimo
+# 2 ms più che spenta, più metà della somma degli scarti interquartili dei due gruppi.
 # Esce con 1 se una soglia non regge (le righe sono comunque stampate e, con --registra, registrate).
 # Variabili: MISURA_PORT (8930), MISURA_NAVI (30000), MISURA_SECONDI (10), MISURA_CPU (es. 4: CPU rallentata 4 volte
 # con Emulation.setCPUThrottlingRate via CDP; facoltativo), SMOKE_LEAFLET_LOCAL=1 (Leaflet dal registro npm),
@@ -103,15 +106,29 @@ if [ -n "$CPU" ]; then   # facoltativo: CPU rallentata via CDP sulla scheda dell
   echo "✓ CPU rallentata $CPU volte (prova: $(js "(() => { let x = 0; const t = performance.now(); for (let i = 0; i < 2e6; i++) x += i % 7; return Math.round(performance.now() - t) + ' ms per 2 milioni di somme'; })()" | tr -d '"'))"
 fi
 
-# misura di MISURA_SECONDI secondi nella pagina (JSON)
+# misura di MISURA_SECONDI secondi nella pagina (JSON). I ridisegni del canvas sono divisi per causa con i contatori
+# della pagina letti a ogni ridisegno: «dati» se nel frattempo loadLocations ha aggiornato i marker (anim.stats.loads),
+# «animatore» se l'animatore ha spostato marker (anim.stats.moved + pickMoved), altrimenti «altri». I long task contano
+# solo fuori dalle finestre dei dati: dalla prima risposta di /api/locations o del Baltico del giro (o 50 ms prima
+# dell'inizio di loadLocations, segno 'boatradar:load-start') a 250 ms dopo la sua fine ('boatradar:load-end', misura
+# 'boatradar:load'), cioè lettura del JSON, aggiornamento dei marker e il ridisegno che segue.
 MEASURE="new Promise(done => {
-  const SEC = $SECS, st = anim.stats, s0 = { steps: st.steps, moved: st.moved }, longs = [], data = [], redraws = [], steps = [];
-  const lt = new PerformanceObserver(l => { for (const e of l.getEntries()) longs.push({ at: e.startTime, ms: e.duration }); });
+  const SEC = $SECS, st = anim.stats, s0 = { steps: st.steps, moved: st.moved, frames: st.frames, wakes: st.wakes },
+    longs = [], resp = [], loads = [], red = { dati: [], animatore: [], altri: [] }, steps = [];
+  const lt = new PerformanceObserver(l => { for (const e of l.getEntries()) longs.push({ at: e.startTime, end: e.startTime + e.duration, ms: e.duration }); });
   try { lt.observe({ type: 'longtask', buffered: false }); } catch { /* browser senza long task */ }
-  const rs = new PerformanceObserver(l => { for (const e of l.getEntries()) if (/\\/api\\/locations|digitraffic/.test(e.name)) data.push(e.responseEnd); });
+  const rs = new PerformanceObserver(l => { for (const e of l.getEntries()) if (/\\/api\\/locations|digitraffic/.test(e.name)) resp.push(e.responseEnd); });
   rs.observe({ type: 'resource', buffered: false });
+  const ms = new PerformanceObserver(l => { for (const e of l.getEntries()) if (e.name === 'boatradar:load') loads.push({ start: e.startTime, end: e.startTime + e.duration }); });
+  ms.observe({ type: 'measure', buffered: false });
   const orig = renderer._redraw;
-  renderer._redraw = function (...a) { const t = performance.now(); try { return orig.apply(this, a); } finally { redraws.push(performance.now() - t); } };
+  let seenLoads = st.loads, seenMoves = st.moved + st.pickMoved;
+  renderer._redraw = function (...a) {
+    const cause = st.loads !== seenLoads ? 'dati' : st.moved + st.pickMoved !== seenMoves ? 'animatore' : 'altri';
+    seenLoads = st.loads; seenMoves = st.moved + st.pickMoved;
+    const t = performance.now();
+    try { return orig.apply(this, a); } finally { red[cause].push(performance.now() - t); }
+  };
   let frames = 0, lastSteps = st.steps;
   const t0 = performance.now();
   const loop = () => {
@@ -123,38 +140,40 @@ MEASURE="new Promise(done => {
   const r1 = x => Math.round(x * 10) / 10, r2 = x => Math.round(x * 100) / 100;
   function finish() {
     const secs = (performance.now() - t0) / 1000;
-    lt.disconnect(); rs.disconnect(); renderer._redraw = orig;
-    const outside = longs.filter(l => l.ms > 50 && !data.some(d => l.at >= d - 50 && l.at <= d + 1000));
+    lt.disconnect(); rs.disconnect(); ms.disconnect(); renderer._redraw = orig;
+    const windows = loads.map(w => { const before = resp.filter(r => r <= w.start && r >= w.start - 5000);
+      return [Math.min(w.start - 50, ...before) , w.end + 250]; });
+    const outside = longs.filter(l => l.ms > 50 && !windows.some(([a, b]) => l.end >= a && l.at <= b));
     done({ markers: markers.size, animated: anim.enabled ? anim.set.size : 0, candidates: anim.enabled ? st.candidates : 0,
-      fps: r1(frames / secs), redrawsPerS: r1(redraws.length / secs), redrawP50: r2(pct(redraws, 0.5)), redrawP95: r2(pct(redraws, 0.95)),
-      longOutside: outside.length, longMaxOutside: r1(Math.max(0, ...outside.map(l => l.ms))),
-      longAll: longs.filter(l => l.ms > 50).length, arrivals: data.length, longMax: r1(Math.max(0, ...longs.map(l => l.ms))),
-      stepsPerS: r1((st.steps - s0.steps) / secs), movesPerS: r1((st.moved - s0.moved) / secs),
+      secs: r2(secs), fps: r1(frames / secs), red: { dati: red.dati.map(r2), animatore: red.animatore.map(r2), altri: red.altri.map(r2) },
+      longOutside: outside.map(l => r1(l.ms)), longAll: longs.filter(l => l.ms > 50).map(l => r1(l.ms)), loads: loads.length, arrivals: resp.length,
+      steps: st.steps - s0.steps, moves: st.moved - s0.moved, animFrames: st.frames - s0.frames, wakes: st.wakes - s0.wakes,
       stepP95: r2(pct(steps, 0.95)), pickMs: r2(st.pickMs), interval: Math.round(anim.interval) });
   }
   requestAnimationFrame(loop);
 })"
 
-ROWS="$TMP/rows.jsonl"
-: > "$ROWS"
-scenario() {   # nome, lat, lon, zoom
-  local name="$1" lat="$2" lon="$3" zoom="$4" on
-  for on in false true; do
-    js "map.setView([$lat, $lon], $zoom, { animate: false }), true" >/dev/null
-    [ "$(js "document.getElementById('smooth').checked")" = "$on" ] || js "(document.getElementById('smooth').click(), true)" >/dev/null
-    [ "$(js "anim.enabled")" = "$on" ] || fail "$name: interruttore del movimento non a $on"
-    # cinque giri per la mediana di loadLocations (dati di questa vista), poi 3,5 s per la scelta delle navi animate
-    local load
-    load=$(js "(async () => { const t = []; for (let i = 0; i < 5; i++) { await tick(); t.push(anim.stats.loadMs); }
-      t.sort((a, b) => a - b); return Math.round(t[2] * 100) / 100; })()")
-    "${AB[@]}" wait 3500 >/dev/null
-    local res
-    res=$(js "$MEASURE")
-    node -e 'const [n, on, load, r] = process.argv.slice(1); console.log(JSON.stringify({ scenario: n, anim: on === "true", loadMs: Number(load), ...JSON.parse(r) }));' \
-      "$name" "$on" "$load" "$res" >> "$ROWS"
-    echo "✓ $name, animazione $([ "$on" = true ] && echo accesa || echo spenta): $res · loadLocations $load ms"
-  done
+RUNS="$TMP/runs.jsonl"
+: > "$RUNS"
+# Una misura: vista, interruttore, cinque giri per loadLocations (dati di questa vista, i 5 tempi), 3,5 s per la scelta
+# delle navi animate, poi MISURA_SECONDI secondi
+run() {   # nome, lat, lon, zoom, acceso (true/false)
+  local name="$1" lat="$2" lon="$3" zoom="$4" on="$5"
+  js "map.setView([$lat, $lon], $zoom, { animate: false }), true" >/dev/null
+  [ "$(js "document.getElementById('smooth').checked")" = "$on" ] || js "(document.getElementById('smooth').click(), true)" >/dev/null
+  [ "$(js "anim.enabled")" = "$on" ] || fail "$name: interruttore del movimento non a $on"
+  local load res
+  load=$(js "(async () => { const t = []; for (let i = 0; i < 5; i++) { await tick(); t.push(Math.round(anim.stats.loadMs * 100) / 100); } return t; })()")
+  "${AB[@]}" wait 3500 >/dev/null
+  res=$(js "$MEASURE")
+  node -e 'const [n, on, load, r] = process.argv.slice(1); console.log(JSON.stringify({ scenario: n, anim: on === "true", loadMs: JSON.parse(load), ...JSON.parse(r) }));' \
+    "$name" "$on" "$load" "$res" >> "$RUNS"
+  echo "✓ $name, animazione $([ "$on" = true ] && echo accesa || echo spenta): $(node -e '
+    const r = JSON.parse(process.argv[1]); console.log(`${r.fps} fps, ridisegni dati/animatore/altri ${r.red.dati.length}/${r.red.animatore.length}/${r.red.altri.length}, ` +
+      `long task fuori dai dati ${r.longOutside.length}, fotogrammi del ciclo ${r.animFrames}, risvegli ${r.wakes}`);' "$res") · loadLocations $load ms"
 }
+# ordine alternato (spenta, accesa, accesa, spenta): la deriva della macchina durante la misura pesa uguale sui due casi
+scenario() { local on; for on in false true true false; do run "$@" "$on"; done; }
 scenario "mondo z3" 30 10 3
 scenario "Rotterdam z9" 51.95 4.05 9
 scenario "Rotterdam z13" 51.95 4.05 13
@@ -162,37 +181,69 @@ scenario "Rotterdam z13" 51.95 4.05 13
 VERSION="$(git rev-parse --short HEAD 2>/dev/null || echo '?')$(git diff --quiet 2>/dev/null || echo '+modifiche')"
 node -e '
   const fs = require("fs"), [file, label, version, cpu] = process.argv.slice(1);
-  const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(l => JSON.parse(l));
+  const runs = fs.readFileSync(file, "utf8").trim().split("\n").map(l => JSON.parse(l));
+  const med = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const pct = (a, p) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+  const iqr = a => pct(a, 0.75) - pct(a, 0.25);
+  const r1 = x => Math.round(x * 10) / 10, r2 = x => Math.round(x * 100) / 100;
+  // una riga per scenario e stato: mediane delle due misure, campioni dei ridisegni e dei long task uniti
+  const rows = [];
+  for (const r of runs) {
+    if (rows.some(x => x.scenario === r.scenario && x.anim === r.anim)) continue;
+    const g = runs.filter(x => x.scenario === r.scenario && x.anim === r.anim), secs = g.reduce((t, x) => t + x.secs, 0);
+    const all = k => g.flatMap(x => x.red[k]), loadMs = g.flatMap(x => x.loadMs);
+    rows.push({ scenario: r.scenario, anim: r.anim, n: g.length, markers: med(g.map(x => x.markers)), animated: med(g.map(x => x.animated)),
+      candidates: med(g.map(x => x.candidates)), fps: r1(med(g.map(x => x.fps))),
+      dati: all("dati"), animatore: all("animatore"), altri: all("altri"), secs,
+      longOutside: g.flatMap(x => x.longOutside), longAll: g.flatMap(x => x.longAll), arrivals: g.reduce((t, x) => t + x.arrivals, 0),
+      stepsPerS: r1(g.reduce((t, x) => t + x.steps, 0) / secs), movesPerS: r1(g.reduce((t, x) => t + x.moves, 0) / secs),
+      framesPerS: r1(g.reduce((t, x) => t + x.animFrames, 0) / secs), wakesPerS: r1(g.reduce((t, x) => t + x.wakes, 0) / secs),
+      stepP95: r2(med(g.map(x => x.stepP95))), pickMs: r2(med(g.map(x => x.pickMs))),
+      loadMs: r2(med(loadMs)), loadIqr: r2(iqr(loadMs)), loadN: loadMs.length });
+  }
   const bad = [];
+  const MIN_SAMPLES = 20;
   for (const r of rows) {
     const k = `${r.scenario} (animazione ${r.anim ? "accesa" : "spenta"})`;
     // con la CPU rallentata vale solo fps ≥ 30 a zoom 13; il resto è in tabella per confronto
     if (cpu) { if (/z13/.test(r.scenario) && r.fps < 30) bad.push(`${k}: ${r.fps} fps < 30 con la CPU ${cpu}× più lenta`); continue; }
     if (r.fps < 55) bad.push(`${k}: ${r.fps} fps < 55`);
-    // soglie dei ridisegni solo con animazione accesa: spenta, il solo ridisegno è quello dei dati arrivati (tutti i
-    // marker, setStyle di loadLocations), che il movimento non tocca; resta in tabella come riferimento
-    if (r.anim && /mondo/.test(r.scenario) && r.redrawsPerS > 2) bad.push(`${k}: ${r.redrawsPerS} ridisegni/s > 2`);
-    if (r.anim && /mondo/.test(r.scenario) && r.redrawP95 > 12) bad.push(`${k}: ridisegno p95 ${r.redrawP95} ms > 12`);
-    if (r.anim && /z13/.test(r.scenario) && r.redrawP95 > 6) bad.push(`${k}: ridisegno p95 ${r.redrawP95} ms > 6`);
-    if (r.longOutside > 0) bad.push(`${k}: ${r.longOutside} long task > 50 ms fuori dall arrivo dei dati (max ${r.longMaxOutside} ms)`);
+    // ridisegni causati dall animatore (spenta non ce ne sono): quanti al secondo e quanto durano. Il p95 con almeno
+    // MIN_SAMPLES campioni; con meno il massimo (più severo); nessuno = nessun costo
+    if (r.anim) {
+      const a = r.animatore, perS = a.length / r.secs, lim = /mondo/.test(r.scenario) ? 12 : /z13/.test(r.scenario) ? 6 : null;
+      if (/mondo/.test(r.scenario) && perS > 2) bad.push(`${k}: ${r1(perS)} ridisegni/s dell animatore > 2`);
+      if (lim != null && a.length) {
+        const v = a.length >= MIN_SAMPLES ? pct(a, 0.95) : Math.max(...a), what = a.length >= MIN_SAMPLES ? "p95" : `massimo (${a.length} campioni)`;
+        if (v > lim) bad.push(`${k}: ridisegno dell animatore ${what} ${v} ms > ${lim}`);
+      }
+    }
+    if (r.longOutside.length) bad.push(`${k}: ${r.longOutside.length} long task > 50 ms fuori dai dati (max ${Math.max(...r.longOutside)} ms)`);
   }
+  // loadLocations: accesa al massimo 2 ms più che spenta, più il rumore misurato (metà della somma degli scarti
+  // interquartili dei due gruppi di 10 giri): una differenza dentro lo scarto fra i giri non è un costo dell animazione
   for (const r of rows.filter(x => x.anim && !cpu)) {
     const off = rows.find(x => !x.anim && x.scenario === r.scenario);
-    if (off && r.loadMs > off.loadMs + 2) bad.push(`${r.scenario}: loadLocations ${r.loadMs} ms acceso contro ${off.loadMs} spento (+${(r.loadMs - off.loadMs).toFixed(2)} > 2 ms)`);
+    if (!off) continue;
+    const lim = 2 + (r.loadIqr + off.loadIqr) / 2;
+    if (r.loadMs > off.loadMs + lim) bad.push(`${r.scenario}: loadLocations ${r.loadMs} ms acceso contro ${off.loadMs} spento (+${(r.loadMs - off.loadMs).toFixed(2)} > ${lim.toFixed(2)} ms)`);
   }
   const day = new Date().toISOString().slice(0, 10), ver = label ? `${label} (${version})` : version;
+  const fmtRed = (a, secs) => `${r1(a.length / secs)}`;
   const lines = rows.map(r => `| ${day} | ${ver}${cpu ? ` · CPU ${cpu}×` : ""} | ${r.scenario} | ${r.anim ? "accesa" : "spenta"} | ${r.markers} | ${r.animated} / ${r.candidates} | ` +
-    `${r.fps} | ${r.redrawsPerS} | ${r.redrawP50} / ${r.redrawP95} | ${r.longOutside} (max ${r.longMaxOutside}) · ${r.longAll} (max ${r.longMax}), ${r.arrivals} risposte | ` +
-    `${r.stepsPerS} / ${r.movesPerS} | ${r.stepP95} | ${r.pickMs} | ${r.loadMs} |`);
-  console.log("\n| Data | Versione | Scenario | Animazione | Marker | Animate / in moto | fps | Ridisegni/s | Ridisegno p50 / p95 ms | Long task > 50 ms fuori dai dati (max ms) · in tutto, risposte nella misura | Passi/s / setLatLng/s | Passo p95 ms | Scelta ms | loadLocations ms |");
-  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    `${r.fps} | ${fmtRed(r.dati, r.secs)} · ${fmtRed(r.animatore, r.secs)} · ${fmtRed(r.altri, r.secs)} | ` +
+    `${r.animatore.length ? `${r2(pct(r.animatore, 0.5))} / ${r2(pct(r.animatore, 0.95))} / ${r2(Math.max(...r.animatore))} (${r.animatore.length})` : "– (0)"} | ` +
+    `${r.dati.length ? r2(pct(r.dati, 0.95)) : "–"} | ${r.longOutside.length} (max ${Math.max(0, ...r.longOutside)}) · ${r.longAll.length} (max ${Math.max(0, ...r.longAll)}), ${r.arrivals} risposte | ` +
+    `${r.framesPerS} / ${r.wakesPerS} | ${r.stepsPerS} / ${r.movesPerS} | ${r.stepP95} | ${r.pickMs} | ${r.loadMs} (IQR ${r.loadIqr}, ${r.loadN} giri) |`);
+  console.log("\n| Data | Versione | Scenario | Animazione | Marker | Animate / in moto | fps | Ridisegni/s: dati · animatore · altri | Ridisegno animatore p50 / p95 / max ms (campioni) | Ridisegno dati p95 ms | Long task > 50 ms fuori dai dati (max ms) · in tutto, risposte | Fotogrammi / risvegli del ciclo al s | Passi/s / setLatLng/s | Passo p95 ms | Scelta ms | loadLocations ms |");
+  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   console.log(lines.join("\n"));
   if (label) {
-    const doc = "docs/prestazioni.md", marker = "<!-- nuove righe della pagina sopra questa linea -->", text = fs.readFileSync(doc, "utf8");
+    const doc = "docs/prestazioni.md", marker = "<!-- nuove righe della pagina (misura alternata) sopra questa linea -->", text = fs.readFileSync(doc, "utf8");
     if (!text.includes(marker)) { console.error(`manca la riga «${marker}» in ${doc}`); process.exit(1); }
     fs.writeFileSync(doc, text.replace(marker, lines.join("\n") + "\n" + marker));
     console.log(`\nRighe aggiunte a ${doc}`);
   }
   if (bad.length) { console.log("\n✗ soglie non rispettate:\n  " + bad.join("\n  ")); process.exit(1); }
   console.log("\n✓ soglie rispettate");
-' "$ROWS" "$LABEL" "$VERSION" "$CPU"
+' "$RUNS" "$LABEL" "$VERSION" "$CPU"
